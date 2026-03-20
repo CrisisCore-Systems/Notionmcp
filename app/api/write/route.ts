@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
         const databaseId = await createDatabase(suggestedDbTitle, schema);
 
         for (let index = 0; index < items.length; index++) {
-          await addRow(databaseId, items[index] ?? {}, schema);
+          await addRow(databaseId, items[index], schema);
           send("update", {
             message: `Added row ${index + 1} of ${items.length}`,
           });

@@ -86,6 +86,19 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   },
 ];
 
+function getToolArgs(args: unknown): { query?: string; url?: string } {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return {};
+  }
+
+  const candidate = args as Record<string, unknown>;
+
+  return {
+    query: typeof candidate.query === "string" ? candidate.query : undefined,
+    url: typeof candidate.url === "string" ? candidate.url : undefined,
+  };
+}
+
 export async function runResearchAgent(
   prompt: string,
   onUpdate: (msg: string) => void
@@ -131,7 +144,7 @@ export async function runResearchAgent(
     const toolResults = await Promise.all(
       calls.map(async (call) => {
         let result = "";
-        const args = (call.args ?? {}) as { query?: string; url?: string };
+        const args = getToolArgs(call.args);
 
         if (call.name === "search_web") {
           const query = args.query ?? "";
