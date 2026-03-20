@@ -2,11 +2,22 @@ import {
   GoogleGenerativeAI,
   SchemaType,
   FunctionCallingMode,
+  type FunctionDeclaration,
 } from "@google/generative-ai";
 import { browseAndExtract, searchWeb } from "./browser";
 import type { NotionSchema } from "./notion-mcp";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+function getGeminiClient() {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "Missing GEMINI_API_KEY. Copy .env.example to .env.local and set your Gemini API key."
+    );
+  }
+
+  return new GoogleGenerativeAI(apiKey);
+}
 
 export interface ResearchResult {
   suggestedDbTitle: string;
@@ -41,7 +52,7 @@ Schema property types: "title" (required, one per schema), "rich_text", "url", "
 Always include a "Name" title field and a "URL" url field when relevant.
 Tailor the schema to the research topic. Be specific and useful.`;
 
-const TOOL_DECLARATIONS = [
+const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: "search_web",
     description:
@@ -78,7 +89,7 @@ export async function runResearchAgent(
   prompt: string,
   onUpdate: (msg: string) => void
 ): Promise<ResearchResult> {
-  const model = genAI.getGenerativeModel({
+  const model = getGeminiClient().getGenerativeModel({
     model: "gemini-2.0-flash",
     tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
     toolConfig: {
@@ -119,14 +130,15 @@ export async function runResearchAgent(
     const toolResults = await Promise.all(
       calls.map(async (call) => {
         let result: string;
+        const args = (call.args ?? {}) as { query?: string; url?: string };
 
         if (call.name === "search_web") {
-          const query = call.args.query as string;
+          const query = args.query ?? "";
           onUpdate(`🔍 Searching: "${query}"`);
           const results = await searchWeb(query);
           result = JSON.stringify(results, null, 2);
         } else if (call.name === "browse_url") {
-          const url = call.args.url as string;
+          const url = args.url ?? "";
           onUpdate(`🌐 Browsing: ${url}`);
           result = await browseAndExtract(url);
         } else {

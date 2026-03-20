@@ -4,17 +4,18 @@ An AI-powered research agent that browses the web and structures findings direct
 
 ## What this repository is
 
-This repository is a **small prototype / code drop** for a Notion research workflow built with **Next.js, Gemini, Playwright, and the Notion MCP server**.
+This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and the Notion MCP server**.
 
 It contains the core application pieces:
 
-- a React chat-style UI (`ChatUI.tsx`)
-- a streaming research API route (`route.ts`)
-- a Gemini agent loop (`agent.ts`)
-- Playwright browsing helpers (`browser.ts`)
-- a Notion MCP client wrapper (`notion-mcp.ts`)
+- a React chat-style UI (`app/components/ChatUI.tsx`)
+- a streaming research API route (`app/api/research/route.ts`)
+- a streaming Notion write API route (`app/api/write/route.ts`)
+- a Gemini agent loop (`lib/agent.ts`)
+- Playwright browsing helpers (`lib/browser.ts`)
+- a Notion MCP client wrapper (`lib/notion-mcp.ts`)
 
-At the moment, this clone is **not laid out as a complete runnable Next.js app**. The source files reference App Router-style paths such as `@/lib/agent`, but the repository does not currently include the expected `app/` or `lib/` directory structure, so `npm run build` fails in its current form.
+The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured.
 
 ## How it works
 
@@ -41,7 +42,7 @@ npm install
 # ↑ also runs `playwright install chromium` via postinstall
 ```
 
-> **Current status:** dependency installation succeeds, but the checked-in file layout is currently incomplete for a production Next.js build. Treat this repository as a prototype reference unless/until the files are moved into the expected `app/` and `lib/` paths.
+> **Current status:** the app boots with the included App Router structure. The Gemini and Notion features require valid environment variables, and the API routes will return clear setup errors until those are provided.
 
 ### 2. Configure environment variables
 

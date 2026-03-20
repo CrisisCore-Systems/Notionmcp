@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { runResearchAgent } from "@/lib/agent";
 
+export const runtime = "nodejs";
 export const maxDuration = 120; // 2 minute timeout for research phase
 
 export async function POST(req: NextRequest) {
