@@ -3,9 +3,23 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 let mcpClient: Client | null = null;
 
+/** Read a required environment variable or throw a setup error. */
+function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(
+      `Missing ${name}. Copy .env.example to .env.local and set the required Notion credentials.`
+    );
+  }
+
+  return value;
+}
+
 /** Lazily start and connect to the Notion MCP server subprocess */
 async function getClient(): Promise<Client> {
   if (mcpClient) return mcpClient;
+  const notionToken = getRequiredEnv("NOTION_TOKEN");
 
   const transport = new StdioClientTransport({
     command: "npx",
@@ -14,7 +28,7 @@ async function getClient(): Promise<Client> {
       ...process.env,
       // Notion MCP server reads auth from this header string
       OPENAPI_MCP_HEADERS: JSON.stringify({
-        Authorization: `Bearer ${process.env.NOTION_TOKEN}`,
+        Authorization: `Bearer ${notionToken}`,
         "Notion-Version": "2022-06-28",
       }),
     },
@@ -53,6 +67,8 @@ export async function createDatabase(
   title: string,
   schema: NotionSchema
 ): Promise<string> {
+  const parentPageId = getRequiredEnv("NOTION_PARENT_PAGE_ID");
+
   // Build Notion property definitions from our simple schema
   const properties: Record<string, unknown> = {};
 
@@ -71,7 +87,7 @@ export async function createDatabase(
   }
 
   const result = (await callNotion("notion_create_database", {
-    parent: { page_id: process.env.NOTION_PARENT_PAGE_ID },
+    parent: { page_id: parentPageId },
     title: [{ type: "text", text: { content: title } }],
     properties,
   })) as { id?: string }[];

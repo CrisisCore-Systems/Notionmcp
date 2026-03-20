@@ -2,11 +2,23 @@ import {
   GoogleGenerativeAI,
   SchemaType,
   FunctionCallingMode,
+  type FunctionDeclaration,
 } from "@google/generative-ai";
 import { browseAndExtract, searchWeb } from "./browser";
 import type { NotionSchema } from "./notion-mcp";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+/** Create a Gemini client or throw a setup error if the API key is missing. */
+function getGeminiClient() {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "Missing GEMINI_API_KEY. Copy .env.example to .env.local and set your Gemini API key."
+    );
+  }
+
+  return new GoogleGenerativeAI(apiKey);
+}
 
 export interface ResearchResult {
   suggestedDbTitle: string;
@@ -41,7 +53,7 @@ Schema property types: "title" (required, one per schema), "rich_text", "url", "
 Always include a "Name" title field and a "URL" url field when relevant.
 Tailor the schema to the research topic. Be specific and useful.`;
 
-const TOOL_DECLARATIONS = [
+const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: "search_web",
     description:
@@ -74,11 +86,24 @@ const TOOL_DECLARATIONS = [
   },
 ];
 
+function getToolArgs(args: unknown): { query?: string; url?: string } {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return {};
+  }
+
+  const candidate = args as Record<string, unknown>;
+
+  return {
+    query: typeof candidate.query === "string" ? candidate.query : undefined,
+    url: typeof candidate.url === "string" ? candidate.url : undefined,
+  };
+}
+
 export async function runResearchAgent(
   prompt: string,
   onUpdate: (msg: string) => void
 ): Promise<ResearchResult> {
-  const model = genAI.getGenerativeModel({
+  const model = getGeminiClient().getGenerativeModel({
     model: "gemini-2.0-flash",
     tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
     toolConfig: {
@@ -118,15 +143,16 @@ export async function runResearchAgent(
     // Execute all tool calls in parallel
     const toolResults = await Promise.all(
       calls.map(async (call) => {
-        let result: string;
+        let result = "";
+        const args = getToolArgs(call.args);
 
         if (call.name === "search_web") {
-          const query = call.args.query as string;
+          const query = args.query ?? "";
           onUpdate(`🔍 Searching: "${query}"`);
           const results = await searchWeb(query);
           result = JSON.stringify(results, null, 2);
         } else if (call.name === "browse_url") {
-          const url = call.args.url as string;
+          const url = args.url ?? "";
           onUpdate(`🌐 Browsing: ${url}`);
           result = await browseAndExtract(url);
         } else {

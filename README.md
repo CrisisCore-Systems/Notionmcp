@@ -2,6 +2,21 @@
 
 An AI-powered research agent that browses the web and structures findings directly into a Notion database — with human-in-the-loop approval before writing.
 
+## What this repository is
+
+This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and the Notion MCP server**.
+
+It contains the core application pieces:
+
+- a React chat-style UI (`app/components/ChatUI.tsx`)
+- a streaming research API route (`app/api/research/route.ts`)
+- a streaming Notion write API route (`app/api/write/route.ts`)
+- a Gemini agent loop (`lib/agent.ts`)
+- Playwright browsing helpers (`lib/browser.ts`)
+- a Notion MCP client wrapper (`lib/notion-mcp.ts`)
+
+The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured.
+
 ## How it works
 
 1. **You type a research prompt** (e.g. "Find the top 5 competitors to Linear")
@@ -26,6 +41,8 @@ cd notion-research-agent
 npm install
 # ↑ also runs `playwright install chromium` via postinstall
 ```
+
+> **Current status:** the app boots with the included App Router structure. The Gemini and Notion features require valid environment variables, and the API routes will return clear setup errors until those are provided.
 
 ### 2. Configure environment variables
 
