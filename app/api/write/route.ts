@@ -5,21 +5,64 @@ import { addRow, createDatabase } from "@/lib/notion-mcp";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+const NOTION_PROPERTY_TYPES = new Set([
+  "title",
+  "rich_text",
+  "url",
+  "number",
+  "select",
+]);
+
+/** Validate the streamed research payload before writing anything to Notion. */
+function isResearchResult(value: unknown): value is ResearchResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const schema = candidate.schema;
+  const items = candidate.items;
+
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+
+  if (
+    !Array.isArray(items) ||
+    items.length === 0 ||
+    !items.every((item) => item && typeof item === "object" && !Array.isArray(item))
+  ) {
+    return false;
+  }
+
+  return (
+    typeof candidate.suggestedDbTitle === "string" &&
+    typeof candidate.summary === "string" &&
+    Object.values(schema).every(
+      (propertyType) =>
+        typeof propertyType === "string" && NOTION_PROPERTY_TYPES.has(propertyType)
+    )
+  );
+}
+
 export async function POST(req: NextRequest) {
-  const body = (await req.json()) as Partial<ResearchResult>;
-  const suggestedDbTitle = body.suggestedDbTitle?.trim();
-  const summary = body.summary?.trim();
+  const body = (await req.json()) as unknown;
+
+  if (!isResearchResult(body)) {
+    return new Response(JSON.stringify({ error: "A complete research result is required" }), {
+      status: 400,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  const suggestedDbTitle = body.suggestedDbTitle.trim();
+  const summary = body.summary.trim();
   const schema = body.schema;
   const items = body.items;
 
-  if (
-    !suggestedDbTitle ||
-    !summary ||
-    !schema ||
-    typeof schema !== "object" ||
-    !Array.isArray(items) ||
-    items.length === 0
-  ) {
+  if (!suggestedDbTitle || !summary) {
     return new Response(JSON.stringify({ error: "A complete research result is required" }), {
       status: 400,
       headers: {

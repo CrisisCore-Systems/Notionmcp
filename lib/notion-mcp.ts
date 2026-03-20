@@ -3,6 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 let mcpClient: Client | null = null;
 
+/** Read a required environment variable or throw a setup error. */
 function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string {
   const value = process.env[name];
 

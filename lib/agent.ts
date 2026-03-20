@@ -7,6 +7,7 @@ import {
 import { browseAndExtract, searchWeb } from "./browser";
 import type { NotionSchema } from "./notion-mcp";
 
+/** Create a Gemini client or throw a setup error if the API key is missing. */
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -129,7 +130,7 @@ export async function runResearchAgent(
     // Execute all tool calls in parallel
     const toolResults = await Promise.all(
       calls.map(async (call) => {
-        let result: string;
+        let result = "";
         const args = (call.args ?? {}) as { query?: string; url?: string };
 
         if (call.name === "search_web") {
