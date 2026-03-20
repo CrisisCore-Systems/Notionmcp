@@ -7,6 +7,9 @@ const packageJsonPath = path.join(repoRoot, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 
 const IGNORED_NAMES = new Set([".git", "node_modules", ".next"]);
+const APP_ROUTER_PAGE_PATTERN = /(^|\/)page\.(js|jsx|ts|tsx)$/;
+const APP_ROUTER_API_PATTERN = /(^|\/)route\.(js|jsx|ts|tsx)$/;
+const SCRIPT_FILE_PATTERN = /\.(js|jsx|ts|tsx)$/;
 
 function listRelativeFiles(directory) {
   const absoluteDirectory = path.join(repoRoot, directory);
@@ -18,6 +21,16 @@ function listRelativeFiles(directory) {
   return walkDirectory(absoluteDirectory)
     .map((filePath) => path.relative(repoRoot, filePath).split(path.sep).join("/"))
     .sort((left, right) => left.localeCompare(right));
+}
+
+function listRelativeFilesFromDirectories(directories) {
+  return [...new Set(directories.flatMap((directory) => listRelativeFiles(directory)))].sort((left, right) =>
+    left.localeCompare(right)
+  );
+}
+
+function getExistingDirectories(directories) {
+  return directories.filter((directory) => fs.existsSync(path.join(repoRoot, directory)));
 }
 
 function walkDirectory(directory) {
@@ -66,7 +79,8 @@ function getEnvironmentVariables() {
     .readFileSync(envExamplePath, "utf8")
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => /^[A-Z0-9_]+=/.test(line))
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .filter((line) => /^[A-Za-z0-9_]+=/.test(line))
     .map((line) => line.split("=", 1)[0]);
 }
 
@@ -110,11 +124,53 @@ function getTopLevelEntries() {
 }
 
 function detectFramework() {
-  if (packageJson.dependencies?.next) {
+  if (packageJson.dependencies?.next && fs.existsSync(path.join(repoRoot, "app"))) {
     return "Next.js App Router";
   }
 
+  if (packageJson.dependencies?.next && fs.existsSync(path.join(repoRoot, "pages"))) {
+    return "Next.js Pages Router";
+  }
+
+  if (packageJson.dependencies?.next) {
+    return "Next.js";
+  }
+
   return "Unknown";
+}
+
+function getRoutes() {
+  const routeGroups = {
+    pages: [],
+    api: [],
+  };
+
+  if (fs.existsSync(path.join(repoRoot, "app"))) {
+    const appFiles = listRelativeFiles("app");
+    routeGroups.pages.push(...appFiles.filter((filePath) => APP_ROUTER_PAGE_PATTERN.test(filePath)));
+    routeGroups.api.push(...appFiles.filter((filePath) => filePath.startsWith("app/api/") && APP_ROUTER_API_PATTERN.test(filePath)));
+  }
+
+  if (fs.existsSync(path.join(repoRoot, "pages"))) {
+    routeGroups.pages.push(
+      ...listRelativeFiles("pages").filter(
+        (filePath) =>
+          SCRIPT_FILE_PATTERN.test(filePath) &&
+          !filePath.startsWith("pages/api/") &&
+          !/(^|\/)_(app|document|error)\.(js|jsx|ts|tsx)$/.test(filePath)
+      )
+    );
+    routeGroups.api.push(...listRelativeFiles("pages/api").filter((filePath) => SCRIPT_FILE_PATTERN.test(filePath)));
+  }
+
+  return {
+    pages: [...new Set(routeGroups.pages)].sort((left, right) => left.localeCompare(right)),
+    api: [...new Set(routeGroups.api)].sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+function getComponentFiles() {
+  return listRelativeFilesFromDirectories(getExistingDirectories(["app/components", "components", "src/components"]));
 }
 
 const allFiles = walkDirectory(repoRoot).map((filePath) =>
@@ -141,11 +197,8 @@ const report = {
     hasEnvExample: fs.existsSync(path.join(repoRoot, ".env.example")),
   },
   topLevelEntries: getTopLevelEntries(),
-  routes: {
-    pages: listRelativeFiles("app").filter((filePath) => /\/page\.(js|jsx|ts|tsx)$/.test(`/${filePath}`)),
-    api: listRelativeFiles("app/api").filter((filePath) => /\/route\.(js|jsx|ts|tsx)$/.test(`/${filePath}`)),
-  },
-  components: listRelativeFiles("app/components"),
+  routes: getRoutes(),
+  components: getComponentFiles(),
   libraries: listRelativeFiles("lib"),
   environmentVariables: getEnvironmentVariables(),
   dependencies: {
