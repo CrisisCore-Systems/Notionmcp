@@ -41,7 +41,8 @@ can be opened in a browser or shared into the Notion app on Android.
 2. On the success screen, tap **Open in Notion** first.
 3. If Android keeps the link in your browser instead of jumping into the app, use **Share link** or
    **Copy Android/web link**.
-4. Open that same `www.notion.so` link from the Notion app or from Android's share sheet.
+4. Open that same `https://www.notion.so/...` link from the Notion app or from Android's share
+   sheet.
 
 ## Stack
 

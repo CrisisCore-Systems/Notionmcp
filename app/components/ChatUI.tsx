@@ -1058,11 +1058,13 @@ export default function ChatUI() {
               fontSize: "0.85rem",
             }}
           >
-            <div style={{ fontWeight: 600, marginBottom: "0.35rem" }}>Android workflow</div>
+            <h3 style={{ fontSize: "0.92rem", fontWeight: 600, margin: "0 0 0.35rem" }}>
+              Android workflow
+            </h3>
             <div>
               1. Write the results to Notion.
               <br />
-              2. Use the final <code>www.notion.so</code> link.
+              2. Use the final <code>https://www.notion.so/...</code> link.
               <br />
               3. On Android, either open that link directly or share/copy it into the Notion app.
             </div>
@@ -1588,8 +1590,8 @@ export default function ChatUI() {
               >
                 1. Tap <strong>Open in Notion</strong>.
                 <br />
-                2. If Android opens the browser instead of the app, tap <strong>Share link</strong> or
-                <strong> Copy Android/web link</strong>.
+                2. If Android opens the browser instead of the app, tap{" "}
+                <strong>Share link</strong> or <strong>Copy Android/web link</strong>.
                 <br />
                 3. Open the shared or copied link in the Notion app.
               </div>
