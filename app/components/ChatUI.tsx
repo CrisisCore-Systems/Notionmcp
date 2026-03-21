@@ -32,68 +32,68 @@ export default function ChatUI() {
     setLogs((prev) => [...prev, { type, message }]);
   };
 
-  const streamSSE = (
+  const streamSSE = async (
     url: string,
     body: unknown,
     onUpdate: (msg: string) => void
   ): Promise<unknown> => {
-    return new Promise(async (resolve, reject) => {
-      try {
-        abortRef.current = new AbortController();
+    try {
+      abortRef.current = new AbortController();
 
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: abortRef.current.signal,
-        });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: abortRef.current.signal,
+      });
 
-        if (!res.ok) {
-          const text = await res.text();
-          let message = text || `Request failed with status ${res.status}`;
+      if (!res.ok) {
+        const text = await res.text();
+        let message = text || `Request failed with status ${res.status}`;
 
-          try {
-            const parsed = JSON.parse(text) as { error?: string };
-            if (parsed.error) message = parsed.error;
-          } catch {}
+        try {
+          const parsed = JSON.parse(text) as { error?: string };
+          if (parsed.error) message = parsed.error;
+        } catch {}
 
-          throw new Error(message);
-        }
+        throw new Error(message);
+      }
 
-        if (!res.body) {
-          throw new Error("Streaming response was empty.");
-        }
+      if (!res.body) {
+        throw new Error("Streaming response was empty.");
+      }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
 
-          let event = "";
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              event = line.slice(7).trim();
-            } else if (line.startsWith("data: ")) {
-              const data = JSON.parse(line.slice(6));
-              if (event === "update") onUpdate(data.message);
-              else if (event === "complete") resolve(data);
-              else if (event === "error") reject(new Error(data.message));
-            }
+        let event = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            event = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            const data = JSON.parse(line.slice(6));
+            if (event === "update") onUpdate(data.message);
+            else if (event === "complete") return data;
+            else if (event === "error") throw new Error(data.message);
           }
         }
-      } catch (err) {
-        reject(err);
-      } finally {
-        abortRef.current = null;
       }
-    });
+
+      throw new Error(
+        "Streaming response ended unexpectedly before completion. The server may have closed the connection. Please check your network and try again."
+      );
+    } finally {
+      abortRef.current = null;
+    }
   };
 
   const startResearch = async () => {
@@ -200,12 +200,16 @@ export default function ChatUI() {
   };
 
   const retryLastAction = () => {
+    if (!lastActionRef.current) return;
+
     if (lastActionRef.current === "write") {
       void writeToNotion();
       return;
     }
 
-    void startResearch();
+    if (lastActionRef.current === "research") {
+      void startResearch();
+    }
   };
 
   const reset = () => {
@@ -320,6 +324,7 @@ export default function ChatUI() {
           {(phase === "researching" || phase === "writing") && (
             <button
               onClick={cancelCurrentAction}
+              aria-label="Cancel current operation"
               style={{
                 marginTop: "0.75rem",
                 padding: "0.45rem 0.8rem",
@@ -450,7 +455,7 @@ export default function ChatUI() {
                         color: "#666",
                       }}
                     >
-                      Remove fewer rows or start over to regenerate results.
+                      All rows removed. Use the &quot;Start over&quot; button below to regenerate results.
                     </td>
                   </tr>
                 ) : (
@@ -467,6 +472,7 @@ export default function ChatUI() {
                           }}
                         >
                           <textarea
+                            aria-label={`${col} for row ${i + 1}`}
                             value={item[col] ?? ""}
                             onChange={(e) => updateItemValue(i, col, e.target.value)}
                             rows={editedResult.schema[col] === "rich_text" ? 3 : 2}
@@ -493,6 +499,7 @@ export default function ChatUI() {
                       >
                         <button
                           onClick={() => removeItem(i)}
+                          aria-label={`Remove row ${i + 1}`}
                           style={{
                             padding: "0.45rem 0.7rem",
                             background: "none",
@@ -517,6 +524,12 @@ export default function ChatUI() {
             <button
               onClick={writeToNotion}
               disabled={editedResult.items.length === 0}
+              aria-disabled={editedResult.items.length === 0}
+              title={
+                editedResult.items.length === 0
+                  ? "Add or keep at least one row before writing to Notion."
+                  : undefined
+              }
               style={{
                 padding: "0.75rem 1.5rem",
                 background: editedResult.items.length > 0 ? "#000" : "#ccc",
@@ -611,13 +624,20 @@ export default function ChatUI() {
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
             <button
               onClick={retryLastAction}
+              disabled={!lastActionRef.current}
+              aria-disabled={!lastActionRef.current}
+              title={
+                !lastActionRef.current
+                  ? "Retry becomes available after a failed research or write step."
+                  : undefined
+              }
               style={{
                 padding: "0.6rem 1.25rem",
-                background: "#000",
+                background: lastActionRef.current ? "#000" : "#ccc",
                 color: "#fff",
                 border: "none",
                 borderRadius: 8,
-                cursor: "pointer",
+                cursor: lastActionRef.current ? "pointer" : "default",
                 fontSize: "0.9rem",
               }}
             >
