@@ -737,9 +737,9 @@ export default function ChatUI() {
 
     try {
       await navigator.clipboard.writeText(notionUrl);
-      setCopyLinkMessage("Copied a Notion link you can open on Android, desktop, or the web.");
+      setCopyLinkMessage("Copied a Notion link you can open on Android, desktop, or the web");
     } catch {
-      setCopyLinkMessage("Could not copy automatically. Long-press the Notion link to copy it on Android.");
+      setCopyLinkMessage("Could not copy automatically. Long-press the Notion link to copy it on Android");
     }
   };
 
