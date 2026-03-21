@@ -121,6 +121,9 @@ export async function POST(req: NextRequest) {
 
         send("complete", {
           databaseId,
+          itemsWritten: items.length,
+          propertyCount: Object.keys(schema).length,
+          usedExistingDatabase: !!targetDatabaseId,
           message: targetDatabaseId
             ? `✅ Added ${items.length} row${items.length === 1 ? "" : "s"} to the existing Notion database`
             : `✅ Created Notion database and wrote ${items.length} row${items.length === 1 ? "" : "s"}`,
