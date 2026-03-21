@@ -17,6 +17,14 @@ It contains the core application pieces:
 
 The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured.
 
+To quickly crawl the repository and print its current state, run:
+
+```bash
+npm run status
+```
+
+Add `-- --json` if you want the same information as structured JSON.
+
 ## How it works
 
 1. **You type a research prompt** (e.g. "Find the top 5 competitors to Linear")
