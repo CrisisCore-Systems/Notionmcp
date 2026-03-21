@@ -118,6 +118,10 @@ function buildCsv(result: EditableResult): string {
   return [header, ...rows].join("\n");
 }
 
+function buildNotionWebUrl(databaseId: string): string {
+  return `https://www.notion.so/${databaseId.replace(/-/g, "")}`;
+}
+
 function isValidHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -178,6 +182,7 @@ export default function ChatUI() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [useExistingDatabase, setUseExistingDatabase] = useState(false);
   const [targetDatabaseId, setTargetDatabaseId] = useState("");
+  const [copyLinkMessage, setCopyLinkMessage] = useState<string | null>(null);
   const [savedDraft, setSavedDraft] = useState<StoredDraft | null>(null);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
@@ -513,7 +518,8 @@ export default function ChatUI() {
       };
 
       addLog(data.message, "success");
-      setNotionUrl(`https://notion.so/${data.databaseId.replace(/-/g, "")}`);
+      setNotionUrl(buildNotionWebUrl(data.databaseId));
+      setCopyLinkMessage(null);
       setWriteSummary({
         databaseId: data.databaseId,
         itemsWritten: data.itemsWritten,
@@ -726,6 +732,17 @@ export default function ChatUI() {
     abortRef.current?.abort();
   };
 
+  const copyNotionLink = async () => {
+    if (!notionUrl) return;
+
+    try {
+      await navigator.clipboard.writeText(notionUrl);
+      setCopyLinkMessage("Copied a Notion link you can open on Android, desktop, or the web.");
+    } catch {
+      setCopyLinkMessage("Could not copy automatically. Long-press the Notion link to copy it on Android.");
+    }
+  };
+
   const retryLastAction = () => {
     if (!lastActionRef.current) return;
 
@@ -750,6 +767,7 @@ export default function ChatUI() {
     setErrorMessage(null);
     setUseExistingDatabase(false);
     setTargetDatabaseId("");
+    setCopyLinkMessage(null);
     setSavedDraft(null);
     setFindText("");
     setReplaceText("");
@@ -1008,6 +1026,21 @@ export default function ChatUI() {
                 resize: "vertical",
               }}
             />
+          </div>
+
+          <div
+            style={{
+              marginBottom: "1rem",
+              padding: "0.75rem 0.9rem",
+              background: "#eff6ff",
+              border: "1px solid #bfdbfe",
+              borderRadius: 8,
+              color: "#1d4ed8",
+              fontSize: "0.85rem",
+            }}
+          >
+            After writing, the app gives you a standard <code>www.notion.so</code> link that you can
+            open in a browser or share into the Notion app on Android.
           </div>
 
           <div style={{ marginBottom: "1rem" }}>
@@ -1514,14 +1547,44 @@ export default function ChatUI() {
             </div>
           )}
           {notionUrl && (
-            <a
-              href={notionUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: "#166534", fontSize: "0.9rem" }}
-            >
-              Open in Notion →
-            </a>
+            <div style={{ display: "grid", gap: "0.65rem" }}>
+              <div style={{ fontSize: "0.88rem", color: "#166534" }}>
+                This link works on desktop and the web, and Android users can open or share it into
+                the Notion app.
+              </div>
+              <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap", alignItems: "center" }}>
+                <a
+                  href={notionUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: "#166534", fontSize: "0.9rem" }}
+                >
+                  Open in Notion →
+                </a>
+                <button
+                  onClick={() => {
+                    void copyNotionLink();
+                  }}
+                  style={{
+                    padding: "0.45rem 0.8rem",
+                    background: "none",
+                    border: "1px solid #86efac",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: "0.85rem",
+                    color: "#166534",
+                  }}
+                >
+                  Copy Android/web link
+                </button>
+              </div>
+              <div style={{ wordBreak: "break-all", fontSize: "0.82rem", color: "#166534" }}>
+                {notionUrl}
+              </div>
+              {copyLinkMessage && (
+                <div style={{ fontSize: "0.82rem", color: "#166534" }}>{copyLinkMessage}</div>
+              )}
+            </div>
           )}
           <br />
           <button

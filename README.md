@@ -32,6 +32,9 @@ Add `-- --json` if you want the same information as structured JSON.
 3. **You review** the structured data and proposed Notion schema
 4. **One click** writes everything to Notion via the official Notion MCP server
 
+After the write completes, the UI gives you a standard `https://www.notion.so/...` link. That link
+can be opened in a browser or shared into the Notion app on Android.
+
 ## Stack
 
 - **LLM**: Gemini 2.0 Flash (free via Google AI Studio)
