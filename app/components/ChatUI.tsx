@@ -42,7 +42,7 @@ const EXAMPLE_PROMPTS = [
 const PROPERTY_TYPES: PropertyType[] = ["title", "rich_text", "url", "number", "select"];
 const BLOB_URL_CLEANUP_DELAY_MS = 5000;
 const DRAFT_STORAGE_KEY = "notion-research-agent-draft";
-const ACTION_TIMEOUT_WARNING_SECONDS = 100;
+const ACTION_TIMEOUT_WARNING_THRESHOLD_SECONDS = 100;
 
 function formatPropertyTypeLabel(type: PropertyType): string {
   return type
@@ -264,11 +264,11 @@ export default function ChatUI() {
         setElapsedSeconds(nextElapsedSeconds);
 
         if (
-          nextElapsedSeconds >= ACTION_TIMEOUT_WARNING_SECONDS &&
+          nextElapsedSeconds >= ACTION_TIMEOUT_WARNING_THRESHOLD_SECONDS &&
           !timeoutWarningLoggedRef.current
         ) {
           addLog(
-            "⏱️ This request is nearing the 120 second timeout limit. You can cancel and retry if it stalls.",
+            "⏱️ This request has reached the 100 second warning threshold and is nearing the 120 second timeout limit.",
             "info"
           );
           timeoutWarningLoggedRef.current = true;
