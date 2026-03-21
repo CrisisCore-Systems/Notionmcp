@@ -35,6 +35,14 @@ Add `-- --json` if you want the same information as structured JSON.
 After the write completes, the UI gives you a standard `https://www.notion.so/...` link. That link
 can be opened in a browser or shared into the Notion app on Android.
 
+### Using it effectively on Android
+
+1. Run your research normally and write the results to Notion.
+2. On the success screen, tap **Open in Notion** first.
+3. If Android keeps the link in your browser instead of jumping into the app, use **Share link** or
+   **Copy Android/web link**.
+4. Open that same `www.notion.so` link from the Notion app or from Android's share sheet.
+
 ## Stack
 
 - **LLM**: Gemini 2.0 Flash (free via Google AI Studio)

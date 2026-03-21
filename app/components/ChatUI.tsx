@@ -182,7 +182,7 @@ export default function ChatUI() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [useExistingDatabase, setUseExistingDatabase] = useState(false);
   const [targetDatabaseId, setTargetDatabaseId] = useState("");
-  const [copyLinkMessage, setCopyLinkMessage] = useState<string | null>(null);
+  const [linkActionMessage, setLinkActionMessage] = useState<string | null>(null);
   const [savedDraft, setSavedDraft] = useState<StoredDraft | null>(null);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
@@ -519,7 +519,7 @@ export default function ChatUI() {
 
       addLog(data.message, "success");
       setNotionUrl(buildNotionWebUrl(data.databaseId));
-      setCopyLinkMessage(null);
+      setLinkActionMessage(null);
       setWriteSummary({
         databaseId: data.databaseId,
         itemsWritten: data.itemsWritten,
@@ -737,9 +737,28 @@ export default function ChatUI() {
 
     try {
       await navigator.clipboard.writeText(notionUrl);
-      setCopyLinkMessage("Copied a Notion link you can open on Android, desktop, or the web");
+      setLinkActionMessage("Copied a Notion link you can open on Android, desktop, or the web");
     } catch {
-      setCopyLinkMessage("Could not copy automatically. Long-press the Notion link to copy it on Android");
+      setLinkActionMessage("Could not copy automatically. Long-press the Notion link to copy it on Android");
+    }
+  };
+
+  const shareNotionLink = async () => {
+    if (!notionUrl || typeof navigator.share !== "function") return;
+
+    try {
+      await navigator.share({
+        title: "Open in Notion",
+        text: "Open this Notion database",
+        url: notionUrl,
+      });
+      setLinkActionMessage("Shared the Notion link. Choose the Notion app on Android if it appears");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
+      setLinkActionMessage("Sharing was unavailable. Copy the link and paste or share it into Notion");
     }
   };
 
@@ -767,7 +786,7 @@ export default function ChatUI() {
     setErrorMessage(null);
     setUseExistingDatabase(false);
     setTargetDatabaseId("");
-    setCopyLinkMessage(null);
+    setLinkActionMessage(null);
     setSavedDraft(null);
     setFindText("");
     setReplaceText("");
@@ -1039,8 +1058,14 @@ export default function ChatUI() {
               fontSize: "0.85rem",
             }}
           >
-            After writing, the app gives you a standard <code>www.notion.so</code> link that you can
-            open in a browser or share into the Notion app on Android.
+            <div style={{ fontWeight: 600, marginBottom: "0.35rem" }}>Android workflow</div>
+            <div>
+              1. Write the results to Notion.
+              <br />
+              2. Use the final <code>www.notion.so</code> link.
+              <br />
+              3. On Android, either open that link directly or share/copy it into the Notion app.
+            </div>
           </div>
 
           <div style={{ marginBottom: "1rem" }}>
@@ -1549,8 +1574,24 @@ export default function ChatUI() {
           {notionUrl && (
             <div style={{ display: "grid", gap: "0.65rem" }}>
               <div style={{ fontSize: "0.88rem", color: "#166534" }}>
-                This link works on desktop and the web, and Android users can open or share it into
-                the Notion app.
+                On Android, the easiest flow is: tap the link, and if your browser stays open,
+                use Share or Copy to hand the same link to the Notion app.
+              </div>
+              <div
+                style={{
+                  padding: "0.7rem 0.8rem",
+                  background: "#dcfce7",
+                  borderRadius: 8,
+                  fontSize: "0.84rem",
+                  color: "#166534",
+                }}
+              >
+                1. Tap <strong>Open in Notion</strong>.
+                <br />
+                2. If Android opens the browser instead of the app, tap <strong>Share link</strong> or
+                <strong> Copy Android/web link</strong>.
+                <br />
+                3. Open the shared or copied link in the Notion app.
               </div>
               <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap", alignItems: "center" }}>
                 <a
@@ -1561,6 +1602,24 @@ export default function ChatUI() {
                 >
                   Open in Notion →
                 </a>
+                {typeof navigator !== "undefined" && typeof navigator.share === "function" && (
+                  <button
+                    onClick={() => {
+                      void shareNotionLink();
+                    }}
+                    style={{
+                      padding: "0.45rem 0.8rem",
+                      background: "none",
+                      border: "1px solid #86efac",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      fontSize: "0.85rem",
+                      color: "#166534",
+                    }}
+                  >
+                    Share link
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     void copyNotionLink();
@@ -1581,8 +1640,8 @@ export default function ChatUI() {
               <div style={{ wordBreak: "break-all", fontSize: "0.82rem", color: "#166534" }}>
                 {notionUrl}
               </div>
-              {copyLinkMessage && (
-                <div style={{ fontSize: "0.82rem", color: "#166534" }}>{copyLinkMessage}</div>
+              {linkActionMessage && (
+                <div style={{ fontSize: "0.82rem", color: "#166534" }}>{linkActionMessage}</div>
               )}
             </div>
           )}
