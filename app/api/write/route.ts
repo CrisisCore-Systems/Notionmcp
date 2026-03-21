@@ -13,6 +13,10 @@ const NOTION_PROPERTY_TYPES = new Set([
   "select",
 ]);
 
+function isValidDatabaseId(value: string): boolean {
+  return /^[a-f0-9]{32}$/i.test(value) || /^[a-f0-9-]{36}$/i.test(value);
+}
+
 /** Validate the streamed research payload before writing anything to Notion. */
 function isResearchResult(value: unknown): value is ResearchResult {
   if (!value || typeof value !== "object") {
@@ -61,9 +65,23 @@ export async function POST(req: NextRequest) {
   const summary = body.summary.trim();
   const schema = body.schema;
   const items = body.items;
+  const candidate = body as unknown as Record<string, unknown>;
+  const targetDatabaseId =
+    typeof candidate.targetDatabaseId === "string"
+      ? candidate.targetDatabaseId.trim()
+      : "";
 
   if (!suggestedDbTitle || !summary) {
     return new Response(JSON.stringify({ error: "A complete research result is required" }), {
+      status: 400,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  if (targetDatabaseId && !isValidDatabaseId(targetDatabaseId)) {
+    return new Response(JSON.stringify({ error: "A valid Notion database ID is required" }), {
       status: 400,
       headers: {
         "Content-Type": "application/json",
@@ -82,8 +100,14 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        send("update", { message: `Creating Notion database "${suggestedDbTitle}"...` });
-        const databaseId = await createDatabase(suggestedDbTitle, schema);
+        let databaseId = targetDatabaseId;
+
+        if (databaseId) {
+          send("update", { message: `Using existing Notion database "${databaseId}"...` });
+        } else {
+          send("update", { message: `Creating Notion database "${suggestedDbTitle}"...` });
+          databaseId = await createDatabase(suggestedDbTitle, schema);
+        }
 
         for (let index = 0; index < items.length; index++) {
           await addRow(databaseId, items[index], schema);
@@ -94,7 +118,9 @@ export async function POST(req: NextRequest) {
 
         send("complete", {
           databaseId,
-          message: `✅ Created Notion database and wrote ${items.length} row${items.length === 1 ? "" : "s"}`,
+          message: targetDatabaseId
+            ? `✅ Added ${items.length} row${items.length === 1 ? "" : "s"} to the existing Notion database`
+            : `✅ Created Notion database and wrote ${items.length} row${items.length === 1 ? "" : "s"}`,
         });
       } catch (err) {
         send("error", {
