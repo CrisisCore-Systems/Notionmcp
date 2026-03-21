@@ -24,7 +24,9 @@ export default function ChatUI() {
   const [result, setResult] = useState<ResearchResult | null>(null);
   const [editedResult, setEditedResult] = useState<ResearchResult | null>(null);
   const [notionUrl, setNotionUrl] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const lastActionRef = useRef<"research" | "write" | null>(null);
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
     setLogs((prev) => [...prev, { type, message }]);
@@ -36,49 +38,73 @@ export default function ChatUI() {
     onUpdate: (msg: string) => void
   ): Promise<unknown> => {
     return new Promise(async (resolve, reject) => {
-      abortRef.current = new AbortController();
+      try {
+        abortRef.current = new AbortController();
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: abortRef.current.signal,
-      });
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: abortRef.current.signal,
+        });
 
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+        if (!res.ok) {
+          const text = await res.text();
+          let message = text || `Request failed with status ${res.status}`;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+          try {
+            const parsed = JSON.parse(text) as { error?: string };
+            if (parsed.error) message = parsed.error;
+          } catch {}
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+          throw new Error(message);
+        }
 
-        let event = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            event = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            const data = JSON.parse(line.slice(6));
-            if (event === "update") onUpdate(data.message);
-            else if (event === "complete") resolve(data);
-            else if (event === "error") reject(new Error(data.message));
+        if (!res.body) {
+          throw new Error("Streaming response was empty.");
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          let event = "";
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              event = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              const data = JSON.parse(line.slice(6));
+              if (event === "update") onUpdate(data.message);
+              else if (event === "complete") resolve(data);
+              else if (event === "error") reject(new Error(data.message));
+            }
           }
         }
+      } catch (err) {
+        reject(err);
+      } finally {
+        abortRef.current = null;
       }
     });
   };
 
   const startResearch = async () => {
     if (!prompt.trim()) return;
+    lastActionRef.current = "research";
     setPhase("researching");
     setLogs([]);
     setResult(null);
     setEditedResult(null);
     setNotionUrl(null);
+    setErrorMessage(null);
 
     try {
       addLog(`Starting research: "${prompt}"`, "info");
@@ -94,14 +120,24 @@ export default function ChatUI() {
       addLog(`✅ Research complete — found ${data.items.length} items`, "success");
       setPhase("approving");
     } catch (err) {
-      addLog(`Error: ${err instanceof Error ? err.message : String(err)}`, "error");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        addLog("Research cancelled.", "info");
+        setPhase("idle");
+        return;
+      }
+
+      const message = err instanceof Error ? err.message : String(err);
+      setErrorMessage(message);
+      addLog(`Error: ${message}`, "error");
       setPhase("error");
     }
   };
 
   const writeToNotion = async () => {
     if (!editedResult) return;
+    lastActionRef.current = "write";
     setPhase("writing");
+    setErrorMessage(null);
 
     try {
       addLog("Starting Notion write phase...", "info");
@@ -118,9 +154,58 @@ export default function ChatUI() {
       );
       setPhase("done");
     } catch (err) {
-      addLog(`Error: ${err instanceof Error ? err.message : String(err)}`, "error");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        addLog("Notion write cancelled.", "info");
+        setPhase("approving");
+        return;
+      }
+
+      const message = err instanceof Error ? err.message : String(err);
+      setErrorMessage(message);
+      addLog(`Error: ${message}`, "error");
       setPhase("error");
     }
+  };
+
+  const updateSummary = (summary: string) => {
+    setEditedResult((prev) => (prev ? { ...prev, summary } : prev));
+  };
+
+  const updateItemValue = (rowIndex: number, column: string, value: string) => {
+    setEditedResult((prev) => {
+      if (!prev) return prev;
+
+      return {
+        ...prev,
+        items: prev.items.map((item, index) =>
+          index === rowIndex ? { ...item, [column]: value } : item
+        ),
+      };
+    });
+  };
+
+  const removeItem = (rowIndex: number) => {
+    setEditedResult((prev) => {
+      if (!prev) return prev;
+
+      return {
+        ...prev,
+        items: prev.items.filter((_, index) => index !== rowIndex),
+      };
+    });
+  };
+
+  const cancelCurrentAction = () => {
+    abortRef.current?.abort();
+  };
+
+  const retryLastAction = () => {
+    if (lastActionRef.current === "write") {
+      void writeToNotion();
+      return;
+    }
+
+    void startResearch();
   };
 
   const reset = () => {
@@ -130,6 +215,7 @@ export default function ChatUI() {
     setResult(null);
     setEditedResult(null);
     setNotionUrl(null);
+    setErrorMessage(null);
     setPrompt("");
   };
 
@@ -231,6 +317,23 @@ export default function ChatUI() {
               ⏳ Working…
             </div>
           )}
+          {(phase === "researching" || phase === "writing") && (
+            <button
+              onClick={cancelCurrentAction}
+              style={{
+                marginTop: "0.75rem",
+                padding: "0.45rem 0.8rem",
+                background: "none",
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontSize: "0.8rem",
+                color: "#555",
+              }}
+            >
+              Cancel
+            </button>
+          )}
         </div>
       )}
 
@@ -256,17 +359,26 @@ export default function ChatUI() {
           </div>
 
           {/* Summary */}
-          <div
-            style={{
-              background: "#f0f4ff",
-              borderRadius: 8,
-              padding: "0.75rem 1rem",
-              fontSize: "0.9rem",
-              marginBottom: "1rem",
-              color: "#333",
-            }}
-          >
-            {editedResult.summary}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={{ fontSize: "0.85rem", color: "#555", display: "block", marginBottom: "0.3rem" }}>
+              Summary
+            </label>
+            <textarea
+              value={editedResult.summary}
+              onChange={(e) => updateSummary(e.target.value)}
+              rows={3}
+              style={{
+                width: "100%",
+                padding: "0.75rem 1rem",
+                background: "#f0f4ff",
+                border: "1px solid #dbeafe",
+                borderRadius: 8,
+                fontSize: "0.9rem",
+                color: "#333",
+                boxSizing: "border-box",
+                resize: "vertical",
+              }}
+            />
           </div>
 
           {/* Schema */}
@@ -293,6 +405,9 @@ export default function ChatUI() {
           </div>
 
           {/* Items preview table */}
+          <div style={{ fontSize: "0.85rem", color: "#555", marginBottom: "0.5rem" }}>
+            Rows ({editedResult.items.length})
+          </div>
           <div style={{ overflowX: "auto", marginBottom: "1.25rem" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
               <thead>
@@ -311,28 +426,89 @@ export default function ChatUI() {
                       {col}
                     </th>
                   ))}
+                  <th
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      textAlign: "left",
+                      fontWeight: 500,
+                      border: "1px solid #e5e7eb",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {editedResult.items.map((item, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #e5e7eb" }}>
-                    {Object.keys(editedResult.schema).map((col) => (
+                {editedResult.items.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={Object.keys(editedResult.schema).length + 1}
+                      style={{
+                        padding: "0.75rem",
+                        border: "1px solid #e5e7eb",
+                        color: "#666",
+                      }}
+                    >
+                      Remove fewer rows or start over to regenerate results.
+                    </td>
+                  </tr>
+                ) : (
+                  editedResult.items.map((item, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #e5e7eb" }}>
+                      {Object.keys(editedResult.schema).map((col) => (
+                        <td
+                          key={col}
+                          style={{
+                            padding: "0.5rem 0.75rem",
+                            border: "1px solid #e5e7eb",
+                            minWidth: 180,
+                            verticalAlign: "top",
+                          }}
+                        >
+                          <textarea
+                            value={item[col] ?? ""}
+                            onChange={(e) => updateItemValue(i, col, e.target.value)}
+                            rows={editedResult.schema[col] === "rich_text" ? 3 : 2}
+                            style={{
+                              width: "100%",
+                              border: "1px solid #ddd",
+                              borderRadius: 6,
+                              padding: "0.45rem 0.5rem",
+                              fontSize: "0.85rem",
+                              fontFamily: "inherit",
+                              boxSizing: "border-box",
+                              resize: "vertical",
+                            }}
+                          />
+                        </td>
+                      ))}
                       <td
-                        key={col}
                         style={{
                           padding: "0.5rem 0.75rem",
                           border: "1px solid #e5e7eb",
-                          maxWidth: 200,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
+                          verticalAlign: "top",
                           whiteSpace: "nowrap",
                         }}
                       >
-                        {item[col] ?? "—"}
+                        <button
+                          onClick={() => removeItem(i)}
+                          style={{
+                            padding: "0.45rem 0.7rem",
+                            background: "none",
+                            border: "1px solid #f5c2c7",
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            fontSize: "0.8rem",
+                            color: "#b42318",
+                          }}
+                        >
+                          Remove
+                        </button>
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -340,13 +516,14 @@ export default function ChatUI() {
           <div style={{ display: "flex", gap: "0.75rem" }}>
             <button
               onClick={writeToNotion}
+              disabled={editedResult.items.length === 0}
               style={{
                 padding: "0.75rem 1.5rem",
-                background: "#000",
+                background: editedResult.items.length > 0 ? "#000" : "#ccc",
                 color: "#fff",
                 border: "none",
                 borderRadius: 8,
-                cursor: "pointer",
+                cursor: editedResult.items.length > 0 ? "pointer" : "default",
                 fontSize: "0.95rem",
                 fontWeight: 500,
               }}
@@ -415,20 +592,52 @@ export default function ChatUI() {
 
       {/* Error recovery */}
       {phase === "error" && (
-        <button
-          onClick={reset}
-          style={{
-            marginTop: "1rem",
-            padding: "0.6rem 1.25rem",
-            background: "none",
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            cursor: "pointer",
-            fontSize: "0.9rem",
-          }}
-        >
-          Try again
-        </button>
+        <div style={{ marginTop: "1rem" }}>
+          {errorMessage && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                padding: "0.85rem 1rem",
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                borderRadius: 8,
+                color: "#b42318",
+                fontSize: "0.9rem",
+              }}
+            >
+              {errorMessage}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            <button
+              onClick={retryLastAction}
+              style={{
+                padding: "0.6rem 1.25rem",
+                background: "#000",
+                color: "#fff",
+                border: "none",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontSize: "0.9rem",
+              }}
+            >
+              Retry last step
+            </button>
+            <button
+              onClick={reset}
+              style={{
+                padding: "0.6rem 1.25rem",
+                background: "none",
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontSize: "0.9rem",
+              }}
+            >
+              Start over
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
