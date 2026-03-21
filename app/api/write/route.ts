@@ -14,7 +14,10 @@ const NOTION_PROPERTY_TYPES = new Set([
 ]);
 
 function isValidDatabaseId(value: string): boolean {
-  return /^[a-f0-9]{32}$/i.test(value) || /^[a-f0-9-]{36}$/i.test(value);
+  return (
+    /^[a-f0-9]{32}$/i.test(value) ||
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)
+  );
 }
 
 /** Validate the streamed research payload before writing anything to Notion. */

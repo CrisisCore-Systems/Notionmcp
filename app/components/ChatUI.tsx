@@ -23,6 +23,25 @@ const EXAMPLE_PROMPTS = [
 ];
 
 const PROPERTY_TYPES: PropertyType[] = ["title", "rich_text", "url", "number", "select"];
+const BLOB_URL_CLEANUP_DELAY_MS = 5000;
+
+function formatPropertyTypeLabel(type: PropertyType): string {
+  return type
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getSafeFilename(value: string, fallback: string): string {
+  const sanitized = value
+    .replace(/[^a-z0-9_ -]/gi, " ")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .trim();
+
+  return sanitized || fallback;
+}
 
 function getUniqueColumnName(
   requestedName: string,
@@ -63,7 +82,7 @@ function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number): T[] {
 }
 
 function escapeCsvValue(value: string): string {
-  if (/[",\n]/.test(value)) {
+  if (value.includes("\"") || /[,\n\r]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
   }
 
@@ -97,7 +116,7 @@ export default function ChatUI() {
     : [];
   const titleFieldCount = schemaEntries.filter(([, type]) => type === "title").length;
   const hasSchema = schemaEntries.length > 0;
-  const appendModeValid = !useExistingDatabase || !!targetDatabaseId.trim();
+  const targetDatabaseValid = !useExistingDatabase || !!targetDatabaseId.trim();
   const canWrite =
     !!editedResult &&
     editedResult.items.length > 0 &&
@@ -105,13 +124,13 @@ export default function ChatUI() {
     titleFieldCount === 1 &&
     !!editedResult.suggestedDbTitle.trim() &&
     !!editedResult.summary.trim() &&
-    appendModeValid;
+    targetDatabaseValid;
 
   let approvalHint: string | null = null;
   if (editedResult) {
     if (titleFieldCount !== 1) {
       approvalHint = "Your schema must contain exactly one title field before writing to Notion.";
-    } else if (!appendModeValid) {
+    } else if (!targetDatabaseValid) {
       approvalHint = "Enter an existing Notion database ID or switch back to creating a new database.";
     } else if (!editedResult.summary.trim()) {
       approvalHint = "Add a summary before writing to Notion.";
@@ -153,7 +172,9 @@ export default function ChatUI() {
         try {
           const parsed = JSON.parse(text) as { error?: string };
           if (parsed.error) message = parsed.error;
-        } catch {}
+        } catch {
+          // Fall back to the raw response text when the error body is not JSON.
+        }
 
         throw new Error(message);
       }
@@ -398,7 +419,7 @@ export default function ChatUI() {
     link.href = url;
     link.download = filename;
     link.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), BLOB_URL_CLEANUP_DELAY_MS);
   };
 
   const exportJson = () => {
@@ -409,7 +430,7 @@ export default function ChatUI() {
       : editedResult;
 
     downloadFile(
-      `${editedResult.suggestedDbTitle || "research-results"}.json`,
+      `${getSafeFilename(editedResult.suggestedDbTitle, "research-results")}.json`,
       `${JSON.stringify(payload, null, 2)}\n`,
       "application/json"
     );
@@ -419,7 +440,7 @@ export default function ChatUI() {
     if (!editedResult) return;
 
     downloadFile(
-      `${editedResult.suggestedDbTitle || "research-results"}.csv`,
+      `${getSafeFilename(editedResult.suggestedDbTitle, "research-results")}.csv`,
       buildCsv(editedResult),
       "text/csv;charset=utf-8"
     );
@@ -591,7 +612,7 @@ export default function ChatUI() {
                 <input
                   value={targetDatabaseId}
                   onChange={(e) => setTargetDatabaseId(e.target.value)}
-                  placeholder="Enter a 32- or 36-character Notion database ID"
+                  placeholder="e.g. 1a2b3c4d..."
                   style={{
                     padding: "0.5rem",
                     border: "1px solid #ddd",
@@ -600,6 +621,9 @@ export default function ChatUI() {
                     boxSizing: "border-box",
                   }}
                 />
+                <div style={{ marginTop: "0.35rem", fontSize: "0.8rem", color: "#666" }}>
+                  Use either 32 hex characters without dashes or UUID format with dashes.
+                </div>
               </div>
             )}
           </div>
@@ -712,7 +736,7 @@ export default function ChatUI() {
                   >
                     {PROPERTY_TYPES.map((propertyType) => (
                       <option key={propertyType} value={propertyType}>
-                        {propertyType}
+                        {formatPropertyTypeLabel(propertyType)}
                       </option>
                     ))}
                   </select>
