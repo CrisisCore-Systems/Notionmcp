@@ -33,6 +33,15 @@ async function waitForSettledPage(page: Page): Promise<void> {
 function normalizeSearchResults(results: SearchResult[]): SearchResult[] {
   const seenUrls = new Set<string>();
 
+  const isSearchResultUrl = (value: string): boolean => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  };
+
   return results
     .map((result) => ({
       title: result.title.trim(),
@@ -40,7 +49,7 @@ function normalizeSearchResults(results: SearchResult[]): SearchResult[] {
       snippet: result.snippet.trim(),
     }))
     .filter((result) => {
-      if (!result.title || !result.url.startsWith("http") || seenUrls.has(result.url)) {
+      if (!result.title || !isSearchResultUrl(result.url) || seenUrls.has(result.url)) {
         return false;
       }
 
@@ -149,6 +158,7 @@ export async function browseAndExtract(url: string): Promise<string> {
         .forEach((el) => el.remove());
 
       const lines: string[] = [];
+      let currentLength = 0;
       const pushLine = (value?: string | null) => {
         const nextValue = value?.replace(/\s+/g, " ").trim();
 
@@ -157,6 +167,7 @@ export async function browseAndExtract(url: string): Promise<string> {
         }
 
         lines.push(nextValue);
+        currentLength += nextValue.length + 1;
       };
 
       pushLine(document.title);
@@ -172,7 +183,7 @@ export async function browseAndExtract(url: string): Promise<string> {
 
       for (const value of textNodes) {
         pushLine(value);
-        if (lines.join("\n").length >= maxCharacters) {
+        if (currentLength >= maxCharacters) {
           break;
         }
       }
@@ -191,7 +202,7 @@ export async function browseAndExtract(url: string): Promise<string> {
 
       for (const row of tableRows) {
         pushLine(row);
-        if (lines.join("\n").length >= maxCharacters) {
+        if (currentLength >= maxCharacters) {
           break;
         }
       }
@@ -217,7 +228,7 @@ export async function browseAndExtract(url: string): Promise<string> {
 
       for (const link of notableLinks) {
         pushLine(link);
-        if (lines.join("\n").length >= maxCharacters) {
+        if (currentLength >= maxCharacters) {
           break;
         }
       }

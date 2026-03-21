@@ -1,9 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import path from "node:path";
+import { createRequire } from "node:module";
 
 let mcpClient: Client | null = null;
 const NOTION_API_VERSION = "2022-06-28";
+const require = createRequire(import.meta.url);
 
 interface NotionToolResponse {
   content?: unknown;
@@ -28,12 +29,7 @@ function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string 
 }
 
 function getNotionMcpCommand(): string {
-  return path.join(
-    process.cwd(),
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? "notion-mcp-server.cmd" : "notion-mcp-server"
-  );
+  return require.resolve("@notionhq/notion-mcp-server/bin/cli.mjs");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,8 +96,8 @@ async function getClient(): Promise<Client> {
   const notionToken = getRequiredEnv("NOTION_TOKEN");
 
   const transport = new StdioClientTransport({
-    command: getNotionMcpCommand(),
-    args: [],
+    command: process.execPath,
+    args: [getNotionMcpCommand()],
     env: {
       ...process.env,
       // Notion MCP server reads auth from this header string

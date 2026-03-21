@@ -103,7 +103,9 @@ function normalizeResearchResult(result: ResearchResult): ResearchResult {
         }
 
         if (propertyType === "url" && !isValidHttpUrl(value)) {
-          throw new Error(`Row ${rowIndex + 1} has an invalid URL in "${normalizedKey}".`);
+          throw new Error(
+            `Row ${rowIndex + 1} has an invalid URL "${value}" in "${normalizedKey}".`
+          );
         }
 
         if (propertyType === "number") {
