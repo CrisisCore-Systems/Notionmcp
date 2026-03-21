@@ -57,7 +57,7 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: "search_web",
     description:
-      "Search Google for a query. Returns a list of page titles, URLs, and snippets. Use this first to find relevant pages.",
+      "Search the configured web search provider for a query. Returns page titles, URLs, and snippets. Use this first to find relevant pages.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {

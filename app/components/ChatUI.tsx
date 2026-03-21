@@ -8,7 +8,10 @@ type PropertyType = "title" | "rich_text" | "url" | "number" | "select";
 type EditableResult = ResearchResult & {
   schema: Record<string, PropertyType>;
 };
-type WritePayload = EditableResult & { targetDatabaseId?: string };
+type WritePayload = EditableResult & {
+  targetDatabaseId?: string;
+  resumeFromIndex?: number;
+};
 type StoredDraft = {
   prompt: string;
   editedResult: EditableResult;
@@ -25,6 +28,15 @@ type WriteSummary = {
   itemsWritten: number;
   propertyCount: number;
   usedExistingDatabase: boolean;
+};
+type PendingWriteResume = {
+  databaseId: string;
+  nextRowIndex: number;
+};
+type StreamErrorPayload = {
+  message: string;
+  databaseId?: string;
+  nextRowIndex?: number;
 };
 
 interface LogEntry {
@@ -184,6 +196,7 @@ export default function ChatUI() {
   const [targetDatabaseId, setTargetDatabaseId] = useState("");
   const [linkActionMessage, setLinkActionMessage] = useState<string | null>(null);
   const [savedDraft, setSavedDraft] = useState<StoredDraft | null>(null);
+  const [pendingWriteResume, setPendingWriteResume] = useState<PendingWriteResume | null>(null);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [showFindReplace, setShowFindReplace] = useState(false);
@@ -427,7 +440,13 @@ export default function ChatUI() {
             const data = JSON.parse(line.slice(6));
             if (event === "update") onUpdate(data.message);
             else if (event === "complete") return data;
-            else if (event === "error") throw new Error(data.message);
+            else if (event === "error") {
+              const error = new Error(data.message) as Error & {
+                details?: StreamErrorPayload;
+              };
+              error.details = data as StreamErrorPayload;
+              throw error;
+            }
           }
         }
       }
@@ -454,6 +473,7 @@ export default function ChatUI() {
     setNotionUrl(null);
     setWriteSummary(null);
     setErrorMessage(null);
+    setPendingWriteResume(null);
 
     try {
       addLog(`Starting research: "${prompt}"`, "info");
@@ -492,16 +512,26 @@ export default function ChatUI() {
     setPhase("writing");
     setErrorMessage(null);
     setWriteSummary(null);
+    const resumeTarget = pendingWriteResume;
+    const shouldResumeWrite = !!resumeTarget;
 
-    const payload: WritePayload = useExistingDatabase && targetDatabaseId.trim()
-      ? { ...editedResult, targetDatabaseId: targetDatabaseId.trim() }
-      : editedResult;
+    const payload: WritePayload = shouldResumeWrite
+      ? {
+          ...editedResult,
+          targetDatabaseId: resumeTarget.databaseId,
+          resumeFromIndex: resumeTarget.nextRowIndex,
+        }
+      : useExistingDatabase && targetDatabaseId.trim()
+        ? { ...editedResult, targetDatabaseId: targetDatabaseId.trim() }
+        : editedResult;
 
     try {
       addLog(
-        useExistingDatabase
-          ? `Appending ${editedResult.items.length} row${editedResult.items.length === 1 ? "" : "s"} to an existing Notion database...`
-          : "Starting Notion write phase...",
+        shouldResumeWrite
+          ? `Resuming Notion write from row ${resumeTarget.nextRowIndex + 1}...`
+          : useExistingDatabase
+            ? `Appending ${editedResult.items.length} row${editedResult.items.length === 1 ? "" : "s"} to an existing Notion database...`
+            : "Starting Notion write phase...",
         "info"
       );
 
@@ -520,6 +550,7 @@ export default function ChatUI() {
       addLog(data.message, "success");
       setNotionUrl(buildNotionWebUrl(data.databaseId));
       setLinkActionMessage(null);
+      setPendingWriteResume(null);
       setWriteSummary({
         databaseId: data.databaseId,
         itemsWritten: data.itemsWritten,
@@ -536,8 +567,31 @@ export default function ChatUI() {
         return;
       }
 
+      const details =
+        err instanceof Error && "details" in err
+          ? (err as Error & { details?: StreamErrorPayload }).details
+          : undefined;
       const message = err instanceof Error ? err.message : String(err);
-      setErrorMessage(message);
+      if (
+        details?.databaseId &&
+        typeof details.nextRowIndex === "number" &&
+        Number.isInteger(details.nextRowIndex) &&
+        details.nextRowIndex >= 0
+      ) {
+        setPendingWriteResume({
+          databaseId: details.databaseId,
+          nextRowIndex: details.nextRowIndex,
+        });
+        addLog(
+          `Partial write preserved. Retry will resume from row ${details.nextRowIndex + 1}.`,
+          "info"
+        );
+        setErrorMessage(`${message} Retry last step to resume from row ${details.nextRowIndex + 1}.`);
+      } else {
+        setPendingWriteResume(null);
+        setErrorMessage(message);
+      }
+
       addLog(`Error: ${message}`, "error");
       setPhase("error");
     }
@@ -788,6 +842,7 @@ export default function ChatUI() {
     setTargetDatabaseId("");
     setLinkActionMessage(null);
     setSavedDraft(null);
+    setPendingWriteResume(null);
     setFindText("");
     setReplaceText("");
     setShowFindReplace(false);
@@ -1682,6 +1737,22 @@ export default function ChatUI() {
               {errorMessage}
             </div>
           )}
+          {pendingWriteResume && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                padding: "0.85rem 1rem",
+                background: "#eff6ff",
+                border: "1px solid #bfdbfe",
+                borderRadius: 8,
+                color: "#1d4ed8",
+                fontSize: "0.9rem",
+              }}
+            >
+              Retry last step will resume from row {pendingWriteResume.nextRowIndex + 1} in
+              Notion database <code>{pendingWriteResume.databaseId}</code>.
+            </div>
+          )}
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
             <button
               onClick={retryLastAction}
@@ -1702,7 +1773,7 @@ export default function ChatUI() {
                 fontSize: "0.9rem",
               }}
             >
-              Retry last step
+              {pendingWriteResume ? "Resume write" : "Retry last step"}
             </button>
             <button
               onClick={reset}
