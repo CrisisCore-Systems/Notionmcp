@@ -9,6 +9,7 @@ let mcpClient: Client | null = null;
 let mcpTransport: Transport | null = null;
 const require = createRequire(import.meta.url);
 const dataSourceIdCache = new Map<string, string>();
+export const DEFAULT_NOTION_API_VERSION = "2025-09-03";
 const TOOL_NAME_ALIASES: Record<string, string[]> = {
   notion_create_database: ["create-a-data-source", "API-create-a-data-source", "notion_create_database"],
   notion_create_page: ["post-page", "API-post-page", "notion_create_page"],
@@ -82,22 +83,23 @@ function parseOpenApiHeaders(value: string | undefined): Record<string, string> 
   }
 }
 
-function buildNotionMcpEnv(notionToken: string): Record<string, string> {
+export function buildNotionMcpEnv(notionToken: string): Record<string, string> {
   const headers = parseOpenApiHeaders(process.env.OPENAPI_MCP_HEADERS);
-  const notionApiVersion = process.env.NOTION_API_VERSION?.trim();
+  const notionApiVersion =
+    process.env.NOTION_API_VERSION?.trim() ||
+    headers["Notion-Version"]?.trim() ||
+    DEFAULT_NOTION_API_VERSION;
   const mergedHeaders = {
     ...headers,
     Authorization: headers.Authorization || `Bearer ${notionToken}`,
-    ...(notionApiVersion ? { "Notion-Version": notionApiVersion } : {}),
+    "Notion-Version": notionApiVersion,
   };
 
   return Object.fromEntries(
     Object.entries({
       ...process.env,
       NOTION_TOKEN: notionToken,
-      ...(Object.keys(headers).length > 0 || notionApiVersion
-        ? { OPENAPI_MCP_HEADERS: JSON.stringify(mergedHeaders) }
-        : {}),
+      OPENAPI_MCP_HEADERS: JSON.stringify(mergedHeaders),
     }).filter((entry): entry is [string, string] => typeof entry[1] === "string")
   );
 }
