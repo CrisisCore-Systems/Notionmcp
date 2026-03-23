@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import type { ResearchResult } from "@/lib/agent";
 import { addRow, createDatabase, type NotionSchema } from "@/lib/notion-mcp";
+import { validateApiRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -68,11 +69,11 @@ function normalizeResearchResult(result: ResearchResult): ResearchResult {
   const seenPropertyNames = new Set<string>();
 
   for (const [rawName, rawType] of Object.entries(result.schema)) {
-    const propertyName = getUniquePropertyName(rawName, seenPropertyNames);
-
     if (!NOTION_PROPERTY_TYPES.has(rawType)) {
-      continue;
+      throw new Error(`Unsupported schema type "${rawType}" for "${rawName}".`);
     }
+
+    const propertyName = getUniquePropertyName(rawName, seenPropertyNames);
 
     normalizedSchema[propertyName] = rawType;
     normalizedKeyLookup.set(rawName, propertyName);
@@ -147,15 +148,15 @@ async function addRowWithRetry(
   data: Record<string, string>,
   schema: NotionSchema,
   rowIndex: number
-): Promise<number> {
+): Promise<{ attempt: number; duplicate: boolean }> {
   let attempt = 0;
 
   while (attempt < ROW_WRITE_MAX_ATTEMPTS) {
     attempt += 1;
 
     try {
-      await addRow(databaseId, data, schema);
-      return attempt;
+      const result = await addRow(databaseId, data, schema);
+      return { attempt, duplicate: !result.created };
     } catch (error) {
       if (attempt >= ROW_WRITE_MAX_ATTEMPTS) {
         const message = error instanceof Error ? error.message : String(error);
@@ -168,7 +169,7 @@ async function addRowWithRetry(
     }
   }
 
-  return ROW_WRITE_MAX_ATTEMPTS;
+  return { attempt: ROW_WRITE_MAX_ATTEMPTS, duplicate: false };
 }
 
 /** Validate the streamed research payload before writing anything to Notion. */
@@ -204,6 +205,12 @@ function isResearchResult(value: unknown): value is ResearchResult {
 }
 
 export async function POST(req: NextRequest) {
+  const requestError = validateApiRequest(req);
+
+  if (requestError) {
+    return requestError;
+  }
+
   const body = (await req.json()) as unknown;
 
   if (!isResearchResult(body)) {
@@ -325,10 +332,17 @@ export async function POST(req: NextRequest) {
 
         for (let index = resumeFromIndex; index < items.length; index++) {
           nextRowIndex = index;
-          const attempt = await addRowWithRetry(databaseId, items[index], schema, index);
+          const { attempt, duplicate } = await addRowWithRetry(
+            databaseId,
+            items[index],
+            schema,
+            index
+          );
           send("update", {
             message:
-              attempt > 1
+              duplicate
+                ? `Skipped row ${index + 1} of ${items.length} because a matching Notion entry already exists`
+                : attempt > 1
                 ? `Added row ${index + 1} of ${items.length} after ${attempt} attempts`
                 : `Added row ${index + 1} of ${items.length}`,
           });
