@@ -1,29 +1,18 @@
 import type { NotionSchema } from "@/lib/notion-mcp";
 import {
+  NOTION_PROPERTY_TYPES,
+  enforceNotionValueLimit,
+  getResearchItemValidationIssues,
+  isValidHttpUrl,
+  normalizeNumberValue,
+  normalizeTextValue,
+} from "@/lib/notion-validation";
+import {
   RESEARCH_ITEM_PROVENANCE_KEY,
   type ResearchItem,
   type ResearchItemProvenance,
   type ResearchResult,
 } from "@/lib/research-result";
-
-const NOTION_PROPERTY_TYPES = new Set(["title", "rich_text", "url", "number", "select"]);
-const MIN_EVIDENCE_DENSITY = 0.5;
-
-export function isValidDatabaseId(value: string): boolean {
-  return (
-    /^[a-f0-9]{32}$/i.test(value) ||
-    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)
-  );
-}
-
-function isValidHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
 
 function getUniquePropertyName(requestedName: string, existingNames: Set<string>): string {
   const baseName = requestedName.trim().replace(/\s+/g, " ") || "Field";
@@ -37,18 +26,6 @@ function getUniquePropertyName(requestedName: string, existingNames: Set<string>
 
   existingNames.add(candidate.toLowerCase());
   return candidate;
-}
-
-function normalizeTextValue(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-
-  return "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -120,65 +97,13 @@ function normalizeProvenanceForSchema(
   };
 }
 
-function getPopulatedFieldNames(item: ResearchItem, schema: NotionSchema): string[] {
-  return Object.entries(schema)
-    .filter(([key, type]) => type !== "url" && typeof item[key] === "string" && item[key].trim().length > 0)
-    .map(([key]) => key);
-}
-
 function hasAnyPopulatedValue(item: ResearchItem, schema: NotionSchema): boolean {
   return Object.keys(schema).some(
     (key) => typeof item[key] === "string" && item[key].trim().length > 0
   );
 }
 
-function validateItemProvenance(
-  item: ResearchItem,
-  schema: NotionSchema,
-  rowIndex: number
-): ResearchItemProvenance {
-  const provenance = item[RESEARCH_ITEM_PROVENANCE_KEY];
-
-  if (!provenance || typeof provenance !== "object") {
-    throw new Error(`Row ${rowIndex + 1} is missing provenance.`);
-  }
-
-  const normalizedProvenance = provenance as ResearchItemProvenance;
-  const sourceUrls = normalizeSourceUrls(normalizedProvenance.sourceUrls);
-
-  if (sourceUrls.length === 0) {
-    throw new Error(`Row ${rowIndex + 1} must include at least one provenance source URL.`);
-  }
-
-  const evidenceByField = normalizeEvidenceByField(normalizedProvenance.evidenceByField);
-
-  if (!evidenceByField) {
-    throw new Error(`Row ${rowIndex + 1} must include field-level evidence snippets.`);
-  }
-
-  const titleField = Object.entries(schema).find(([, type]) => type === "title")?.[0];
-  const populatedFields = getPopulatedFieldNames(item, schema);
-  const evidencedFields = populatedFields.filter((fieldName) => (evidenceByField[fieldName] ?? []).length > 0);
-  const minimumEvidenceFields = Math.max(
-    1,
-    Math.ceil(populatedFields.length * MIN_EVIDENCE_DENSITY)
-  );
-
-  if (titleField && populatedFields.includes(titleField) && !evidenceByField[titleField]?.length) {
-    throw new Error(`Row ${rowIndex + 1} must include evidence for "${titleField}".`);
-  }
-
-  if (evidencedFields.length < minimumEvidenceFields) {
-    throw new Error(
-      `Row ${rowIndex + 1} needs denser evidence coverage before approval.`
-    );
-  }
-
-  return {
-    sourceUrls,
-    evidenceByField,
-  };
-}
+export { isValidDatabaseId } from "@/lib/notion-validation";
 
 export function normalizeResearchResult(result: ResearchResult): ResearchResult {
   const suggestedDbTitle = result.suggestedDbTitle.trim();
@@ -188,7 +113,7 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
   const seenPropertyNames = new Set<string>();
 
   for (const [rawName, rawType] of Object.entries(result.schema)) {
-    if (!NOTION_PROPERTY_TYPES.has(rawType)) {
+    if (!NOTION_PROPERTY_TYPES.includes(rawType)) {
       throw new Error(`Unsupported schema type "${rawType}" for "${rawName}".`);
     }
 
@@ -229,17 +154,17 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
         }
 
         if (propertyType === "number") {
-          const numberValue = Number(value);
+          const normalizedNumberValue = normalizeNumberValue(value);
 
-          if (!Number.isFinite(numberValue)) {
+          if (normalizedNumberValue === null) {
             throw new Error(`Row ${rowIndex + 1} has a non-numeric value in "${normalizedKey}".`);
           }
 
-          normalizedItem[normalizedKey] = String(numberValue);
+          normalizedItem[normalizedKey] = normalizedNumberValue;
           continue;
         }
 
-        normalizedItem[normalizedKey] = value;
+        normalizedItem[normalizedKey] = enforceNotionValueLimit(value, propertyType);
       }
 
       const provenance = normalizeProvenanceForSchema(
@@ -252,11 +177,11 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
       }
 
       if (hasAnyPopulatedValue(normalizedItem, normalizedSchema)) {
-        normalizedItem[RESEARCH_ITEM_PROVENANCE_KEY] = validateItemProvenance(
-          normalizedItem,
-          normalizedSchema,
-          rowIndex
-        );
+        const validationIssues = getResearchItemValidationIssues(normalizedItem, normalizedSchema, rowIndex);
+
+        if (validationIssues.length > 0) {
+          throw new Error(validationIssues[0]?.message ?? "A complete research result is required");
+        }
       }
 
       return normalizedItem;
@@ -316,10 +241,11 @@ export function isResearchResult(value: unknown): value is ResearchResult {
 
   return (
     typeof candidate.suggestedDbTitle === "string" &&
-    typeof candidate.summary === "string" &&
-    Object.values(schema).every(
-      (propertyType) =>
-        typeof propertyType === "string" && NOTION_PROPERTY_TYPES.has(propertyType)
-    )
+      typeof candidate.summary === "string" &&
+      Object.values(schema).every(
+        (propertyType) =>
+          typeof propertyType === "string" &&
+          NOTION_PROPERTY_TYPES.includes(propertyType as (typeof NOTION_PROPERTY_TYPES)[number])
+      )
   );
 }

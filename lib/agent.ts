@@ -27,6 +27,9 @@ const MAX_ITERATIONS = 15;
 const MAX_PARALLEL_TOOL_CALLS = 2;
 const MAX_RECONCILIATION_ATTEMPTS = 1;
 
+type SearchResult = Awaited<ReturnType<typeof searchWeb>>;
+type BrowseResult = Awaited<ReturnType<typeof browseAndExtract>>;
+
 const SYSTEM_PROMPT = `You are a research agent that browses the web and structures findings into a Notion database.
 
 Given a research prompt, you will:
@@ -153,6 +156,38 @@ function countUniqueSourceUrls(result: ResearchResult): number {
   return sourceUrls.size;
 }
 
+function normalizeSearchCacheKey(query: string): string {
+  return query.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeBrowseCacheKey(url: string): string {
+  try {
+    return new URL(url).toString();
+  } catch {
+    return url.trim();
+  }
+}
+
+function getCachedToolResult<T>(
+  cache: Map<string, Promise<T>>,
+  key: string,
+  loader: () => Promise<T>
+): Promise<T> {
+  const cached = cache.get(key);
+
+  if (cached) {
+    return cached;
+  }
+
+  const pending = loader().catch((error) => {
+    cache.delete(key);
+    throw error;
+  });
+
+  cache.set(key, pending);
+  return pending;
+}
+
 type ParseResearchResponseOptions = {
   maxReconciliationAttempts?: number;
   reconcile?: (repairPrompt: string) => Promise<string>;
@@ -229,6 +264,8 @@ export async function runResearchAgent(
   let response = await chat.sendMessage(prompt);
   let iterations = 0;
   const startedAtMs = Date.now();
+  const searchCache = new Map<string, Promise<SearchResult>>();
+  const browseCache = new Map<string, Promise<BrowseResult>>();
 
   while (iterations < MAX_ITERATIONS) {
     iterations++;
@@ -258,7 +295,9 @@ export async function runResearchAgent(
           if (call.name === "search_web") {
             const query = args.query ?? "";
             onUpdate(`🔍 Searching: "${query}"`);
-            const results = await searchWeb(query);
+            const results = await getCachedToolResult(searchCache, normalizeSearchCacheKey(query), () =>
+              searchWeb(query)
+            );
             onUpdate(
               `📚 Search returned ${results.length} candidate source${results.length === 1 ? "" : "s"}.`
             );
@@ -277,7 +316,9 @@ export async function runResearchAgent(
           if (call.name === "browse_url") {
             const url = args.url ?? "";
             onUpdate(`🌐 Browsing: ${url}`);
-            const result = await browseAndExtract(url);
+            const result = await getCachedToolResult(browseCache, normalizeBrowseCacheKey(url), () =>
+              browseAndExtract(url)
+            );
 
             return {
               functionResponse: {

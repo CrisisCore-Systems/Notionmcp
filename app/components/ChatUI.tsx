@@ -52,6 +52,7 @@ export default function ChatUI() {
   const [linkActionMessage, setLinkActionMessage] = useState<string | null>(null);
   const [appAccessToken, setAppAccessToken] = useState("");
   const [pendingWriteResume, setPendingWriteResume] = useState<PendingWriteResume | null>(null);
+  const [persistDrafts, setPersistDrafts] = useState(true);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [showFindReplace, setShowFindReplace] = useState(false);
@@ -60,13 +61,14 @@ export default function ChatUI() {
   const historyIndexRef = useRef(-1);
   const timeoutWarningLoggedRef = useRef(false);
 
-  const { savedDraft, clearSavedDraft } = useDraftPersistence({
+  const { savedDraft, clearSavedDraft, draftPersistenceNotice } = useDraftPersistence({
     phase,
     prompt,
     editedResult,
     useExistingDatabase,
     targetDatabaseId,
     pendingWriteResume,
+    persistenceEnabled: persistDrafts,
   });
   const {
     schemaEntries,
@@ -621,6 +623,23 @@ export default function ChatUI() {
           private remote deployment, enter the matching <code>APP_ACCESS_TOKEN</code> so the browser
           can send the required <code>x-app-access-token</code> header.
         </div>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            fontSize: "0.82rem",
+            color: "#475569",
+            marginBottom: "0.65rem",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={persistDrafts}
+            onChange={(e) => setPersistDrafts(e.target.checked)}
+          />
+          Save review drafts in this browser for up to 7 days
+        </label>
         <label style={{ fontSize: "0.82rem", color: "#475569", display: "block", marginBottom: "0.3rem" }}>
           App access token (optional)
         </label>
@@ -638,6 +657,24 @@ export default function ChatUI() {
             boxSizing: "border-box",
           }}
         />
+        {draftPersistenceNotice && (
+          <div
+            style={{
+              marginTop: "0.65rem",
+              padding: "0.65rem 0.75rem",
+              background: draftPersistenceNotice.includes("saved locally") ? "#fff7ed" : "#fef2f2",
+              border: `1px solid ${
+                draftPersistenceNotice.includes("saved locally") ? "#fed7aa" : "#fecaca"
+              }`,
+              borderRadius: 8,
+              color: draftPersistenceNotice.includes("saved locally") ? "#9a3412" : "#b91c1c",
+              fontSize: "0.8rem",
+              lineHeight: 1.45,
+            }}
+          >
+            {draftPersistenceNotice}
+          </div>
+        )}
       </div>
 
       {savedDraft && phase === "idle" && (
@@ -652,6 +689,7 @@ export default function ChatUI() {
         >
           <div style={{ fontSize: "0.9rem", color: "#1d4ed8", marginBottom: "0.6rem" }}>
             A saved review draft is available. Restore it to continue editing where you left off.
+            Drafts expire automatically after 7 days.
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <button

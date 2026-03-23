@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createRequire } from "node:module";
+import { enforceNotionValueLimit, isValidHttpUrl } from "@/lib/notion-validation";
 import type { ResearchItem } from "@/lib/research-result";
 
 let mcpClient: Client | null = null;
@@ -580,9 +581,15 @@ export function buildNotionPageProperties(
     if (!type || typeof value !== "string" || !value) continue;
 
     if (type === "title") {
-      properties[key] = { title: [{ text: { content: value } }] };
+      properties[key] = { title: [{ text: { content: enforceNotionValueLimit(value, type) } }] };
     } else if (type === "url") {
-      properties[key] = { url: value };
+      const urlValue = enforceNotionValueLimit(value, type);
+
+      if (!urlValue || !isValidHttpUrl(urlValue)) {
+        continue;
+      }
+
+      properties[key] = { url: urlValue };
     } else if (type === "number") {
       const numberValue = Number(value);
 
@@ -594,7 +601,7 @@ export function buildNotionPageProperties(
     } else if (type === "select") {
       properties[key] = { select: { name: value } };
     } else {
-      properties[key] = { rich_text: [{ text: { content: value } }] };
+      properties[key] = { rich_text: [{ text: { content: enforceNotionValueLimit(value, type) } }] };
     }
   }
 

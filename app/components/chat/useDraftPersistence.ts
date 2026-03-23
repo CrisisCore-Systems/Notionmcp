@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { DRAFT_STORAGE_KEY, loadStoredDraft, saveStoredDraft } from "./draft-storage";
 import type { EditableResult, PendingWriteResume, Phase, StoredDraft } from "./types";
-
-const DRAFT_STORAGE_KEY = "notion-research-agent-draft";
 
 type UseDraftPersistenceOptions = {
   phase: Phase;
@@ -10,6 +9,7 @@ type UseDraftPersistenceOptions = {
   useExistingDatabase: boolean;
   targetDatabaseId: string;
   pendingWriteResume: PendingWriteResume | null;
+  persistenceEnabled: boolean;
 };
 
 export function useDraftPersistence({
@@ -19,21 +19,27 @@ export function useDraftPersistence({
   useExistingDatabase,
   targetDatabaseId,
   pendingWriteResume,
+  persistenceEnabled,
 }: UseDraftPersistenceOptions) {
   const [savedDraft, setSavedDraft] = useState<StoredDraft | null>(null);
+  const [draftPersistenceNotice, setDraftPersistenceNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    try {
-      const rawDraft = window.localStorage.getItem(DRAFT_STORAGE_KEY);
-      if (!rawDraft) return;
-
-      setSavedDraft(JSON.parse(rawDraft) as StoredDraft);
-    } catch {
-      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
-    }
+  const clearSavedDraft = useCallback(() => {
+    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    setSavedDraft(null);
   }, []);
 
   useEffect(() => {
+    setSavedDraft(loadStoredDraft(window.localStorage));
+  }, []);
+
+  useEffect(() => {
+    if (!persistenceEnabled) {
+      clearSavedDraft();
+      setDraftPersistenceNotice("Draft persistence is off for this browser session.");
+      return;
+    }
+
     if (!editedResult || !["approving", "error"].includes(phase)) return;
 
     const draft: StoredDraft = {
@@ -44,18 +50,24 @@ export function useDraftPersistence({
       pendingWriteResume,
     };
 
-    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
-    setSavedDraft(draft);
-  }, [editedResult, pendingWriteResume, phase, prompt, targetDatabaseId, useExistingDatabase]);
-
-  const clearSavedDraft = useCallback(() => {
-    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
-    setSavedDraft(null);
-  }, []);
+    const result = saveStoredDraft(window.localStorage, draft);
+    setSavedDraft(result.savedDraft);
+    setDraftPersistenceNotice(result.notice);
+  }, [
+    clearSavedDraft,
+    editedResult,
+    pendingWriteResume,
+    persistenceEnabled,
+    phase,
+    prompt,
+    targetDatabaseId,
+    useExistingDatabase,
+  ]);
 
   return {
     savedDraft,
     setSavedDraft,
     clearSavedDraft,
+    draftPersistenceNotice,
   };
 }

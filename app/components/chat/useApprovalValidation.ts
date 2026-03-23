@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { isValidDatabaseId } from "@/lib/notion-validation";
 import { getValidationIssues } from "./chat-utils";
 import type { EditableResult, PendingWriteResume, PropertyType, ValidationIssue } from "./types";
 
@@ -37,7 +38,7 @@ export function useApprovalValidation({
   const titleFieldCount = schemaEntries.filter(([, type]) => type === "title").length;
   const hasSchema = schemaEntries.length > 0;
   const targetDatabaseValid =
-    !!pendingWriteResume || !useExistingDatabase || !!targetDatabaseId.trim();
+    !!pendingWriteResume || !useExistingDatabase || isValidDatabaseId(targetDatabaseId.trim());
   const validationIssues = useMemo(
     () => (editedResult ? getValidationIssues(editedResult) : []),
     [editedResult]
@@ -66,7 +67,7 @@ export function useApprovalValidation({
     if (titleFieldCount !== 1) {
       approvalHint = "Your schema must contain exactly one title field before writing to Notion.";
     } else if (!targetDatabaseValid) {
-      approvalHint = "Enter an existing Notion database ID or switch back to creating a new database.";
+      approvalHint = "Enter a valid existing Notion database ID or switch back to creating a new database.";
     } else if (validationIssues.length > 0) {
       approvalHint = validationIssues[0]?.message ?? "Fix the highlighted cells before writing to Notion.";
     } else if (!editedResult.summary.trim()) {
