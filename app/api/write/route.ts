@@ -161,6 +161,7 @@ export async function POST(req: NextRequest) {
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         );
       };
+      const startedAtMs = Date.now();
       let databaseId = targetDatabaseId;
       let nextRowIndex = resumeFromIndex;
       let duplicateTracker: DuplicateTracker | null = null;
@@ -211,6 +212,11 @@ export async function POST(req: NextRequest) {
           });
         }
 
+        send("update", {
+          message: `📊 Write finished in ${((Date.now() - startedAtMs) / 1000).toFixed(1)}s with ${itemsWritten} row${
+            itemsWritten === 1 ? "" : "s"
+          } written and ${itemsSkipped} duplicate${itemsSkipped === 1 ? "" : "s"} skipped.`,
+        });
         send("complete", {
           databaseId,
           itemsWritten,

@@ -129,6 +129,24 @@ The automated tests cover request-security rules, write-payload normalization an
 duplicate fingerprinting, retry helpers, the SSE stream parser, browser URL blocking guards, and
 smoke-level 400-path checks for both API routes.
 
+## Deployment boundary and risk profile
+
+This app is designed first as a **local or tightly controlled private operator tool**, not as an
+open public SaaS endpoint. The current guards around request origin, shared-token access, browser
+URL vetting, and resumable writes make that local/private mode much safer, but they are not a full
+substitute for production-grade containment.
+
+If you choose to deploy it beyond localhost, treat that as a private environment with additional
+hardening requirements:
+
+- keep `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN` configured together
+- add your own rate limiting, request logging, and operational monitoring
+- isolate browser automation so arbitrary page ingestion cannot reach sensitive internal systems
+- scope the Notion integration to the smallest practical permission set and parent page
+
+Until those controls exist, the recommended stance is: **local/private tool first, public
+deployment only after additional hardening**.
+
 ## Example prompts
 
 - "Find the top 5 competitors to Notion in the productivity space"
