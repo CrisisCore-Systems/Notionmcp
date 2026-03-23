@@ -35,16 +35,16 @@ const PERMANENT_4XX_STATUS_PATTERNS = [
 ];
 
 const PERMANENT_ERROR_PATTERNS = [
-  "validation failed",
-  "schema validation",
-  "invalid schema",
-  "bad request",
-  "unauthorized",
-  "forbidden",
-  "authentication failed",
-  "invalid api key",
-  "permission denied",
-  "missing required",
+  /\bvalidation failed\b/i,
+  /\bschema validation\b/i,
+  /\binvalid schema\b/i,
+  /\bbad request\b/i,
+  /\bunauthorized\b/i,
+  /\bforbidden\b/i,
+  /\bauthentication failed\b/i,
+  /\binvalid api key\b/i,
+  /\bpermission denied\b/i,
+  /\bmissing required\b/i,
 ];
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -61,7 +61,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     const abort = () => {
       clearTimeout(timeout);
-      signal.removeEventListener("abort", abort);
       reject(createAbortError());
     };
 
@@ -148,7 +147,7 @@ export function isRetryableUpstreamError(error: unknown): boolean {
     }
   }
 
-  if (PERMANENT_ERROR_PATTERNS.some((pattern) => message.includes(pattern))) {
+  if (PERMANENT_ERROR_PATTERNS.some((pattern) => pattern.test(message))) {
     return false;
   }
 

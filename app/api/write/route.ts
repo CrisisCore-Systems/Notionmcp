@@ -247,7 +247,7 @@ export async function POST(req: NextRequest) {
           message: formatWriteCompleteMessage(!!targetDatabaseId, itemsWritten, itemsSkipped),
         });
       } catch (err) {
-        if (!req.signal.aborted) {
+        if (!isAbortError(err) && !req.signal.aborted) {
           const message = err instanceof Error ? err.message : String(err);
 
           send("error", {

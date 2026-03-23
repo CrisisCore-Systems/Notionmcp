@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { runResearchAgent } from "@/lib/agent";
-import { onAbort } from "@/lib/abort";
+import { isAbortError, onAbort } from "@/lib/abort";
 import { validateApiRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
           send("complete", result);
         }
       } catch (err) {
-        if (!req.signal.aborted) {
+        if (!isAbortError(err) && !req.signal.aborted) {
           send("error", {
             message: err instanceof Error ? err.message : String(err),
           });
