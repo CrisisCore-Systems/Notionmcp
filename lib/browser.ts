@@ -29,8 +29,10 @@ export interface BrowseResult {
   structuredData?: StructuredPageData;
 }
 
+export type SearchProviderName = "serper" | "brave" | "duckduckgo";
+
 type SearchAdapter = {
-  name: "serper" | "duckduckgo";
+  name: SearchProviderName;
   search: (query: string) => Promise<SearchResult[]>;
 };
 
@@ -579,6 +581,42 @@ async function searchWithSerper(query: string): Promise<SearchResult[]> {
   );
 }
 
+async function searchWithBrave(query: string): Promise<SearchResult[]> {
+  const apiKey = process.env.BRAVE_SEARCH_API_KEY?.trim();
+
+  if (!apiKey) {
+    throw new Error("BRAVE_SEARCH_API_KEY is not configured.");
+  }
+
+  const response = await fetch(
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${MAX_SEARCH_RESULTS}`,
+    {
+      headers: {
+        Accept: "application/json",
+        "X-Subscription-Token": apiKey,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Brave search failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    web?: {
+      results?: Array<{ title?: string; url?: string; description?: string }>;
+    };
+  };
+
+  return normalizeSearchResults(
+    (payload.web?.results ?? []).map((result) => ({
+      title: result.title ?? "",
+      url: result.url ?? "",
+      snippet: result.description ?? "",
+    }))
+  );
+}
+
 async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
   const { context, page } = await createIsolatedPage();
 
@@ -614,12 +652,34 @@ async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
   }
 }
 
-function getSearchAdapter(): SearchAdapter {
-  if (process.env.SERPER_API_KEY?.trim()) {
-    return { name: "serper", search: searchWithSerper };
+const SEARCH_ADAPTER_FACTORIES: Record<SearchProviderName, () => SearchAdapter> = {
+  serper: () => ({ name: "serper", search: searchWithSerper }),
+  brave: () => ({ name: "brave", search: searchWithBrave }),
+  duckduckgo: () => ({ name: "duckduckgo", search: searchWithDuckDuckGo }),
+};
+
+export function getConfiguredSearchProviders(env: NodeJS.ProcessEnv = process.env): SearchProviderName[] {
+  const configuredProviders = (env.SEARCH_PROVIDERS ?? "")
+    .split(",")
+    .map((provider) => provider.trim().toLowerCase())
+    .filter((provider): provider is SearchProviderName => provider in SEARCH_ADAPTER_FACTORIES);
+
+  if (configuredProviders.length > 0) {
+    return Array.from(new Set(configuredProviders));
   }
 
-  return { name: "duckduckgo", search: searchWithDuckDuckGo };
+  const providers: SearchProviderName[] = [];
+
+  if (env.SERPER_API_KEY?.trim()) {
+    providers.push("serper");
+  }
+
+  if (env.BRAVE_SEARCH_API_KEY?.trim()) {
+    providers.push("brave");
+  }
+
+  providers.push("duckduckgo");
+  return Array.from(new Set(providers));
 }
 
 /** Navigate to a URL and extract readable text content */
@@ -786,26 +846,27 @@ export async function searchWeb(
     throw new Error("Search query cannot be empty.");
   }
 
-  const adapter = getSearchAdapter();
+  const attemptedProviders: string[] = [];
+  let lastError: unknown = null;
 
-  try {
-    return await adapter.search(query);
-  } catch (err) {
-    if (adapter.name !== "duckduckgo") {
-      try {
-        return await searchWithDuckDuckGo(query);
-      } catch (fallbackError) {
-        const primaryMessage = err instanceof Error ? err.message : String(err);
-        const fallbackMessage =
-          fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-        throw new Error(
-          `Search failed via ${adapter.name} (${primaryMessage}) and duckduckgo (${fallbackMessage}).`
-        );
-      }
+  for (const provider of getConfiguredSearchProviders()) {
+    const adapter = SEARCH_ADAPTER_FACTORIES[provider]();
+
+    try {
+      return await adapter.search(query);
+    } catch (error) {
+      attemptedProviders.push(
+        `${adapter.name} (${error instanceof Error ? error.message : String(error)})`
+      );
+      lastError = error;
     }
-
-    throw new Error(
-      `Search failed via ${adapter.name}: ${err instanceof Error ? err.message : String(err)}`
-    );
   }
+
+  throw new Error(
+    `Search failed via ${attemptedProviders.join(" and ")}${
+      attemptedProviders.length === 0 && lastError
+        ? ` (${lastError instanceof Error ? lastError.message : String(lastError)})`
+        : ""
+    }.`
+  );
 }

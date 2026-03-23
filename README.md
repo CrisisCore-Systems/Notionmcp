@@ -98,12 +98,16 @@ Fill in `.env.local`:
 | Variable | Where to get it |
 |---|---|
 | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — free, no credit card |
-| `SERPER_API_KEY` | Optional. [serper.dev](https://serper.dev) — enables API-backed search instead of the built-in DuckDuckGo fallback |
+| `SERPER_API_KEY` | Optional. [serper.dev](https://serper.dev) — enables one stable API-backed search provider |
+| `BRAVE_SEARCH_API_KEY` | Optional. [search.brave.com](https://search.brave.com/) — enables a second API-backed search provider path |
+| `SEARCH_PROVIDERS` | Optional. Comma-separated provider order such as `serper,brave,duckduckgo` |
 | `APP_ALLOWED_ORIGIN` | Optional. Exact origin to allow when you intentionally expose the API beyond localhost |
 | `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 | `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by the local MCP wrapper |
+| `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` | Optional local MCP replacement command and JSON-array args |
+| `WRITE_AUDIT_DIR` | Optional server-side directory for persisted write audit JSON records |
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
@@ -112,12 +116,16 @@ By default, `/api/research` and `/api/write` only accept local requests. If you 
 app for tightly controlled private use, set **both** `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN`, then
 send the matching token in either the `x-app-access-token` header or a `Bearer` token. Cross-origin
 requests are rejected either way. The built-in UI now includes an optional access-token field for that
-private remote mode; leave it blank for normal localhost use. Review drafts are stored only in the
-current browser, expire automatically after 7 days, and can be disabled per session from the UI.
+private remote mode; leave it blank for normal localhost use. Review drafts can be enabled per browser
+session from the UI, stay off by default for privacy, and expire automatically after 7 days when enabled.
 
 The Notion wrapper also pins the `Notion-Version` header to `2025-09-03` by default so the app does not
 silently drift with ambient API defaults. If you intentionally test a newer Notion API release, set
 `NOTION_API_VERSION` explicitly in `.env.local`.
+
+Every write now also persists a server-side JSON audit record outside transient UI state and returns a
+download link from the completion panel. By default those records live under `.notionmcp-data/write-audits`
+in the project root, or you can redirect them with `WRITE_AUDIT_DIR`.
 
 ### 3. Run
 

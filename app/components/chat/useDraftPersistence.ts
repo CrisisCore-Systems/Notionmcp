@@ -36,7 +36,9 @@ export function useDraftPersistence({
   useEffect(() => {
     if (!persistenceEnabled) {
       clearSavedDraft();
-      setDraftPersistenceNotice("Draft persistence is off for this browser session.");
+      setDraftPersistenceNotice(
+        "Privacy mode keeps draft persistence off by default on this browser. Turn it on only on a trusted machine."
+      );
       return;
     }
 

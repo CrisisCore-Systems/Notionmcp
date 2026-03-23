@@ -36,12 +36,16 @@ export type WriteSummary = {
   itemsWritten: number;
   propertyCount: number;
   usedExistingDatabase: boolean;
+  auditId?: string;
+  auditUrl?: string;
 };
 
 export type StreamErrorPayload = {
   message: string;
   databaseId?: string;
   nextRowIndex?: number;
+  auditId?: string;
+  auditUrl?: string;
 };
 
 export interface LogEntry {

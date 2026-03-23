@@ -51,6 +51,14 @@ export function CompletionPanel({
           <div>Rows written: {writeSummary.itemsWritten}</div>
           <div>Properties written: {writeSummary.propertyCount}</div>
           <div style={{ wordBreak: "break-all" }}>Database ID: {writeSummary.databaseId}</div>
+          {writeSummary.auditUrl && (
+            <div>
+              Write audit:{" "}
+              <a href={writeSummary.auditUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#166534" }}>
+                download JSON
+              </a>
+            </div>
+          )}
         </div>
       )}
       {notionUrl && (
