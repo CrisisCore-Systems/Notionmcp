@@ -1,11 +1,14 @@
 import { NextRequest } from "next/server";
-import { addRow, createDatabase, type NotionSchema } from "@/lib/notion-mcp";
-import { validateApiRequest } from "@/lib/request-security";
 import {
-  isResearchResult,
-  isValidDatabaseId,
-  normalizeResearchResult,
-} from "@/lib/write-payload";
+  addRow,
+  createDatabase,
+  createDuplicateTracker,
+  type DuplicateTracker,
+  type NotionSchema,
+} from "@/lib/notion-mcp";
+import { validateApiRequest } from "@/lib/request-security";
+import { runWithRetry } from "@/lib/retry";
+import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -13,37 +16,44 @@ export const maxDuration = 120;
 const ROW_WRITE_MAX_ATTEMPTS = 3;
 const ROW_WRITE_RETRY_DELAY_MS = 750;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function formatWriteCompleteMessage(
+  usedExistingDatabase: boolean,
+  itemsWritten: number,
+  itemsSkipped: number
+): string {
+  const duplicateSuffix =
+    itemsSkipped > 0
+      ? `${usedExistingDatabase ? " and skipped " : " while skipping "}${itemsSkipped} duplicate${itemsSkipped === 1 ? "" : "s"}`
+      : "";
+
+  return usedExistingDatabase
+    ? `✅ Added ${itemsWritten} row${itemsWritten === 1 ? "" : "s"} to the existing Notion database${duplicateSuffix}`
+    : `✅ Created Notion database and wrote ${itemsWritten} row${itemsWritten === 1 ? "" : "s"}${duplicateSuffix}`;
 }
 
 async function addRowWithRetry(
   databaseId: string,
   data: Record<string, string>,
   schema: NotionSchema,
-  rowIndex: number
+  rowIndex: number,
+  duplicateTracker: DuplicateTracker
 ): Promise<{ attempt: number; duplicate: boolean }> {
-  let attempt = 0;
-
-  while (attempt < ROW_WRITE_MAX_ATTEMPTS) {
-    attempt += 1;
-
-    try {
-      const result = await addRow(databaseId, data, schema);
-      return { attempt, duplicate: !result.created };
-    } catch (error) {
-      if (attempt >= ROW_WRITE_MAX_ATTEMPTS) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Failed to write row ${rowIndex + 1} after ${ROW_WRITE_MAX_ATTEMPTS} attempts: ${message}`
-        );
+  try {
+    const { attempt, value } = await runWithRetry(
+      () => addRow(databaseId, data, schema, duplicateTracker),
+      {
+        maxAttempts: ROW_WRITE_MAX_ATTEMPTS,
+        retryDelayMs: ROW_WRITE_RETRY_DELAY_MS,
       }
+    );
 
-      await sleep(ROW_WRITE_RETRY_DELAY_MS * attempt);
-    }
+    return { attempt, duplicate: !value.created };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to write row ${rowIndex + 1} after ${ROW_WRITE_MAX_ATTEMPTS} attempts: ${message}`
+    );
   }
-
-  return { attempt: ROW_WRITE_MAX_ATTEMPTS, duplicate: false };
 }
 
 export async function POST(req: NextRequest) {
@@ -54,15 +64,6 @@ export async function POST(req: NextRequest) {
   }
 
   const body = (await req.json()) as unknown;
-
-  if (!isResearchResult(body)) {
-    return new Response(JSON.stringify({ error: "A complete research result is required" }), {
-      status: 400,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  }
 
   const candidate = body as unknown as Record<string, unknown>;
   const targetDatabaseId =
@@ -81,10 +82,10 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  let normalizedBody: ReturnType<typeof normalizeResearchResult>;
+  let normalizedBody: ReturnType<typeof parseResearchResult>;
 
   try {
-    normalizedBody = normalizeResearchResult(body);
+    normalizedBody = parseResearchResult(body);
   } catch (error) {
     return new Response(
       JSON.stringify({
@@ -157,6 +158,9 @@ export async function POST(req: NextRequest) {
       };
       let databaseId = targetDatabaseId;
       let nextRowIndex = resumeFromIndex;
+      let duplicateTracker: DuplicateTracker | null = null;
+      let itemsWritten = 0;
+      let itemsSkipped = 0;
 
       try {
         if (databaseId) {
@@ -165,6 +169,10 @@ export async function POST(req: NextRequest) {
           send("update", { message: `Creating Notion database "${suggestedDbTitle}"...` });
           databaseId = await createDatabase(suggestedDbTitle, schema);
         }
+
+        duplicateTracker = await createDuplicateTracker(databaseId, schema, {
+          prefetchExisting: !!targetDatabaseId,
+        });
 
         if (resumeFromIndex > 0) {
           send("update", {
@@ -178,8 +186,16 @@ export async function POST(req: NextRequest) {
             databaseId,
             items[index],
             schema,
-            index
+            index,
+            duplicateTracker
           );
+
+          if (duplicate) {
+            itemsSkipped += 1;
+          } else {
+            itemsWritten += 1;
+          }
+
           send("update", {
             message:
               duplicate
@@ -192,13 +208,12 @@ export async function POST(req: NextRequest) {
 
         send("complete", {
           databaseId,
-          itemsWritten: items.length - resumeFromIndex,
+          itemsWritten,
+          itemsSkipped,
           propertyCount: Object.keys(schema).length,
           usedExistingDatabase: !!targetDatabaseId,
           resumedFromIndex: resumeFromIndex,
-          message: targetDatabaseId
-            ? `✅ Added ${items.length - resumeFromIndex} row${items.length - resumeFromIndex === 1 ? "" : "s"} to the existing Notion database`
-            : `✅ Created Notion database and wrote ${items.length - resumeFromIndex} row${items.length - resumeFromIndex === 1 ? "" : "s"}`,
+          message: formatWriteCompleteMessage(!!targetDatabaseId, itemsWritten, itemsSkipped),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

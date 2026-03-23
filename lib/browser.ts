@@ -157,7 +157,7 @@ function isBlockedIpAddress(address: string): boolean {
   return false;
 }
 
-async function validatePublicHttpUrl(target: string): Promise<void> {
+export async function validatePublicHttpUrl(target: string): Promise<void> {
   let validation = blockedUrlValidationCache.get(target);
 
   if (!validation) {

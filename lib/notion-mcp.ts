@@ -30,6 +30,15 @@ interface NotionDataSourceRecord extends NotionRecordWithId {
 
 interface NotionQueryResult {
   results: unknown[];
+  has_more?: boolean;
+  next_cursor?: string | null;
+}
+
+type NotionTransportFactory = () => Transport;
+
+export interface DuplicateTracker {
+  has(data: Record<string, string>): boolean;
+  remember(data: Record<string, string>): void;
 }
 
 /** Read a required environment variable or throw a setup error. */
@@ -48,6 +57,24 @@ function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string 
 function getNotionMcpCommand(): string {
   return require.resolve("@notionhq/notion-mcp-server/bin/cli.mjs");
 }
+
+const notionTransportFactory: NotionTransportFactory = () => {
+  const notionToken = getRequiredEnv("NOTION_TOKEN");
+
+  return new StdioClientTransport({
+    command: process.execPath,
+    args: [getNotionMcpCommand()],
+    env: {
+      ...process.env,
+      // The local stdio transport is intentionally isolated behind this factory so the
+      // rest of the integration can swap to a different transport in the future.
+      OPENAPI_MCP_HEADERS: JSON.stringify({
+        Authorization: `Bearer ${notionToken}`,
+        "Notion-Version": NOTION_API_VERSION,
+      }),
+    },
+  });
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -127,20 +154,7 @@ function extractStructuredPayload<T>(
 /** Lazily start and connect to the Notion MCP server subprocess */
 async function getClient(): Promise<Client> {
   if (mcpClient) return mcpClient;
-  const notionToken = getRequiredEnv("NOTION_TOKEN");
-
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [getNotionMcpCommand()],
-    env: {
-      ...process.env,
-      // Notion MCP server reads auth from this header string
-      OPENAPI_MCP_HEADERS: JSON.stringify({
-        Authorization: `Bearer ${notionToken}`,
-        "Notion-Version": NOTION_API_VERSION,
-      }),
-    },
-  });
+  const transport = notionTransportFactory();
 
   mcpClient = new Client(
     { name: "notion-research-agent", version: "1.0.0" },
@@ -275,52 +289,6 @@ export async function createDatabase(
   throw new Error("Could not extract database ID from Notion response");
 }
 
-/** Add a row to an existing Notion database */
-function buildDuplicateFilter(
-  data: Record<string, string>,
-  schema: NotionSchema
-): Record<string, unknown> | null {
-  const filters = Object.entries(data)
-    .map(([key, value]) => {
-      const trimmedValue = value.trim();
-      const type = schema[key];
-
-      if (!type || !trimmedValue) {
-        return null;
-      }
-
-      if (type === "title") {
-        return { property: key, title: { equals: trimmedValue } };
-      }
-
-      if (type === "rich_text") {
-        return { property: key, rich_text: { equals: trimmedValue } };
-      }
-
-      if (type === "url") {
-        return { property: key, url: { equals: trimmedValue } };
-      }
-
-      if (type === "number") {
-        const parsed = Number(trimmedValue);
-        return Number.isFinite(parsed) ? { property: key, number: { equals: parsed } } : null;
-      }
-
-      if (type === "select") {
-        return { property: key, select: { equals: trimmedValue } };
-      }
-
-      return null;
-    })
-    .filter(Boolean) as Record<string, unknown>[];
-
-  if (filters.length === 0) {
-    return null;
-  }
-
-  return filters.length === 1 ? filters[0] : { and: filters };
-}
-
 async function getDataSourceId(databaseId: string): Promise<string> {
   const cached = dataSourceIdCache.get(databaseId);
 
@@ -340,34 +308,218 @@ async function getDataSourceId(databaseId: string): Promise<string> {
   return dataSourceId;
 }
 
-async function findExistingRow(
-  databaseId: string,
-  data: Record<string, string>,
-  schema: NotionSchema
-): Promise<boolean> {
-  const filter = buildDuplicateFilter(data, schema);
+function normalizeDuplicateText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
 
-  if (!filter) {
-    return false;
+function normalizeDuplicateUrl(value: string): string {
+  try {
+    const url = new URL(value.trim());
+
+    url.hash = "";
+    url.username = "";
+    url.password = "";
+    url.hostname = url.hostname.toLowerCase();
+
+    if ((url.protocol === "https:" && url.port === "443") || (url.protocol === "http:" && url.port === "80")) {
+      url.port = "";
+    }
+
+    if (url.pathname !== "/") {
+      url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    }
+
+    return url.toString();
+  } catch {
+    return normalizeDuplicateText(value);
+  }
+}
+
+function getIdentityPropertyNames(schema: NotionSchema): string[] {
+  const preferred = Object.entries(schema)
+    .filter(([, type]) => type === "title" || type === "url")
+    .map(([name]) => name);
+
+  if (preferred.length > 0) {
+    return preferred;
   }
 
-  const dataSourceId = await getDataSourceId(databaseId);
-  const result = await callNotion("notion_query_data_source", {
-    data_source_id: dataSourceId,
-    filter,
-    page_size: 1,
-  });
-  const queryResult = extractStructuredPayload(result, isQueryResult);
+  return Object.entries(schema)
+    .filter(([, type]) => type === "select" || type === "number" || type === "rich_text")
+    .map(([name]) => name);
+}
 
-  return Boolean(queryResult?.results.some(isRecordWithId));
+export function buildDuplicateFingerprint(
+  data: Record<string, string>,
+  schema: NotionSchema
+): string | null {
+  const parts = getIdentityPropertyNames(schema)
+    .map((key) => {
+      const type = schema[key];
+      const rawValue = data[key];
+      const trimmedValue = rawValue?.trim();
+
+      if (!type || !trimmedValue) {
+        return null;
+      }
+
+      if (type === "url") {
+        return `${key}:url:${normalizeDuplicateUrl(trimmedValue)}`;
+      }
+
+      if (type === "number") {
+        const parsed = Number(trimmedValue);
+        return Number.isFinite(parsed) ? `${key}:number:${parsed}` : null;
+      }
+
+      return `${key}:${type}:${normalizeDuplicateText(trimmedValue)}`;
+    })
+    .filter((value): value is string => Boolean(value));
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return parts.join("||");
+}
+
+function extractPlainText(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+
+  return value
+    .map((entry) => {
+      if (!isRecord(entry)) {
+        return "";
+      }
+
+      if (typeof entry.plain_text === "string") {
+        return entry.plain_text;
+      }
+
+      const text = entry.text;
+      return isRecord(text) && typeof text.content === "string" ? text.content : "";
+    })
+    .join("")
+    .trim();
+}
+
+function getPagePropertyValue(
+  page: unknown,
+  propertyName: string,
+  type: NotionSchema[string]
+): string {
+  if (!isRecord(page)) {
+    return "";
+  }
+
+  const properties = page.properties;
+
+  if (!isRecord(properties)) {
+    return "";
+  }
+
+  const property = properties[propertyName];
+
+  if (!isRecord(property)) {
+    return "";
+  }
+
+  if (type === "title") {
+    return extractPlainText(property.title);
+  }
+
+  if (type === "rich_text") {
+    return extractPlainText(property.rich_text);
+  }
+
+  if (type === "url") {
+    return typeof property.url === "string" ? property.url.trim() : "";
+  }
+
+  if (type === "number") {
+    return typeof property.number === "number" ? String(property.number) : "";
+  }
+
+  const select = property.select;
+  return isRecord(select) && typeof select.name === "string" ? select.name.trim() : "";
+}
+
+function buildDuplicateFingerprintFromPage(
+  page: unknown,
+  schema: NotionSchema
+): string | null {
+  const identityData: Record<string, string> = {};
+
+  for (const propertyName of getIdentityPropertyNames(schema)) {
+    identityData[propertyName] = getPagePropertyValue(page, propertyName, schema[propertyName]);
+  }
+
+  return buildDuplicateFingerprint(identityData, schema);
+}
+
+async function getExistingDuplicateFingerprints(
+  databaseId: string,
+  schema: NotionSchema
+): Promise<Set<string>> {
+  const dataSourceId = await getDataSourceId(databaseId);
+  const fingerprints = new Set<string>();
+  let nextCursor: string | null | undefined = undefined;
+
+  do {
+    const result = await callNotion("notion_query_data_source", {
+      data_source_id: dataSourceId,
+      page_size: 100,
+      ...(nextCursor ? { start_cursor: nextCursor } : {}),
+    });
+    const queryResult = extractStructuredPayload(result, isQueryResult);
+
+    for (const row of queryResult?.results ?? []) {
+      const fingerprint = buildDuplicateFingerprintFromPage(row, schema);
+
+      if (fingerprint) {
+        fingerprints.add(fingerprint);
+      }
+    }
+
+    nextCursor = queryResult?.has_more ? queryResult.next_cursor ?? null : null;
+  } while (nextCursor);
+  return fingerprints;
+}
+
+export async function createDuplicateTracker(
+  databaseId: string,
+  schema: NotionSchema,
+  options?: { prefetchExisting?: boolean }
+): Promise<DuplicateTracker> {
+  const fingerprints =
+    options?.prefetchExisting === false
+      ? new Set<string>()
+      : await getExistingDuplicateFingerprints(databaseId, schema);
+
+  return {
+    has(data) {
+      const fingerprint = buildDuplicateFingerprint(data, schema);
+      return fingerprint ? fingerprints.has(fingerprint) : false;
+    },
+    remember(data) {
+      const fingerprint = buildDuplicateFingerprint(data, schema);
+
+      if (fingerprint) {
+        fingerprints.add(fingerprint);
+      }
+    },
+  };
 }
 
 export async function addRow(
   databaseId: string,
   data: Record<string, string>,
-  schema: NotionSchema
+  schema: NotionSchema,
+  duplicateTracker?: DuplicateTracker
 ): Promise<{ created: boolean }> {
-  if (await findExistingRow(databaseId, data, schema)) {
+  if (duplicateTracker?.has(data)) {
     return { created: false };
   }
 
@@ -395,5 +547,6 @@ export async function addRow(
     properties,
   });
 
+  duplicateTracker?.remember(data);
   return { created: true };
 }

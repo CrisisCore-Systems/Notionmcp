@@ -1,5 +1,5 @@
-import type { ResearchResult } from "@/lib/agent";
 import type { NotionSchema } from "@/lib/notion-mcp";
+import type { ResearchResult } from "@/lib/research-result";
 
 const NOTION_PROPERTY_TYPES = new Set(["title", "rich_text", "url", "number", "select"]);
 
@@ -121,6 +121,17 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
     schema: normalizedSchema,
     items: normalizedItems,
   };
+}
+
+export function parseResearchResult(
+  value: unknown,
+  fallbackMessage = "A complete research result is required"
+): ResearchResult {
+  if (!isResearchResult(value)) {
+    throw new Error(fallbackMessage);
+  }
+
+  return normalizeResearchResult(value);
 }
 
 export function isResearchResult(value: unknown): value is ResearchResult {

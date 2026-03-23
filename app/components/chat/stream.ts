@@ -8,6 +8,11 @@ type StreamSSEOptions = {
   onUpdate: (message: string) => void;
 };
 
+export type SSEParserState = {
+  buffer: string;
+  pendingEvent: string;
+};
+
 function buildRequestHeaders(accessToken?: string): HeadersInit {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -19,6 +24,77 @@ function buildRequestHeaders(accessToken?: string): HeadersInit {
   }
 
   return headers;
+}
+
+export function createSSEParserState(): SSEParserState {
+  return {
+    buffer: "",
+    pendingEvent: "",
+  };
+}
+
+export function consumeSSEChunk(
+  state: SSEParserState,
+  chunk: string,
+  onUpdate: (message: string) => void
+): { state: SSEParserState; complete?: unknown; error?: Error & { details?: StreamErrorPayload } } {
+  let buffer = state.buffer + chunk;
+  let pendingEvent = state.pendingEvent;
+
+  while (true) {
+    const newlineIndex = buffer.indexOf("\n");
+
+    if (newlineIndex === -1) {
+      break;
+    }
+
+    const rawLine = buffer.slice(0, newlineIndex);
+    buffer = buffer.slice(newlineIndex + 1);
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+
+    if (!line) {
+      pendingEvent = "";
+      continue;
+    }
+
+    if (line.startsWith("event: ")) {
+      pendingEvent = line.slice(7).trim();
+      continue;
+    }
+
+    if (!line.startsWith("data: ")) {
+      continue;
+    }
+
+    const data = JSON.parse(line.slice(6));
+
+    if (pendingEvent === "update") {
+      onUpdate((data as { message?: string }).message ?? "");
+      continue;
+    }
+
+    if (pendingEvent === "complete") {
+      return {
+        state: { buffer, pendingEvent: "" },
+        complete: data,
+      };
+    }
+
+    if (pendingEvent === "error") {
+      const error = new Error((data as { message?: string }).message ?? "Streaming request failed.") as Error & {
+        details?: StreamErrorPayload;
+      };
+      error.details = data as StreamErrorPayload;
+      return {
+        state: { buffer, pendingEvent: "" },
+        error,
+      };
+    }
+  }
+
+  return {
+    state: { buffer, pendingEvent },
+  };
 }
 
 export async function streamSSE({
@@ -55,32 +131,21 @@ export async function streamSSE({
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  let state = createSSEParserState();
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+    const parsed = consumeSSEChunk(state, decoder.decode(value, { stream: true }), onUpdate);
+    state = parsed.state;
 
-    let event = "";
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        event = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        const data = JSON.parse(line.slice(6));
-        if (event === "update") onUpdate(data.message);
-        else if (event === "complete") return data;
-        else if (event === "error") {
-          const error = new Error(data.message) as Error & {
-            details?: StreamErrorPayload;
-          };
-          error.details = data as StreamErrorPayload;
-          throw error;
-        }
-      }
+    if (parsed.complete !== undefined) {
+      return parsed.complete;
+    }
+
+    if (parsed.error) {
+      throw parsed.error;
     }
   }
 

@@ -29,8 +29,9 @@ Add `-- --json` if you want the same information as structured JSON.
 
 1. **You type a research prompt** (e.g. "Find the top 5 competitors to Linear")
 2. **Gemini 2.0 Flash** searches the web and browses pages using Playwright
-3. **You review** the structured data and proposed Notion schema
-4. **One click** writes everything to Notion via the official Notion MCP server
+3. **The app validates and normalizes** the model payload before the approval UI ever renders it
+4. **You review** the structured data and proposed Notion schema
+5. **One click** writes everything to Notion via the official Notion MCP server
 
 After the write completes, the UI gives you a standard `https://www.notion.so/...` link. That link
 can be opened in a browser or shared into the Notion app on Android.
@@ -50,6 +51,15 @@ can be opened in a browser or shared into the Notion app on Android.
 - **Search + browsing**: Serper (optional API-backed search) or DuckDuckGo fallback, plus Playwright for page browsing
 - **Notion integration**: Pinned `@notionhq/notion-mcp-server` via MCP
 - **Frontend**: Next.js 15 with streaming SSE
+
+### Notion transport note
+
+`lib/notion-mcp.ts` intentionally keeps the Notion transport behind a small wrapper. Today that wrapper
+launches the pinned local `@notionhq/notion-mcp-server` package over stdio, because that is the
+official package this app is tested against. Treat that local subprocess transport as a tactical
+integration detail rather than a permanent architectural assumption: the rest of the app talks to the
+wrapper, not directly to the subprocess wiring, so a future remote transport can replace it with a
+smaller blast radius.
 
 ## Setup
 
@@ -109,8 +119,9 @@ npm test
 npm run build
 ```
 
-The automated tests cover request-security rules, write-payload normalization, and smoke-level 400-path
-checks for both API routes.
+The automated tests cover request-security rules, write-payload normalization and boundary validation,
+duplicate fingerprinting, retry helpers, the SSE stream parser, browser URL blocking guards, and
+smoke-level 400-path checks for both API routes.
 
 ## Example prompts
 
@@ -131,10 +142,13 @@ Gemini 2.0 Flash (agent loop)
     ↓
 Structured JSON (items + schema)
     ↓
+Runtime validation + normalization
+    ↓
 Human approval UI ← YOU REVIEW HERE
     ↓
 Notion MCP Server (subprocess via stdio)
-    └── notion_create_database + notion_create_page × N (with row retries + resume support)
+    └── notion_create_database + notion_create_page × N
+        (with prefetched duplicate fingerprints, row retries, and resume support)
     ↓
 Notion database ✅
 ```
