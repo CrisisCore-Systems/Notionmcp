@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { isAbortError, onAbort, throwIfAborted } from "@/lib/abort";
 import {
   addRow,
   createDatabase,
@@ -37,7 +38,8 @@ async function addRowWithRetry(
   data: ResearchItem,
   schema: NotionSchema,
   rowIndex: number,
-  duplicateTracker: DuplicateTracker
+  duplicateTracker: DuplicateTracker,
+  signal?: AbortSignal
 ): Promise<{ attempt: number; duplicate: boolean }> {
   try {
     const { attempt, value } = await runWithRetry(
@@ -46,11 +48,16 @@ async function addRowWithRetry(
         maxAttempts: ROW_WRITE_MAX_ATTEMPTS,
         retryDelayMs: ROW_WRITE_RETRY_DELAY_MS,
         shouldRetry: (error) => isRetryableUpstreamError(error),
+        signal,
       }
     );
 
     return { attempt, duplicate: !value.created };
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     const retryable = isRetryableUpstreamError(error);
     throw new Error(
@@ -156,11 +163,25 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let closed = false;
+      const close = () => {
+        if (closed) {
+          return;
+        }
+
+        closed = true;
+        controller.close();
+      };
       const send = (event: string, data: unknown) => {
+        if (closed) {
+          return;
+        }
+
         controller.enqueue(
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         );
       };
+      const removeAbortListener = onAbort(req.signal, close);
       let databaseId = targetDatabaseId;
       let nextRowIndex = resumeFromIndex;
       let duplicateTracker: DuplicateTracker | null = null;
@@ -168,6 +189,8 @@ export async function POST(req: NextRequest) {
       let itemsSkipped = 0;
 
       try {
+        throwIfAborted(req.signal, "Write request cancelled by client.");
+
         if (databaseId) {
           send("update", { message: `Using existing Notion database "${databaseId}"...` });
         } else {
@@ -175,6 +198,7 @@ export async function POST(req: NextRequest) {
           databaseId = await createDatabase(suggestedDbTitle, schema);
         }
 
+        throwIfAborted(req.signal, "Write request cancelled by client.");
         duplicateTracker = await createDuplicateTracker(databaseId, schema, {
           prefetchExisting: !!targetDatabaseId,
         });
@@ -186,13 +210,15 @@ export async function POST(req: NextRequest) {
         }
 
         for (let index = resumeFromIndex; index < items.length; index++) {
+          throwIfAborted(req.signal, "Write request cancelled by client.");
           nextRowIndex = index;
           const { attempt, duplicate } = await addRowWithRetry(
             databaseId,
             items[index],
             schema,
             index,
-            duplicateTracker
+            duplicateTracker,
+            req.signal
           );
 
           if (duplicate) {
@@ -221,15 +247,18 @@ export async function POST(req: NextRequest) {
           message: formatWriteCompleteMessage(!!targetDatabaseId, itemsWritten, itemsSkipped),
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        if (!req.signal.aborted) {
+          const message = err instanceof Error ? err.message : String(err);
 
-        send("error", {
-          message,
-          databaseId: databaseId || undefined,
-          nextRowIndex,
-        });
+          send("error", {
+            message,
+            databaseId: databaseId || undefined,
+            nextRowIndex,
+          });
+        }
       } finally {
-        controller.close();
+        removeAbortListener();
+        close();
       }
     },
   });

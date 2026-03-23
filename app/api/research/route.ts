@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { runResearchAgent } from "@/lib/agent";
+import { onAbort } from "@/lib/abort";
 import { validateApiRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
@@ -24,26 +25,45 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let closed = false;
+      const close = () => {
+        if (closed) {
+          return;
+        }
+
+        closed = true;
+        controller.close();
+      };
       const send = (event: string, data: unknown) => {
+        if (closed) {
+          return;
+        }
+
         controller.enqueue(
           encoder.encode(
             `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
           )
         );
       };
+      const removeAbortListener = onAbort(req.signal, close);
 
       try {
         const result = await runResearchAgent(prompt, (message) => {
           send("update", { message });
-        });
+        }, req.signal);
 
-        send("complete", result);
+        if (!req.signal.aborted) {
+          send("complete", result);
+        }
       } catch (err) {
-        send("error", {
-          message: err instanceof Error ? err.message : String(err),
-        });
+        if (!req.signal.aborted) {
+          send("error", {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       } finally {
-        controller.close();
+        removeAbortListener();
+        close();
       }
     },
   });

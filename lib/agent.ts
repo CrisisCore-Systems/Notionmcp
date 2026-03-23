@@ -4,6 +4,7 @@ import {
   FunctionCallingMode,
   type FunctionDeclaration,
 } from "@google/generative-ai";
+import { isAbortError, throwIfAborted } from "./abort";
 import { browseAndExtract, searchWeb } from "./browser";
 import { mapWithConcurrencyLimit } from "./concurrency";
 import type { ResearchResult } from "./research-result";
@@ -132,8 +133,10 @@ ${previousResponse}`;
 
 export async function runResearchAgent(
   prompt: string,
-  onUpdate: (msg: string) => void
+  onUpdate: (msg: string) => void,
+  signal?: AbortSignal
 ): Promise<ResearchResult> {
+  throwIfAborted(signal, "Research request cancelled by client.");
   const model = getGeminiClient().getGenerativeModel({
     model: "gemini-2.0-flash",
     tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
@@ -149,6 +152,7 @@ export async function runResearchAgent(
   let reconciliationAttempts = 0;
 
   while (iterations < MAX_ITERATIONS) {
+    throwIfAborted(signal, "Research request cancelled by client.");
     iterations++;
     const calls = response.response.functionCalls();
 
@@ -169,6 +173,8 @@ export async function runResearchAgent(
           "Agent returned an invalid research payload."
         );
       } catch (error) {
+        throwIfAborted(signal, "Research request cancelled by client.");
+
         if (reconciliationAttempts >= MAX_RECONCILIATION_ATTEMPTS) {
           if (error instanceof SyntaxError) {
             throw new Error(`Agent returned non-JSON response: ${text.slice(0, 200)}`);
@@ -189,13 +195,14 @@ export async function runResearchAgent(
       calls,
       MAX_PARALLEL_TOOL_CALLS,
       async (call) => {
+        throwIfAborted(signal, "Research request cancelled by client.");
         const args = getToolArgs(call.args);
 
         try {
           if (call.name === "search_web") {
             const query = args.query ?? "";
             onUpdate(`🔍 Searching: "${query}"`);
-            const results = await searchWeb(query);
+            const results = await searchWeb(query, signal);
 
             return {
               functionResponse: {
@@ -211,7 +218,7 @@ export async function runResearchAgent(
           if (call.name === "browse_url") {
             const url = args.url ?? "";
             onUpdate(`🌐 Browsing: ${url}`);
-            const result = await browseAndExtract(url);
+            const result = await browseAndExtract(url, signal);
 
             return {
               functionResponse: {
@@ -226,6 +233,10 @@ export async function runResearchAgent(
 
           throw new Error(`Unknown tool: ${call.name}`);
         } catch (error) {
+          if (isAbortError(error)) {
+            throw error;
+          }
+
           const message = error instanceof Error ? error.message : String(error);
           onUpdate(`⚠️ ${call.name} failed: ${message}`);
 
@@ -241,9 +252,11 @@ export async function runResearchAgent(
             },
           };
         }
-      }
+      },
+      { signal }
     );
 
+    throwIfAborted(signal, "Research request cancelled by client.");
     response = await chat.sendMessage(toolResults);
   }
 

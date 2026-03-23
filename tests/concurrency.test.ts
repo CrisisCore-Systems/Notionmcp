@@ -19,3 +19,29 @@ test("mapWithConcurrencyLimit preserves order while bounding active work", async
   assert.deepEqual(results, [10, 20, 30, 40]);
   assert.equal(maxActiveCount, 2);
 });
+
+test("mapWithConcurrencyLimit stops scheduling new work after abort", async () => {
+  const controller = new AbortController();
+  const started: number[] = [];
+
+  await assert.rejects(
+    () =>
+      mapWithConcurrencyLimit(
+        [1, 2, 3],
+        1,
+        async (value) => {
+          started.push(value);
+
+          if (value === 1) {
+            controller.abort();
+          }
+
+          return value;
+        },
+        { signal: controller.signal }
+      ),
+    /cancelled by client/i
+  );
+
+  assert.deepEqual(started, [1]);
+});

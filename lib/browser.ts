@@ -7,6 +7,7 @@ import {
 } from "playwright";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { isAbortError, onAbort, throwIfAborted } from "./abort";
 
 let browser: Browser | null = null;
 const MAX_SEARCH_RESULTS = 6;
@@ -31,7 +32,7 @@ export interface BrowseResult {
 
 type SearchAdapter = {
   name: "serper" | "duckduckgo";
-  search: (query: string) => Promise<SearchResult[]>;
+  search: (query: string, signal?: AbortSignal) => Promise<SearchResult[]>;
 };
 
 type RawStructuredBrowseData = {
@@ -347,6 +348,15 @@ async function createIsolatedPage(): Promise<{ context: BrowserContext; page: Pa
   };
 }
 
+function abortBrowserContextOnSignal(
+  context: BrowserContext,
+  signal?: AbortSignal
+): () => void {
+  return onAbort(signal, () => {
+    void context.close().catch(() => {});
+  });
+}
+
 function normalizeIpAddress(value: string): string {
   const unwrapped = value.replace(/^\[|\]$/g, "").toLowerCase();
 
@@ -546,7 +556,8 @@ function normalizeSearchResults(results: SearchResult[]): SearchResult[] {
     .slice(0, MAX_SEARCH_RESULTS);
 }
 
-async function searchWithSerper(query: string): Promise<SearchResult[]> {
+async function searchWithSerper(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
+  throwIfAborted(signal, "Research request cancelled by client.");
   const apiKey = process.env.SERPER_API_KEY?.trim();
 
   if (!apiKey) {
@@ -555,6 +566,7 @@ async function searchWithSerper(query: string): Promise<SearchResult[]> {
 
   const response = await fetch("https://google.serper.dev/search", {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
       "X-API-KEY": apiKey,
@@ -579,15 +591,19 @@ async function searchWithSerper(query: string): Promise<SearchResult[]> {
   );
 }
 
-async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
+async function searchWithDuckDuckGo(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
+  throwIfAborted(signal, "Research request cancelled by client.");
   const { context, page } = await createIsolatedPage();
+  const removeAbortListener = abortBrowserContextOnSignal(context, signal);
 
   try {
+    throwIfAborted(signal, "Research request cancelled by client.");
     await page.goto(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
       waitUntil: "domcontentloaded",
       timeout: 20000,
     });
     await waitForSettledPage(page);
+    throwIfAborted(signal, "Research request cancelled by client.");
 
     const results = await page.evaluate((maxResults) => {
       const rows = Array.from(
@@ -610,7 +626,8 @@ async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
 
     return normalizeSearchResults(results);
   } finally {
-    await context.close();
+    removeAbortListener();
+    await context.close().catch(() => {});
   }
 }
 
@@ -623,13 +640,20 @@ function getSearchAdapter(): SearchAdapter {
 }
 
 /** Navigate to a URL and extract readable text content */
-export async function browseAndExtract(url: string): Promise<BrowseResult> {
+export async function browseAndExtract(
+  url: string,
+  signal?: AbortSignal
+): Promise<BrowseResult> {
+  throwIfAborted(signal, "Research request cancelled by client.");
   const { context, page } = await createIsolatedPage();
+  const removeAbortListener = abortBrowserContextOnSignal(context, signal);
 
   try {
     await validatePublicHttpUrl(url);
+    throwIfAborted(signal, "Research request cancelled by client.");
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await waitForSettledPage(page);
+    throwIfAborted(signal, "Research request cancelled by client.");
 
     const content = await page.evaluate(({ maxEvidenceSnippets }) => {
       const root =
@@ -774,27 +798,38 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
       ...(structuredData ? { structuredData } : {}),
     };
   } finally {
-    await context.close();
+    removeAbortListener();
+    await context.close().catch(() => {});
   }
 }
 
 /** Search the configured provider and return top result URLs + snippets */
 export async function searchWeb(
-  query: string
+  query: string,
+  signal?: AbortSignal
 ): Promise<SearchResult[]> {
   if (!query.trim()) {
     throw new Error("Search query cannot be empty.");
   }
 
+  throwIfAborted(signal, "Research request cancelled by client.");
   const adapter = getSearchAdapter();
 
   try {
-    return await adapter.search(query);
+    return await adapter.search(query, signal);
   } catch (err) {
+    if (isAbortError(err)) {
+      throw err;
+    }
+
     if (adapter.name !== "duckduckgo") {
       try {
-        return await searchWithDuckDuckGo(query);
+        return await searchWithDuckDuckGo(query, signal);
       } catch (fallbackError) {
+        if (isAbortError(fallbackError)) {
+          throw fallbackError;
+        }
+
         const primaryMessage = err instanceof Error ? err.message : String(err);
         const fallbackMessage =
           fallbackError instanceof Error ? fallbackError.message : String(fallbackError);

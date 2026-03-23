@@ -1,7 +1,10 @@
+import { throwIfAborted } from "./abort";
+
 export async function mapWithConcurrencyLimit<T, R>(
   items: T[],
   limit: number,
-  mapper: (item: T, index: number) => Promise<R>
+  mapper: (item: T, index: number) => Promise<R>,
+  options?: { signal?: AbortSignal }
 ): Promise<R[]> {
   if (!Number.isInteger(limit) || limit < 1) {
     throw new Error("Concurrency limit must be a positive integer.");
@@ -12,6 +15,7 @@ export async function mapWithConcurrencyLimit<T, R>(
 
   const worker = async () => {
     while (true) {
+      throwIfAborted(options?.signal);
       const currentIndex = nextIndex;
       nextIndex += 1;
 
