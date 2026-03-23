@@ -16,6 +16,21 @@ export const maxDuration = 120;
 const ROW_WRITE_MAX_ATTEMPTS = 3;
 const ROW_WRITE_RETRY_DELAY_MS = 750;
 
+function formatWriteCompleteMessage(
+  usedExistingDatabase: boolean,
+  itemsWritten: number,
+  itemsSkipped: number
+): string {
+  const duplicateSuffix =
+    itemsSkipped > 0
+      ? `${usedExistingDatabase ? " and skipped " : " while skipping "}${itemsSkipped} duplicate${itemsSkipped === 1 ? "" : "s"}`
+      : "";
+
+  return usedExistingDatabase
+    ? `✅ Added ${itemsWritten} row${itemsWritten === 1 ? "" : "s"} to the existing Notion database${duplicateSuffix}`
+    : `✅ Created Notion database and wrote ${itemsWritten} row${itemsWritten === 1 ? "" : "s"}${duplicateSuffix}`;
+}
+
 async function addRowWithRetry(
   databaseId: string,
   data: Record<string, string>,
@@ -198,9 +213,7 @@ export async function POST(req: NextRequest) {
           propertyCount: Object.keys(schema).length,
           usedExistingDatabase: !!targetDatabaseId,
           resumedFromIndex: resumeFromIndex,
-          message: targetDatabaseId
-            ? `✅ Added ${itemsWritten} row${itemsWritten === 1 ? "" : "s"} to the existing Notion database${itemsSkipped > 0 ? ` and skipped ${itemsSkipped} duplicate${itemsSkipped === 1 ? "" : "s"}` : ""}`
-            : `✅ Created Notion database and wrote ${itemsWritten} row${itemsWritten === 1 ? "" : "s"}${itemsSkipped > 0 ? ` while skipping ${itemsSkipped} duplicate${itemsSkipped === 1 ? "" : "s"}` : ""}`,
+          message: formatWriteCompleteMessage(!!targetDatabaseId, itemsWritten, itemsSkipped),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

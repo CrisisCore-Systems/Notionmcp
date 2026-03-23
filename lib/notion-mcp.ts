@@ -58,7 +58,7 @@ function getNotionMcpCommand(): string {
   return require.resolve("@notionhq/notion-mcp-server/bin/cli.mjs");
 }
 
-const createNotionTransport: NotionTransportFactory = () => {
+const notionTransportFactory: NotionTransportFactory = () => {
   const notionToken = getRequiredEnv("NOTION_TOKEN");
 
   return new StdioClientTransport({
@@ -154,7 +154,7 @@ function extractStructuredPayload<T>(
 /** Lazily start and connect to the Notion MCP server subprocess */
 async function getClient(): Promise<Client> {
   if (mcpClient) return mcpClient;
-  const transport = createNotionTransport();
+  const transport = notionTransportFactory();
 
   mcpClient = new Client(
     { name: "notion-research-agent", version: "1.0.0" },

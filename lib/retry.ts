@@ -24,7 +24,7 @@ export async function runWithRetry<T>(
         throw error;
       }
 
-      await sleep(retryDelayMs * attempt);
+      await sleep(retryDelayMs * 2 ** (attempt - 1));
     }
   }
 
