@@ -56,8 +56,8 @@ can be opened in a browser or shared into the Notion app on Android.
 ### 1. Clone and install
 
 ```bash
-git clone <your-repo>
-cd notion-research-agent
+git clone https://github.com/CrisisCore-Systems/Notionmcp.git
+cd Notionmcp
 npm install
 # ↑ also runs `playwright install chromium` via postinstall
 ```
@@ -76,11 +76,18 @@ Fill in `.env.local`:
 |---|---|
 | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — free, no credit card |
 | `SERPER_API_KEY` | Optional. [serper.dev](https://serper.dev) — enables API-backed search instead of the built-in DuckDuckGo fallback |
+| `APP_ALLOWED_ORIGIN` | Optional. Exact origin to allow when you intentionally expose the API beyond localhost |
+| `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
+
+By default, `/api/research` and `/api/write` only accept local requests. If you intentionally deploy the
+app for tightly controlled private use, set **both** `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN`, then
+send the matching token in either the `x-app-access-token` header or a `Bearer` token. Cross-origin
+requests are rejected either way.
 
 ### 3. Run
 

@@ -1,8 +1,11 @@
 import { chromium, Browser, type Page } from "playwright";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 let browser: Browser | null = null;
 const MAX_SEARCH_RESULTS = 6;
 const MAX_EXTRACTED_CHARACTERS = 8000;
+const blockedUrlValidationCache = new Map<string, Promise<void>>();
 
 export interface SearchResult {
   title: string;
@@ -27,6 +30,176 @@ async function waitForSettledPage(page: Page): Promise<void> {
     await page.waitForLoadState("networkidle", { timeout: 3000 });
   } catch {
     // Some pages never fully settle. Continue with the best available DOM.
+  }
+}
+
+function normalizeIpAddress(value: string): string {
+  const unwrapped = value.replace(/^\[|\]$/g, "").toLowerCase();
+
+  if (unwrapped.startsWith("::ffff:")) {
+    const mapped = unwrapped.slice(7);
+
+    if (isIP(mapped) === 4) {
+      return mapped;
+    }
+  }
+
+  return unwrapped;
+}
+
+function ipv4ToNumber(address: string): number {
+  return address
+    .split(".")
+    .map((part) => Number(part))
+    .reduce((total, part) => ((total << 8) | part) >>> 0, 0);
+}
+
+function expandIpv6(address: string): number[] {
+  const normalized = normalizeIpAddress(address);
+  const [head, tail] = normalized.split("::");
+  const convertParts = (value: string) =>
+    value
+      .split(":")
+      .filter(Boolean)
+      .flatMap((part) => {
+        if (!part.includes(".")) {
+          return [parseInt(part, 16)];
+        }
+
+        const ipv4 = part.split(".").map((segment) => Number(segment));
+        return [((ipv4[0] << 8) | ipv4[1]) >>> 0, ((ipv4[2] << 8) | ipv4[3]) >>> 0];
+      });
+  const headParts = convertParts(head ?? "");
+  const tailParts = convertParts(tail ?? "");
+  const missingGroups = 8 - (headParts.length + tailParts.length);
+
+  return [
+    ...headParts,
+    ...Array.from({ length: Math.max(missingGroups, 0) }, () => 0),
+    ...tailParts,
+  ];
+}
+
+function isPrivateIpv4(address: string): boolean {
+  const value = ipv4ToNumber(address);
+  const ranges: Array<[number, number]> = [
+    [ipv4ToNumber("0.0.0.0"), ipv4ToNumber("0.255.255.255")],
+    [ipv4ToNumber("10.0.0.0"), ipv4ToNumber("10.255.255.255")],
+    [ipv4ToNumber("100.64.0.0"), ipv4ToNumber("100.127.255.255")],
+    [ipv4ToNumber("127.0.0.0"), ipv4ToNumber("127.255.255.255")],
+    [ipv4ToNumber("169.254.0.0"), ipv4ToNumber("169.254.255.255")],
+    [ipv4ToNumber("172.16.0.0"), ipv4ToNumber("172.31.255.255")],
+    [ipv4ToNumber("192.168.0.0"), ipv4ToNumber("192.168.255.255")],
+    [ipv4ToNumber("224.0.0.0"), ipv4ToNumber("255.255.255.255")],
+  ];
+
+  return ranges.some(([start, end]) => value >= start && value <= end);
+}
+
+function isPrivateIpv6(address: string): boolean {
+  const groups = expandIpv6(address);
+
+  if (groups.every((group) => group === 0)) {
+    return true;
+  }
+
+  if (groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1) {
+    return true;
+  }
+
+  if (groups[0] >= 0xfc00 && groups[0] <= 0xfdff) {
+    return true;
+  }
+
+  if (groups[0] >= 0xfe80 && groups[0] <= 0xfebf) {
+    return true;
+  }
+
+  if (
+    groups.slice(0, 5).every((group) => group === 0) &&
+    groups[5] === 0xffff
+  ) {
+    return isPrivateIpv4(
+      [
+        (groups[6] >>> 8) & 255,
+        groups[6] & 255,
+        (groups[7] >>> 8) & 255,
+        groups[7] & 255,
+      ].join(".")
+    );
+  }
+
+  return false;
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local")
+  );
+}
+
+function isBlockedIpAddress(address: string): boolean {
+  const normalized = normalizeIpAddress(address);
+  const version = isIP(normalized);
+
+  if (version === 4) {
+    return isPrivateIpv4(normalized);
+  }
+
+  if (version === 6) {
+    return isPrivateIpv6(normalized);
+  }
+
+  return false;
+}
+
+async function validatePublicHttpUrl(target: string): Promise<void> {
+  let validation = blockedUrlValidationCache.get(target);
+
+  if (!validation) {
+    validation = (async () => {
+      let parsed: URL;
+
+      try {
+        parsed = new URL(target);
+      } catch {
+        throw new Error("Only valid public http(s) URLs can be browsed.");
+      }
+
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Only public http(s) URLs can be browsed.");
+      }
+
+      if (parsed.username || parsed.password) {
+        throw new Error("Credentialed URLs are not allowed.");
+      }
+
+      if (isBlockedHostname(parsed.hostname) || isBlockedIpAddress(parsed.hostname)) {
+        throw new Error("Local, private, and link-local addresses are blocked.");
+      }
+
+      const resolvedAddresses = await lookup(parsed.hostname, { all: true, verbatim: true });
+
+      if (
+        resolvedAddresses.length === 0 ||
+        resolvedAddresses.some((entry) => isBlockedIpAddress(entry.address))
+      ) {
+        throw new Error("Only public internet hosts can be browsed.");
+      }
+    })();
+
+    blockedUrlValidationCache.set(target, validation);
+  }
+
+  try {
+    await validation;
+  } catch (error) {
+    blockedUrlValidationCache.delete(target);
+    throw error;
   }
 }
 
@@ -142,6 +315,15 @@ export async function browseAndExtract(url: string): Promise<string> {
   const page = await b.newPage();
 
   try {
+    await validatePublicHttpUrl(url);
+    await page.route("**/*", async (route) => {
+      try {
+        await validatePublicHttpUrl(route.request().url());
+        await route.continue();
+      } catch {
+        await route.abort();
+      }
+    });
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await waitForSettledPage(page);
 
