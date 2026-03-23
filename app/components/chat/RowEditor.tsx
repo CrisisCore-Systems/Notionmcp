@@ -314,7 +314,20 @@ export function RowEditor({
                       {provenance && (
                         <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.35rem", maxWidth: 260 }}>
                           <div style={{ fontSize: "0.75rem", color: "#475569", whiteSpace: "normal" }}>
-                            Sources: {provenance.sourceUrls.join(", ")}
+                            Sources:{" "}
+                            {provenance.sourceUrls.map((sourceUrl, sourceIndex) => (
+                              <span key={sourceUrl}>
+                                <a
+                                  href={sourceUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ color: "#475569", wordBreak: "break-all" }}
+                                >
+                                  {sourceUrl}
+                                </a>
+                                {sourceIndex < provenance.sourceUrls.length - 1 ? ", " : ""}
+                              </span>
+                            ))}
                           </div>
                           {provenance.evidenceByField && (
                             <div style={{ fontSize: "0.75rem", color: "#64748b", whiteSpace: "normal" }}>

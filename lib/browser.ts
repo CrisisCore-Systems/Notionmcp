@@ -470,7 +470,7 @@ export async function searchWeb(
   query: string
 ): Promise<SearchResult[]> {
   if (!query.trim()) {
-    throw new Error("Search queries must not be empty.");
+    throw new Error("Search query cannot be empty.");
   }
 
   const adapter = getSearchAdapter();
