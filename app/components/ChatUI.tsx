@@ -12,6 +12,7 @@ import {
 import { CompletionPanel } from "./chat/CompletionPanel";
 import { RowEditor } from "./chat/RowEditor";
 import { SchemaEditor } from "./chat/SchemaEditor";
+import { DRAFT_PERSISTENCE_PREFERENCE_KEY } from "./chat/draft-storage";
 import { useApprovalValidation } from "./chat/useApprovalValidation";
 import { streamSSE } from "./chat/stream";
 import type {
@@ -61,7 +62,7 @@ export default function ChatUI() {
   const historyIndexRef = useRef(-1);
   const timeoutWarningLoggedRef = useRef(false);
 
-  const { savedDraft, clearSavedDraft, draftPersistenceNotice } = useDraftPersistence({
+  const { savedDraft, clearSavedDraft, draftPersistenceNotice, draftPersistenceNoticeTone } = useDraftPersistence({
     phase,
     prompt,
     editedResult,
@@ -92,6 +93,18 @@ export default function ChatUI() {
     setHistoryIndex(0);
     historyIndexRef.current = 0;
   };
+
+  useEffect(() => {
+    const persistedPreference = window.localStorage.getItem(DRAFT_PERSISTENCE_PREFERENCE_KEY);
+
+    if (persistedPreference === "true") {
+      setPersistDrafts(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(DRAFT_PERSISTENCE_PREFERENCE_KEY, persistDrafts ? "true" : "false");
+  }, [persistDrafts]);
 
   useEffect(() => {
     if (phase === "researching" || phase === "writing") {
@@ -672,24 +685,26 @@ export default function ChatUI() {
             style={{
               marginTop: "0.65rem",
               padding: "0.65rem 0.75rem",
-              background: draftPersistenceNotice.includes("saved locally")
-                ? "#fff7ed"
-                : draftPersistenceNotice.includes("Privacy mode")
-                  ? "#eff6ff"
-                  : "#fef2f2",
+              background:
+                draftPersistenceNoticeTone === "success"
+                  ? "#fff7ed"
+                  : draftPersistenceNoticeTone === "privacy"
+                    ? "#eff6ff"
+                    : "#fef2f2",
               border: `1px solid ${
-                draftPersistenceNotice.includes("saved locally")
+                draftPersistenceNoticeTone === "success"
                   ? "#fed7aa"
-                  : draftPersistenceNotice.includes("Privacy mode")
+                  : draftPersistenceNoticeTone === "privacy"
                     ? "#bfdbfe"
                     : "#fecaca"
               }`,
               borderRadius: 8,
-              color: draftPersistenceNotice.includes("saved locally")
-                ? "#9a3412"
-                : draftPersistenceNotice.includes("Privacy mode")
-                  ? "#1d4ed8"
-                  : "#b91c1c",
+              color:
+                draftPersistenceNoticeTone === "success"
+                  ? "#9a3412"
+                  : draftPersistenceNoticeTone === "privacy"
+                    ? "#1d4ed8"
+                    : "#b91c1c",
               fontSize: "0.8rem",
               lineHeight: 1.45,
             }}

@@ -52,7 +52,7 @@ type NotionMcpLaunchSpec = {
 };
 
 export interface DuplicateTracker {
-  has(data: ResearchItem, operationKey?: string): Promise<boolean>;
+  has(data: ResearchItem, operationKey?: string): boolean;
   remember(data: ResearchItem, operationKey?: string): void;
 }
 
@@ -642,46 +642,67 @@ async function getExistingDuplicateRecords(
   return { fingerprints, operationKeys };
 }
 
-async function hasExistingOperationKey(databaseId: string, operationKey: string): Promise<boolean> {
-  const trimmedOperationKey = operationKey.trim();
+const OPERATION_KEY_LOOKUP_BATCH_SIZE = 25;
 
-  if (!trimmedOperationKey) {
-    return false;
+async function getExistingOperationKeys(
+  databaseId: string,
+  operationKeys: string[]
+): Promise<Set<string>> {
+  const dataSourceId = await getDataSourceId(databaseId);
+  const uniqueOperationKeys = Array.from(
+    new Set(operationKeys.map((operationKey) => operationKey.trim()).filter(Boolean))
+  );
+  const existingOperationKeys = new Set<string>();
+
+  for (let index = 0; index < uniqueOperationKeys.length; index += OPERATION_KEY_LOOKUP_BATCH_SIZE) {
+    const batch = uniqueOperationKeys.slice(index, index + OPERATION_KEY_LOOKUP_BATCH_SIZE);
+    const result = await callNotion("notion_query_data_source", {
+      data_source_id: dataSourceId,
+      page_size: batch.length,
+      filter: {
+        or: batch.map((operationKey) => ({
+          property: NOTION_ROW_METADATA_PROPERTIES.operationKey,
+          rich_text: {
+            equals: operationKey,
+          },
+        })),
+      },
+    });
+    const queryResult = extractStructuredPayload(result, isQueryResult);
+
+    for (const row of queryResult?.results ?? []) {
+      const existingOperationKey = getOperationKeyFromPage(row);
+
+      if (existingOperationKey) {
+        existingOperationKeys.add(existingOperationKey);
+      }
+    }
   }
 
-  const dataSourceId = await getDataSourceId(databaseId);
-  const result = await callNotion("notion_query_data_source", {
-    data_source_id: dataSourceId,
-    page_size: 1,
-    filter: {
-      property: NOTION_ROW_METADATA_PROPERTIES.operationKey,
-      rich_text: {
-        equals: trimmedOperationKey,
-      },
-    },
-  });
-  const queryResult = extractStructuredPayload(result, isQueryResult);
-  return (queryResult?.results?.length ?? 0) > 0;
+  return existingOperationKeys;
 }
 
 export async function createDuplicateTracker(
   databaseId: string,
   schema: NotionSchema,
-  options?: { prefetchExisting?: boolean; useOperationKeyLookup?: boolean }
+  options?: { prefetchExisting?: boolean; useOperationKeyLookup?: boolean; operationKeys?: string[] }
 ): Promise<DuplicateTracker> {
   const records =
     options?.prefetchExisting === false
       ? { fingerprints: new Set<string>(), operationKeys: new Set<string>() }
       : await getExistingDuplicateRecords(databaseId, schema);
 
-  return {
-    async has(data, operationKey) {
-      if (operationKey && records.operationKeys.has(operationKey)) {
-        return true;
-      }
+  if (options?.useOperationKeyLookup) {
+    const existingOperationKeys = await getExistingOperationKeys(databaseId, options.operationKeys ?? []);
 
-      if (operationKey && options?.useOperationKeyLookup && (await hasExistingOperationKey(databaseId, operationKey))) {
-        records.operationKeys.add(operationKey);
+    for (const operationKey of existingOperationKeys) {
+      records.operationKeys.add(operationKey);
+    }
+  }
+
+  return {
+    has(data, operationKey) {
+      if (operationKey && records.operationKeys.has(operationKey)) {
         return true;
       }
 
@@ -710,7 +731,7 @@ export async function addRow(
   writeMetadata?: RowWriteMetadata,
   metadataSupport: NotionWriteMetadataSupport = FULL_NOTION_WRITE_METADATA_SUPPORT
 ): Promise<{ created: boolean }> {
-  if (duplicateTracker && (await duplicateTracker.has(data, writeMetadata?.operationKey))) {
+  if (duplicateTracker?.has(data, writeMetadata?.operationKey)) {
     return { created: false };
   }
 

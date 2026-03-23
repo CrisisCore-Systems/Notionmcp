@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { validateApiRequest } from "@/lib/request-security";
-import { loadWriteAuditRecord } from "@/lib/write-audit-store";
+import { isValidWriteAuditId, loadWriteAuditRecord } from "@/lib/write-audit-store";
 
 export const runtime = "nodejs";
 
@@ -18,6 +18,16 @@ export async function GET(req: NextRequest, context: RouteContext) {
   }
 
   const { auditId } = await context.params;
+
+  if (!isValidWriteAuditId(auditId)) {
+    return new Response(JSON.stringify({ error: "Write audit not found" }), {
+      status: 404,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
   const record = await loadWriteAuditRecord(auditId);
 
   if (!record) {

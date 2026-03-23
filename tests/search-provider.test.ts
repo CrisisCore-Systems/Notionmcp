@@ -19,4 +19,5 @@ test("getConfiguredSearchProviders accepts an explicit provider order", () => {
   });
 
   assert.deepEqual(providers, ["brave", "duckduckgo", "serper"]);
+  assert.equal(providers.includes("unknown" as never), false);
 });

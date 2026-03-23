@@ -1,6 +1,7 @@
 import type { StoredDraft } from "./types";
 
 export const DRAFT_STORAGE_KEY = "notion-research-agent-draft";
+export const DRAFT_PERSISTENCE_PREFERENCE_KEY = "notion-research-agent-draft-persistence-enabled";
 export const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const DRAFT_MAX_SIZE_BYTES = 2 * 1024 * 1024;
 export const DRAFT_WARNING_SIZE_BYTES = 250 * 1024;

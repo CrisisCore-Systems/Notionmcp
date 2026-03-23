@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { WriteAuditTrail } from "@/lib/write-audit";
 
+const WRITE_AUDIT_ID_PATTERN = /^[0-9a-fA-F-]{36}$/;
+
 export type PersistedWriteAuditRecord = {
   id: string;
   createdAt: string;
@@ -38,8 +40,16 @@ export function getWriteAuditDirectory(): string {
   return configured || path.join(process.cwd(), ".notionmcp-data", "write-audits");
 }
 
+export function isValidWriteAuditId(auditId: string): boolean {
+  return WRITE_AUDIT_ID_PATTERN.test(auditId.trim());
+}
+
 function getWriteAuditPath(auditId: string): string {
-  return path.join(getWriteAuditDirectory(), `${auditId}.json`);
+  if (!isValidWriteAuditId(auditId)) {
+    throw new Error("Invalid write audit ID");
+  }
+
+  return path.join(getWriteAuditDirectory(), `${auditId.trim()}.json`);
 }
 
 export function buildWriteAuditUrl(auditId: string): string {
@@ -63,7 +73,7 @@ export async function persistWriteAuditRecord(
 export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWriteAuditRecord | null> {
   const trimmedAuditId = auditId.trim();
 
-  if (!trimmedAuditId) {
+  if (!isValidWriteAuditId(trimmedAuditId)) {
     return null;
   }
 

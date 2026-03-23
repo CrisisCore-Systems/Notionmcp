@@ -846,10 +846,11 @@ export async function searchWeb(
     throw new Error("Search query cannot be empty.");
   }
 
+  const configuredProviders = getConfiguredSearchProviders();
   const attemptedProviders: string[] = [];
   let lastError: unknown = null;
 
-  for (const provider of getConfiguredSearchProviders()) {
+  for (const provider of configuredProviders) {
     const adapter = SEARCH_ADAPTER_FACTORIES[provider]();
 
     try {
@@ -863,10 +864,12 @@ export async function searchWeb(
   }
 
   throw new Error(
-    `Search failed via ${attemptedProviders.join(" and ")}${
-      attemptedProviders.length === 0 && lastError
-        ? ` (${lastError instanceof Error ? lastError.message : String(lastError)})`
-        : ""
-    }.`
+    `Search failed. Attempted providers: ${configuredProviders.join(", ")}. Errors: ${
+      attemptedProviders.length > 0
+        ? attemptedProviders.join("; ")
+        : lastError instanceof Error
+          ? lastError.message
+          : String(lastError)
+    }`
   );
 }

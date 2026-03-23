@@ -97,6 +97,18 @@ function buildRowAuditEntries(
   return entries;
 }
 
+function buildDuplicateTrackerOptions(
+  operationKeySupport: boolean,
+  operationKeys: string[],
+  useExistingDatabase: boolean
+) {
+  return {
+    prefetchExisting: useExistingDatabase && !operationKeySupport,
+    useOperationKeyLookup: useExistingDatabase && operationKeySupport,
+    operationKeys,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const requestError = validateApiRequest(req);
 
@@ -229,8 +241,11 @@ export async function POST(req: NextRequest) {
         }
 
         duplicateTracker = await createDuplicateTracker(databaseId, schema, {
-          prefetchExisting: !!targetDatabaseId && !metadataSupport.operationKey,
-          useOperationKeyLookup: !!targetDatabaseId && metadataSupport.operationKey,
+          ...buildDuplicateTrackerOptions(
+            metadataSupport.operationKey,
+            operationKeys.slice(resumeFromIndex),
+            !!targetDatabaseId
+          ),
         });
 
         if (resumeFromIndex > 0) {
@@ -315,11 +330,14 @@ export async function POST(req: NextRequest) {
         if (databaseId && nextRowIndex < items.length) {
           try {
             const reconciliationTracker = await createDuplicateTracker(databaseId, schema, {
-              prefetchExisting: !metadataSupport.operationKey,
-              useOperationKeyLookup: metadataSupport.operationKey,
+              ...buildDuplicateTrackerOptions(
+                metadataSupport.operationKey,
+                [operationKeys[nextRowIndex] ?? ""],
+                true
+              ),
             });
 
-            if (await reconciliationTracker.has(items[nextRowIndex] as ResearchItem, operationKeys[nextRowIndex])) {
+            if (reconciliationTracker.has(items[nextRowIndex] as ResearchItem, operationKeys[nextRowIndex])) {
               confirmedWrittenRows.add(nextRowIndex);
               nextRowIndex += 1;
               reconciled = true;
