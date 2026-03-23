@@ -15,7 +15,7 @@ It contains the core application pieces:
 - Playwright browsing helpers (`lib/browser.ts`)
 - a Notion MCP client wrapper (`lib/notion-mcp.ts`)
 
-The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured.
+The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The install story is intentionally explicit: the app launches the pinned local `@notionhq/notion-mcp-server` package from `node_modules`, not a best-effort runtime `npx` lookup.
 
 To quickly crawl the repository and print its current state, run:
 
@@ -87,7 +87,8 @@ Go to the page in Notion → `...` menu → `Connect to` → select your integra
 By default, `/api/research` and `/api/write` only accept local requests. If you intentionally deploy the
 app for tightly controlled private use, set **both** `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN`, then
 send the matching token in either the `x-app-access-token` header or a `Bearer` token. Cross-origin
-requests are rejected either way.
+requests are rejected either way. The built-in UI now includes an optional access-token field for that
+private remote mode; leave it blank for normal localhost use.
 
 ### 3. Run
 
@@ -96,6 +97,20 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000)
+
+### Validation scripts
+
+The repository now exposes the core checks directly:
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+The automated tests cover request-security rules, write-payload normalization, and smoke-level 400-path
+checks for both API routes.
 
 ## Example prompts
 

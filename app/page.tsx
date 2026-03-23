@@ -32,6 +32,11 @@ export default function HomePage() {
             </li>
           ))}
         </ul>
+        <p style={{ margin: "0.75rem 0 0", color: "#4b5563", lineHeight: 1.6, fontSize: "0.92rem" }}>
+          Localhost API use works with just those variables. If you intentionally expose the app for a
+          tightly controlled private deployment, also set <code>APP_ALLOWED_ORIGIN</code> and{" "}
+          <code>APP_ACCESS_TOKEN</code>, then enter that access token in the UI before starting a run.
+        </p>
       </div>
       <ChatUI />
     </main>
