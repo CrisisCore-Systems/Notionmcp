@@ -99,6 +99,7 @@ Fill in `.env.local`:
 | `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
+| `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by the local MCP wrapper |
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
@@ -109,6 +110,10 @@ send the matching token in either the `x-app-access-token` header or a `Bearer` 
 requests are rejected either way. The built-in UI now includes an optional access-token field for that
 private remote mode; leave it blank for normal localhost use. Review drafts are stored only in the
 current browser, expire automatically after 7 days, and can be disabled per session from the UI.
+
+The Notion wrapper also pins the `Notion-Version` header to `2025-09-03` by default so the app does not
+silently drift with ambient API defaults. If you intentionally test a newer Notion API release, set
+`NOTION_API_VERSION` explicitly in `.env.local`.
 
 ### 3. Run
 
