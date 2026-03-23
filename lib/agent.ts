@@ -25,6 +25,7 @@ function getGeminiClient() {
 }
 const MAX_ITERATIONS = 15;
 const MAX_PARALLEL_TOOL_CALLS = 2;
+const MAX_RECONCILIATION_ATTEMPTS = 1;
 
 const SYSTEM_PROMPT = `You are a research agent that browses the web and structures findings into a Notion database.
 
@@ -113,6 +114,22 @@ function getToolArgs(args: unknown): { query?: string; url?: string } {
   };
 }
 
+function buildReconciliationPrompt(previousResponse: string, error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error);
+
+  return `Your previous response failed validation: ${reason}
+
+Repair it into a single valid JSON object only.
+- Preserve only claims grounded in prior tool outputs.
+- Every row must include "__provenance.sourceUrls" with one or more public URLs.
+- Every populated row must include "__provenance.evidenceByField" with evidence for the title field and enough evidence coverage to justify the row.
+- Prefer structured signals extracted from JSON-LD, Open Graph, tables, and page metadata when available.
+- Do not wrap the JSON in markdown fences.
+
+Previous response:
+${previousResponse}`;
+}
+
 export async function runResearchAgent(
   prompt: string,
   onUpdate: (msg: string) => void
@@ -129,6 +146,7 @@ export async function runResearchAgent(
   const chat = model.startChat();
   let response = await chat.sendMessage(prompt);
   let iterations = 0;
+  let reconciliationAttempts = 0;
 
   while (iterations < MAX_ITERATIONS) {
     iterations++;
@@ -151,11 +169,18 @@ export async function runResearchAgent(
           "Agent returned an invalid research payload."
         );
       } catch (error) {
-        if (error instanceof SyntaxError) {
-          throw new Error(`Agent returned non-JSON response: ${text.slice(0, 200)}`);
+        if (reconciliationAttempts >= MAX_RECONCILIATION_ATTEMPTS) {
+          if (error instanceof SyntaxError) {
+            throw new Error(`Agent returned non-JSON response: ${text.slice(0, 200)}`);
+          }
+
+          throw error;
         }
 
-        throw error;
+        reconciliationAttempts += 1;
+        onUpdate("🧭 Reconciling extracted rows before approval...");
+        response = await chat.sendMessage(buildReconciliationPrompt(cleaned, error));
+        continue;
       }
     }
 

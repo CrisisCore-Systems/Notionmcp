@@ -1,0 +1,39 @@
+<svg width="1400" height="860" viewBox="0 0 1400 860" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1400" height="860" fill="#F7F7FB"/>
+  <text x="80" y="90" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="700" fill="#111827">Notion Research Agent architecture</text>
+  <text x="80" y="130" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#4B5563">Structured extraction now combines JSON-LD, Open Graph, schema hints, and readable page text before approval.</text>
+
+  <rect x="100" y="190" width="1180" height="110" rx="24" fill="#111827"/>
+  <text x="150" y="238" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">1. Prompt + orchestration</text>
+  <text x="150" y="278" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#E5E7EB">User prompt enters the Gemini agent loop with search_web and browse_url tools.</text>
+
+  <rect x="100" y="340" width="560" height="180" rx="24" fill="#2563EB"/>
+  <text x="140" y="390" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">2. Search + browse</text>
+  <text x="140" y="430" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#DBEAFE">Serper or DuckDuckGo finds candidate URLs.</text>
+  <text x="140" y="466" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#DBEAFE">Playwright opens isolated pages with public-network guards.</text>
+  <text x="140" y="502" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#DBEAFE">Page extraction keeps prose, tables, and notable links.</text>
+
+  <rect x="720" y="340" width="560" height="180" rx="24" fill="#0F766E"/>
+  <text x="760" y="390" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">3. Structured extraction</text>
+  <text x="760" y="430" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#CCFBF1">JSON-LD nodes summarized into typed facts.</text>
+  <text x="760" y="466" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#CCFBF1">Open Graph + canonical metadata captured explicitly.</text>
+  <text x="760" y="502" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#CCFBF1">Common schema/itemprop fields become evidence-ready signals.</text>
+
+  <path d="M690 430 L720 430" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
+  <polygon points="712,416 740,430 712,444" fill="#6B7280"/>
+
+  <rect x="100" y="570" width="1180" height="110" rx="24" fill="#7C3AED"/>
+  <text x="150" y="618" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">4. Validation + approval</text>
+  <text x="150" y="658" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#EDE9FE">Results are normalized, reconciled, and blocked unless rows contain complete provenance and adequate evidence density.</text>
+
+  <rect x="100" y="720" width="1180" height="90" rx="24" fill="#DC2626"/>
+  <text x="150" y="772" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">5. Notion write path</text>
+  <text x="150" y="804" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#FEE2E2">Only transient upstream failures are retried; validated rows are written via the pinned Notion MCP server.</text>
+
+  <path d="M690 300 L690 330" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
+  <polygon points="676,322 690,350 704,322" fill="#6B7280"/>
+  <path d="M690 520 L690 560" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
+  <polygon points="676,552 690,580 704,552" fill="#6B7280"/>
+  <path d="M690 680 L690 710" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
+  <polygon points="676,702 690,730 704,702" fill="#6B7280"/>
+</svg>

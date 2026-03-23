@@ -6,7 +6,7 @@ import {
   normalizeResearchResult,
   parseResearchResult,
 } from "@/lib/write-payload";
-import { buildDuplicateFingerprint } from "@/lib/notion-mcp";
+import { buildDuplicateFingerprint, buildNotionPageProperties } from "@/lib/notion-mcp";
 
 test("normalizeResearchResult trims values and deduplicates schema names", () => {
   const result = normalizeResearchResult({
@@ -28,6 +28,8 @@ test("normalizeResearchResult trims values and deduplicates schema names", () =>
           sourceUrls: ["https://example.com", "notaurl"],
           evidenceByField: {
             Name: ["  Alpha company  "],
+            name: ["Boolean flag present on source page"],
+            Score: ["Score listed as 42"],
             Empty: [""],
           },
         },
@@ -51,6 +53,8 @@ test("normalizeResearchResult trims values and deduplicates schema names", () =>
         sourceUrls: ["https://example.com"],
         evidenceByField: {
           Name: ["Alpha company"],
+          "name 2": ["Boolean flag present on source page"],
+          Score: ["Score listed as 42"],
         },
       },
     },
@@ -91,6 +95,35 @@ test("parseResearchResult rejects malformed payloads before the UI boundary", ()
         "Agent returned an invalid research payload."
       ),
     /Agent returned an invalid research payload/
+  );
+});
+
+test("parseResearchResult rejects rows without complete provenance evidence", () => {
+  assert.throws(
+    () =>
+      parseResearchResult({
+        suggestedDbTitle: "Research",
+        summary: "Summary",
+        schema: {
+          Name: "title",
+          Description: "rich_text",
+          URL: "url",
+        },
+        items: [
+          {
+            Name: "Alpha",
+            Description: "A company",
+            URL: "https://example.com",
+            __provenance: {
+              sourceUrls: ["https://example.com"],
+              evidenceByField: {
+                Description: ["Only one field is evidenced"],
+              },
+            },
+          },
+        ],
+      }),
+    /evidence for "Name"|denser evidence coverage/
   );
 });
 
@@ -136,4 +169,39 @@ test("buildDuplicateFingerprint uses stable title and URL identity", () => {
   );
 
   assert.equal(first, second);
+});
+
+test("buildNotionPageProperties preserves numeric zero without fallback coercion", () => {
+  const properties = buildNotionPageProperties(
+    {
+      Name: "Alpha",
+      Score: "0",
+    },
+    {
+      Name: "title",
+      Score: "number",
+    }
+  );
+
+  assert.deepEqual(properties, {
+    Name: { title: [{ text: { content: "Alpha" } }] },
+    Score: { number: 0 },
+  });
+});
+
+test("buildNotionPageProperties rejects invalid numeric strings", () => {
+  assert.throws(
+    () =>
+      buildNotionPageProperties(
+        {
+          Name: "Alpha",
+          Score: "12abc",
+        },
+        {
+          Name: "title",
+          Score: "number",
+        }
+      ),
+    /Invalid numeric value/
+  );
 });

@@ -2,6 +2,12 @@
 
 An AI-powered research agent that browses the web and structures findings directly into a Notion database — with human-in-the-loop approval before writing.
 
+## Repository profile
+
+- **Description**: Human-reviewed web research agent for Gemini, Playwright, and Notion MCP.
+- **Topics**: `nextjs`, `gemini`, `notion`, `mcp`, `playwright`, `web-research`, `human-in-the-loop`
+- **Release tags**: `v0.1.0` (current app baseline), `v0.1.x` (stability and extraction hardening), `v0.2.0` (production-readiness milestone)
+
 ## What this repository is
 
 This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and the Notion MCP server**.
@@ -133,16 +139,18 @@ smoke-level 400-path checks for both API routes.
 
 ## Architecture
 
+![Architecture overview](docs/architecture-overview.png)
+
 ```
 User prompt
     ↓
 Gemini 2.0 Flash (agent loop)
     ├── search_web() → Serper API or DuckDuckGo adapter
-    └── browse_url() → Playwright → target page
+    └── browse_url() → Playwright → JSON-LD / Open Graph / schema signals + readable page text
     ↓
 Structured JSON (items + schema)
     ↓
-Runtime validation + normalization
+Runtime validation + reconciliation
     ↓
 Human approval UI ← YOU REVIEW HERE
     ↓
@@ -152,3 +160,11 @@ Notion MCP Server (subprocess via stdio)
     ↓
 Notion database ✅
 ```
+
+## Short roadmap
+
+- [x] Ship a runnable Next.js + Gemini + Notion MCP workflow
+- [x] Add retry-aware writes, duplicate handling, and write resume support
+- [x] Validate per-row provenance and evidence density before approval or write
+- [ ] Add richer source reconciliation and side-by-side evidence inspection in the approval UI
+- [ ] Add optional export/import flows for saved research batches

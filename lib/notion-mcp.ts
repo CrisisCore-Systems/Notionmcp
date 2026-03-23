@@ -558,6 +558,21 @@ export async function addRow(
     return { created: false };
   }
 
+  const properties = buildNotionPageProperties(data, schema);
+
+  await callNotion("notion_create_page", {
+    parent: { database_id: databaseId },
+    properties,
+  });
+
+  duplicateTracker?.remember(data);
+  return { created: true };
+}
+
+export function buildNotionPageProperties(
+  data: ResearchItem,
+  schema: NotionSchema
+): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(data)) {
@@ -569,7 +584,13 @@ export async function addRow(
     } else if (type === "url") {
       properties[key] = { url: value };
     } else if (type === "number") {
-      properties[key] = { number: parseFloat(value) || 0 };
+      const numberValue = Number(value);
+
+      if (!Number.isFinite(numberValue)) {
+        throw new Error(`Invalid numeric value for "${key}".`);
+      }
+
+      properties[key] = { number: numberValue };
     } else if (type === "select") {
       properties[key] = { select: { name: value } };
     } else {
@@ -577,11 +598,5 @@ export async function addRow(
     }
   }
 
-  await callNotion("notion_create_page", {
-    parent: { database_id: databaseId },
-    properties,
-  });
-
-  duplicateTracker?.remember(data);
-  return { created: true };
+  return properties;
 }
