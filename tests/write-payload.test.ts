@@ -63,7 +63,7 @@ test("normalizeResearchResult rejects invalid numeric values", () => {
   );
 });
 
-test("isResearchResult and isValidDatabaseId reject malformed payloads", () => {
+test("isResearchResult rejects malformed payloads", () => {
   assert.equal(
     isResearchResult({
       suggestedDbTitle: "Test",
@@ -73,6 +73,9 @@ test("isResearchResult and isValidDatabaseId reject malformed payloads", () => {
     }),
     false
   );
+});
+
+test("isValidDatabaseId accepts only valid Notion database IDs", () => {
   assert.equal(isValidDatabaseId("1234"), false);
   assert.equal(isValidDatabaseId("1a2b3c4d5e6f77889900aabbccddeeff"), true);
 });

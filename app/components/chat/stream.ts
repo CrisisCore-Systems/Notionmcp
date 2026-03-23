@@ -43,7 +43,7 @@ export async function streamSSE({
       const parsed = JSON.parse(text) as { error?: string };
       if (parsed.error) message = parsed.error;
     } catch {
-      // Fall back to the raw response text when the error body is not JSON.
+      // Fall back to the raw response text when the error body is not valid JSON or cannot be parsed.
     }
 
     throw new Error(message);
