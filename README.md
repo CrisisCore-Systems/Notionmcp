@@ -1,6 +1,6 @@
 # Notion Research Agent
 
-An AI-powered research agent that browses the web and structures findings directly into a Notion database — with human-in-the-loop approval before writing.
+Notionmcp is a **private, single-operator research workstation**. It is optimized for **reviewed research runs, controlled Notion writes, and auditability**. It is **not a multi-tenant SaaS**.
 
 ## Repository profile
 
@@ -10,7 +10,7 @@ An AI-powered research agent that browses the web and structures findings direct
 
 ## What this repository is
 
-This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and the Notion MCP server**. It is intended as a **private operator tool, not a public SaaS offering**.
+This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and Notion provider adapters**. It is intended as a **private operator tool, not a public SaaS offering**.
 
 It contains the core application pieces:
 
@@ -19,9 +19,10 @@ It contains the core application pieces:
 - a streaming Notion write API route (`app/api/write/route.ts`)
 - a Gemini agent loop (`lib/agent.ts`)
 - Playwright browsing helpers (`lib/browser.ts`)
-- a Notion MCP client wrapper (`lib/notion-mcp.ts`)
+- a Notion provider layer (`lib/notion/index.ts`)
+- a local MCP compatibility wrapper (`lib/notion-mcp.ts`)
 
-The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The install story is intentionally explicit: the app launches the pinned local `@notionhq/notion-mcp-server` package from `node_modules`, not a best-effort runtime `npx` lookup.
+The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The default Notion path now talks directly to Notion's official REST API with the operator token you already configure. The pinned local `@notionhq/notion-mcp-server` package remains available as an explicit compatibility mode instead of being the only transport.
 
 To quickly crawl the repository and print its current state, run:
 
@@ -37,7 +38,7 @@ Add `-- --json` if you want the same information as structured JSON.
 2. **Gemini 2.0 Flash** searches the web and browses pages using Playwright
 3. **The app validates and normalizes** the model payload before the approval UI ever renders it
 4. **You review** the structured data and proposed Notion schema
-5. **One click** writes everything to Notion via the official Notion MCP server
+5. **One click** writes everything to Notion via the configured provider mode
 
 The write path clamps Notion `title`, `rich_text`, and `url` values to Notion-safe lengths before page
 creation so oversized model output cannot fail the whole write.
@@ -61,18 +62,20 @@ can be opened in a browser or shared into the Notion app on Android.
 ## Stack
 
 - **LLM**: Gemini 2.0 Flash (free via Google AI Studio)
-- **Search + browsing**: Serper (optional API-backed search) or DuckDuckGo fallback, plus Playwright for page browsing
-- **Notion integration**: Pinned `@notionhq/notion-mcp-server` via MCP
+- **Search + browsing**: Serper, Brave, and DuckDuckGo provider support, plus Playwright for page browsing
+- **Notion integration**: Direct Notion API by default, optional local MCP compatibility mode
 - **Frontend**: Next.js 15 with streaming SSE
 
-### Notion transport note
+### Notion provider modes
 
-`lib/notion-mcp.ts` intentionally keeps the Notion transport behind a small wrapper. Today that wrapper
-launches the pinned local `@notionhq/notion-mcp-server` package over stdio, because that is the
-official package this app is tested against. Treat that local subprocess transport as a tactical
-integration detail rather than a permanent architectural assumption: the rest of the app talks to the
-wrapper, not directly to the subprocess wiring, so a future remote transport can replace it with a
-smaller blast radius.
+`app/api/write/route.ts` now talks to a provider layer under `lib/notion/` instead of binding directly
+to the local subprocess transport.
+
+- **`direct-api` (default)** — use the configured operator token against Notion's official REST API
+- **`local-mcp`** — keep using the bundled `@notionhq/notion-mcp-server` subprocess as a compatibility mode
+
+The direct API path is the default because this repo is optimized for a private operator workflow with a
+single reviewed write lane. The local MCP transport stays available, but it is no longer the architectural spine.
 
 ## Setup
 
@@ -105,7 +108,8 @@ Fill in `.env.local`:
 | `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
-| `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by the local MCP wrapper |
+| `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by both provider modes |
+| `NOTION_PROVIDER` | Optional provider mode. `direct-api` is the default; set `local-mcp` for the subprocess compatibility path |
 | `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` | Optional local MCP replacement command and JSON-array args |
 | `WRITE_AUDIT_DIR` | Optional server-side directory for persisted write audit JSON records |
 
@@ -119,9 +123,10 @@ requests are rejected either way. The built-in UI now includes an optional acces
 private remote mode; leave it blank for normal localhost use. Review drafts can be enabled per browser
 session from the UI, stay off by default for privacy, and expire automatically after 7 days when enabled.
 
-The Notion wrapper also pins the `Notion-Version` header to `2025-09-03` by default so the app does not
+The Notion provider layer pins the `Notion-Version` header to `2025-09-03` by default so the app does not
 silently drift with ambient API defaults. If you intentionally test a newer Notion API release, set
-`NOTION_API_VERSION` explicitly in `.env.local`.
+`NOTION_API_VERSION` explicitly in `.env.local`. Leave `NOTION_PROVIDER` unset for the default direct API
+mode, or set `NOTION_PROVIDER=local-mcp` if you intentionally want the bundled subprocess path.
 
 Every write now also persists a server-side JSON audit record outside transient UI state and returns a
 download link from the completion panel. By default those records live under `.notionmcp-data/write-audits`
@@ -187,7 +192,7 @@ deployment only after additional hardening**.
 User prompt
     ↓
 Gemini 2.0 Flash (agent loop)
-    ├── search_web() → Serper API or DuckDuckGo adapter
+    ├── search_web() → Serper, Brave, or DuckDuckGo adapter
     └── browse_url() → Playwright → JSON-LD / Open Graph / schema signals + readable page text
     ↓
 Structured JSON (items + schema)
@@ -196,8 +201,9 @@ Runtime validation + reconciliation
     ↓
 Human approval UI ← YOU REVIEW HERE
     ↓
-Notion MCP Server (subprocess via stdio)
-    └── notion_create_database + notion_create_page × N
+    Notion provider layer
+    ├── direct-api (default)
+    └── local-mcp (compatibility mode)
         (with deterministic operation keys, prefetched duplicate fingerprints, row retries, reconciliation, and resume support)
     ↓
 Notion database ✅

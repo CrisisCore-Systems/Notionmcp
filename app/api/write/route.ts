@@ -8,7 +8,7 @@ import {
   type NotionSchema,
   getDatabaseMetadataSupport,
   type NotionWriteMetadataSupport,
-} from "@/lib/notion-mcp";
+} from "@/lib/notion";
 import { validateApiRequest } from "@/lib/request-security";
 import { isRetryableUpstreamError, runWithRetry } from "@/lib/retry";
 import type { ResearchItem } from "@/lib/research-result";

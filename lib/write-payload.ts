@@ -1,4 +1,4 @@
-import type { NotionSchema } from "@/lib/notion-mcp";
+import type { NotionSchema } from "@/lib/notion/provider";
 import {
   NOTION_PROPERTY_TYPES,
   enforceNotionValueLimit,
