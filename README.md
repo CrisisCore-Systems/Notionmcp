@@ -4,13 +4,13 @@ An AI-powered research agent that browses the web and structures findings direct
 
 ## Repository profile
 
-- **Description**: Human-reviewed web research agent for Gemini, Playwright, and Notion MCP.
-- **Topics**: `nextjs`, `gemini`, `notion`, `mcp`, `playwright`, `web-research`, `human-in-the-loop`
-- **Release tags**: `v0.1.0` (current app baseline), `v0.1.x` (stability and extraction hardening), `v0.2.0` (production-readiness milestone)
+- **Description**: Private operator tool for human-reviewed web research with Gemini, Playwright, and Notion MCP.
+- **Topics**: `nextjs`, `gemini`, `notion`, `mcp`, `playwright`, `web-research`, `human-in-the-loop`, `private-operator-tool`
+- **Release tags**: `v0.1.0` (current app baseline), `v0.1.x` (stability and extraction hardening), `v0.2.0` (production-readiness milestone). Mirror these in GitHub releases/tags so operators can verify what build they are running.
 
 ## What this repository is
 
-This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and the Notion MCP server**.
+This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and the Notion MCP server**. It is intended as a **private operator tool, not a public SaaS offering**.
 
 It contains the core application pieces:
 
@@ -41,6 +41,10 @@ Add `-- --json` if you want the same information as structured JSON.
 
 The write path clamps Notion `title`, `rich_text`, and `url` values to Notion-safe lengths before page
 creation so oversized model output cannot fail the whole write.
+
+Each Notion write now uses a deterministic per-row operation key, persists row-level provenance metadata
+when the database supports the operator columns, and performs a reconciliation pass after ambiguous partial
+failures before telling the operator where to resume.
 
 After the write completes, the UI gives you a standard `https://www.notion.so/...` link. That link
 can be opened in a browser or shared into the Notion app on Android.
@@ -168,6 +172,9 @@ deployment only after additional hardening**.
 
 ![Architecture overview](docs/architecture-overview.png)
 
+- [Architecture doc](docs/architecture.md)
+- [SVG source](docs/architecture-overview.svg)
+
 ```
 User prompt
     ↓
@@ -183,7 +190,7 @@ Human approval UI ← YOU REVIEW HERE
     ↓
 Notion MCP Server (subprocess via stdio)
     └── notion_create_database + notion_create_page × N
-        (with prefetched duplicate fingerprints, row retries, and resume support)
+        (with deterministic operation keys, prefetched duplicate fingerprints, row retries, reconciliation, and resume support)
     ↓
 Notion database ✅
 ```

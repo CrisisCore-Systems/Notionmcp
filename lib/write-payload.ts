@@ -9,8 +9,10 @@ import {
 } from "@/lib/notion-validation";
 import {
   RESEARCH_ITEM_PROVENANCE_KEY,
+  RESEARCH_RUN_METADATA_KEY,
   type ResearchItem,
   type ResearchItemProvenance,
+  type ResearchRunMetadata,
   type ResearchResult,
 } from "@/lib/research-result";
 
@@ -94,6 +96,43 @@ function normalizeProvenanceForSchema(
   return {
     ...(sourceUrls.length > 0 ? { sourceUrls } : { sourceUrls: [] }),
     ...(evidenceByField ? { evidenceByField } : {}),
+  };
+}
+
+function normalizeResearchRunMetadata(value: unknown): ResearchRunMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const sourceSet = normalizeSourceUrls(value.sourceSet);
+  const rejectedUrls = normalizeSourceUrls(value.rejectedUrls);
+  const extractionCounts = isRecord(value.extractionCounts) ? value.extractionCounts : {};
+  const searchQueries =
+    typeof extractionCounts.searchQueries === "number" && extractionCounts.searchQueries >= 0
+      ? Math.floor(extractionCounts.searchQueries)
+      : 0;
+  const candidateSources =
+    typeof extractionCounts.candidateSources === "number" && extractionCounts.candidateSources >= 0
+      ? Math.floor(extractionCounts.candidateSources)
+      : sourceSet.length;
+  const pagesBrowsed =
+    typeof extractionCounts.pagesBrowsed === "number" && extractionCounts.pagesBrowsed >= 0
+      ? Math.floor(extractionCounts.pagesBrowsed)
+      : sourceSet.length;
+  const rowsExtracted =
+    typeof extractionCounts.rowsExtracted === "number" && extractionCounts.rowsExtracted >= 0
+      ? Math.floor(extractionCounts.rowsExtracted)
+      : 0;
+
+  return {
+    sourceSet,
+    extractionCounts: {
+      searchQueries,
+      candidateSources,
+      pagesBrowsed,
+      rowsExtracted,
+    },
+    rejectedUrls,
   };
 }
 
@@ -199,11 +238,16 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
     throw new Error("At least one non-empty item is required");
   }
 
+  const runMetadata = normalizeResearchRunMetadata(
+    (result as unknown as Record<string, unknown>)[RESEARCH_RUN_METADATA_KEY]
+  );
+
   return {
     suggestedDbTitle,
     summary,
     schema: normalizedSchema,
     items: normalizedItems,
+    ...(runMetadata ? { [RESEARCH_RUN_METADATA_KEY]: runMetadata } : {}),
   };
 }
 

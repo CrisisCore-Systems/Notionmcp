@@ -7,7 +7,12 @@ import {
   normalizeResearchResult,
   parseResearchResult,
 } from "@/lib/write-payload";
-import { buildDuplicateFingerprint, buildNotionPageProperties } from "@/lib/notion-mcp";
+import {
+  buildDuplicateFingerprint,
+  buildNotionPageProperties,
+  NOTION_ROW_METADATA_PROPERTIES,
+} from "@/lib/notion-mcp";
+import { buildRowWriteMetadata } from "@/lib/write-audit";
 
 test("normalizeResearchResult trims values and deduplicates schema names", () => {
   const result = normalizeResearchResult({
@@ -270,5 +275,96 @@ test("buildNotionPageProperties rejects invalid numeric strings", () => {
         }
       ),
     /Invalid numeric value/
+  );
+});
+
+test("normalizeResearchResult preserves run metadata for downstream audit trails", () => {
+  const result = normalizeResearchResult({
+    suggestedDbTitle: "Operators",
+    summary: "Summary",
+    schema: {
+      Name: "title",
+    },
+    items: [
+      {
+        Name: "Alpha",
+        __provenance: {
+          sourceUrls: ["https://example.com/source"],
+          evidenceByField: {
+            Name: ["Company name shown on the source page"],
+          },
+        },
+      },
+    ],
+    __runMetadata: {
+      sourceSet: ["https://example.com/source", "notaurl"],
+      extractionCounts: {
+        searchQueries: 2,
+        candidateSources: 3,
+        pagesBrowsed: 1,
+        rowsExtracted: 1,
+      },
+      rejectedUrls: ["https://example.com/blocked", "notaurl"],
+    },
+  });
+
+  assert.deepEqual(result.__runMetadata, {
+    sourceSet: ["https://example.com/source"],
+    extractionCounts: {
+      searchQueries: 2,
+      candidateSources: 3,
+      pagesBrowsed: 1,
+      rowsExtracted: 1,
+    },
+    rejectedUrls: ["https://example.com/blocked"],
+  });
+});
+
+test("buildNotionPageProperties persists operator metadata alongside row provenance", () => {
+  const item = {
+    Name: "Alpha",
+    URL: "https://example.com/alpha",
+    __provenance: {
+      sourceUrls: ["https://example.com/alpha", "https://example.com/about"],
+      evidenceByField: {
+        Name: ["Company name in the page hero"],
+        URL: ["Canonical URL in metadata"],
+      },
+    },
+  };
+  const schema = {
+    Name: "title",
+    URL: "url",
+  } as const;
+  const writeMetadata = buildRowWriteMetadata(item, schema);
+  const properties = buildNotionPageProperties(item, schema, writeMetadata);
+
+  assert.equal(
+    (
+      properties[NOTION_ROW_METADATA_PROPERTIES.operationKey] as {
+        rich_text: Array<{ text: { content: string } }>;
+      }
+    ).rich_text[0]?.text.content,
+    writeMetadata.operationKey
+  );
+  assert.equal(
+    (
+      properties[NOTION_ROW_METADATA_PROPERTIES.sourceSet] as {
+        rich_text: Array<{ text: { content: string } }>;
+      }
+    ).rich_text[0]?.text.content,
+    "https://example.com/alpha\nhttps://example.com/about"
+  );
+  assert.equal(
+    (properties[NOTION_ROW_METADATA_PROPERTIES.confidenceScore] as { number: number }).number,
+    100
+  );
+  assert.match(
+    (
+      properties[NOTION_ROW_METADATA_PROPERTIES.evidenceSummary] as {
+        rich_text: Array<{ text: { content: string } }>;
+      }
+    ).rich_text[0]?.text.content ?? "",
+    /Evidence for 2 fields/
   );
 });

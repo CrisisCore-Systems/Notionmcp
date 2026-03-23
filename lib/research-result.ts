@@ -1,10 +1,24 @@
 import type { NotionSchema } from "@/lib/notion-mcp";
 
 export const RESEARCH_ITEM_PROVENANCE_KEY = "__provenance";
+export const RESEARCH_RUN_METADATA_KEY = "__runMetadata";
 
 export interface ResearchItemProvenance {
   sourceUrls: string[];
   evidenceByField?: Record<string, string[]>;
+}
+
+export interface ResearchExtractionCounts {
+  searchQueries: number;
+  candidateSources: number;
+  pagesBrowsed: number;
+  rowsExtracted: number;
+}
+
+export interface ResearchRunMetadata {
+  sourceSet: string[];
+  extractionCounts: ResearchExtractionCounts;
+  rejectedUrls: string[];
 }
 
 export interface ResearchItem extends Record<string, unknown> {
@@ -16,4 +30,5 @@ export interface ResearchResult {
   summary: string;
   schema: NotionSchema;
   items: ResearchItem[];
+  [RESEARCH_RUN_METADATA_KEY]?: ResearchRunMetadata;
 }
