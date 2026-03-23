@@ -2,47 +2,27 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ResearchResult } from "@/lib/agent";
-
-type Phase = "idle" | "researching" | "approving" | "writing" | "done" | "error";
-type PropertyType = "title" | "rich_text" | "url" | "number" | "select";
-type EditableResult = ResearchResult & {
-  schema: Record<string, PropertyType>;
-};
-type WritePayload = EditableResult & {
-  targetDatabaseId?: string;
-  resumeFromIndex?: number;
-};
-type StoredDraft = {
-  prompt: string;
-  editedResult: EditableResult;
-  useExistingDatabase: boolean;
-  targetDatabaseId: string;
-};
-type ValidationIssue = {
-  rowIndex: number;
-  columnName: string;
-  message: string;
-};
-type WriteSummary = {
-  databaseId: string;
-  itemsWritten: number;
-  propertyCount: number;
-  usedExistingDatabase: boolean;
-};
-type PendingWriteResume = {
-  databaseId: string;
-  nextRowIndex: number;
-};
-type StreamErrorPayload = {
-  message: string;
-  databaseId?: string;
-  nextRowIndex?: number;
-};
-
-interface LogEntry {
-  type: "info" | "success" | "error";
-  message: string;
-}
+import {
+  buildCsv,
+  buildNotionWebUrl,
+  formatPropertyTypeLabel,
+  getSafeFilename,
+  getUniqueColumnName,
+  getValidationIssues,
+  moveArrayItem,
+} from "./chat/chat-utils";
+import { streamSSE } from "./chat/stream";
+import type {
+  EditableResult,
+  LogEntry,
+  Phase,
+  PendingWriteResume,
+  PropertyType,
+  StreamErrorPayload,
+  WritePayload,
+  WriteSummary,
+} from "./chat/types";
+import { useDraftPersistence } from "./chat/useDraftPersistence";
 
 const EXAMPLE_PROMPTS = [
   "Find the top 5 competitors to Notion in the productivity space",
@@ -53,134 +33,7 @@ const EXAMPLE_PROMPTS = [
 
 const PROPERTY_TYPES: PropertyType[] = ["title", "rich_text", "url", "number", "select"];
 const BLOB_URL_CLEANUP_DELAY_MS = 5000;
-const DRAFT_STORAGE_KEY = "notion-research-agent-draft";
 const ACTION_TIMEOUT_WARNING_THRESHOLD_SECONDS = 100;
-
-function formatPropertyTypeLabel(type: PropertyType): string {
-  return type
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function getSafeFilename(value: string, fallback: string): string {
-  const sanitized = value
-    .replace(/[^a-z0-9_ -]/gi, " ")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .trim();
-
-  return sanitized || fallback;
-}
-
-function getUniqueColumnName(
-  requestedName: string,
-  schema: Record<string, PropertyType>,
-  excludeName?: string
-): string {
-  const trimmed = requestedName.trim() || "New Field";
-  const lowerExcluded = excludeName?.toLowerCase();
-
-  if (
-    !Object.keys(schema).some(
-      (key) => key.toLowerCase() === trimmed.toLowerCase() && key.toLowerCase() !== lowerExcluded
-    )
-  ) {
-    return trimmed;
-  }
-
-  let suffix = 2;
-  let candidate = `${trimmed} ${suffix}`;
-
-  while (
-    Object.keys(schema).some(
-      (key) => key.toLowerCase() === candidate.toLowerCase() && key.toLowerCase() !== lowerExcluded
-    )
-  ) {
-    suffix += 1;
-    candidate = `${trimmed} ${suffix}`;
-  }
-
-  return candidate;
-}
-
-function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number): T[] {
-  const nextItems = [...items];
-  const [item] = nextItems.splice(fromIndex, 1);
-  nextItems.splice(toIndex, 0, item);
-  return nextItems;
-}
-
-function escapeCsvValue(value: string): string {
-  if (value.includes("\"") || /[,\n\r]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-
-  return value;
-}
-
-function buildCsv(result: EditableResult): string {
-  const columns = Object.keys(result.schema);
-  const header = columns.map(escapeCsvValue).join(",");
-  const rows = result.items.map((item) =>
-    columns.map((column) => escapeCsvValue(item[column] ?? "")).join(",")
-  );
-
-  return [header, ...rows].join("\n");
-}
-
-function buildNotionWebUrl(databaseId: string): string {
-  return `https://www.notion.so/${databaseId.replace(/-/g, "")}`;
-}
-
-function isValidHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function getValidationIssues(result: EditableResult): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
-  const titleColumn = Object.entries(result.schema).find(([, type]) => type === "title")?.[0];
-
-  result.items.forEach((item, rowIndex) => {
-    if (titleColumn && !item[titleColumn]?.trim()) {
-      issues.push({
-        rowIndex,
-        columnName: titleColumn,
-        message: `Row ${rowIndex + 1} is missing a title value.`,
-      });
-    }
-
-    for (const [columnName, propertyType] of Object.entries(result.schema)) {
-      const value = item[columnName]?.trim() ?? "";
-
-      if (!value) continue;
-
-      if (propertyType === "url" && !isValidHttpUrl(value)) {
-        issues.push({
-          rowIndex,
-          columnName,
-          message: `Row ${rowIndex + 1} has an invalid URL in "${columnName}".`,
-        });
-      }
-
-      if (propertyType === "number" && !Number.isFinite(Number(value))) {
-        issues.push({
-          rowIndex,
-          columnName,
-          message: `Row ${rowIndex + 1} has a non-numeric value in "${columnName}".`,
-        });
-      }
-    }
-  });
-
-  return issues;
-}
 
 export default function ChatUI() {
   const [prompt, setPrompt] = useState("");
@@ -195,7 +48,7 @@ export default function ChatUI() {
   const [useExistingDatabase, setUseExistingDatabase] = useState(false);
   const [targetDatabaseId, setTargetDatabaseId] = useState("");
   const [linkActionMessage, setLinkActionMessage] = useState<string | null>(null);
-  const [savedDraft, setSavedDraft] = useState<StoredDraft | null>(null);
+  const [appAccessToken, setAppAccessToken] = useState("");
   const [pendingWriteResume, setPendingWriteResume] = useState<PendingWriteResume | null>(null);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
@@ -206,12 +59,21 @@ export default function ChatUI() {
   const lastActionRef = useRef<"research" | "write" | null>(null);
   const timeoutWarningLoggedRef = useRef(false);
 
+  const { savedDraft, clearSavedDraft } = useDraftPersistence({
+    phase,
+    prompt,
+    editedResult,
+    useExistingDatabase,
+    targetDatabaseId,
+    pendingWriteResume,
+  });
   const schemaEntries = editedResult
     ? (Object.entries(editedResult.schema) as [string, PropertyType][])
     : [];
   const titleFieldCount = schemaEntries.filter(([, type]) => type === "title").length;
   const hasSchema = schemaEntries.length > 0;
-  const targetDatabaseValid = !useExistingDatabase || !!targetDatabaseId.trim();
+  const targetDatabaseValid =
+    !!pendingWriteResume || !useExistingDatabase || !!targetDatabaseId.trim();
   const validationIssues = useMemo(
     () => (editedResult ? getValidationIssues(editedResult) : []),
     [editedResult]
@@ -261,17 +123,6 @@ export default function ChatUI() {
   };
 
   useEffect(() => {
-    try {
-      const rawDraft = window.localStorage.getItem(DRAFT_STORAGE_KEY);
-      if (!rawDraft) return;
-
-      setSavedDraft(JSON.parse(rawDraft) as StoredDraft);
-    } catch {
-      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
     if (phase === "researching" || phase === "writing") {
       setElapsedSeconds(0);
       timeoutWarningLoggedRef.current = false;
@@ -311,20 +162,6 @@ export default function ChatUI() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [editedResult, phase]);
 
-  useEffect(() => {
-    if (!editedResult || !["approving", "error"].includes(phase)) return;
-
-    const draft: StoredDraft = {
-      prompt,
-      editedResult,
-      useExistingDatabase,
-      targetDatabaseId,
-    };
-
-    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
-    setSavedDraft(draft);
-  }, [editedResult, phase, prompt, targetDatabaseId, useExistingDatabase]);
-
   const updateEditedResult = (
     updater: (previous: EditableResult) => EditableResult
   ) => {
@@ -356,6 +193,7 @@ export default function ChatUI() {
     initializeHistory(savedDraft.editedResult);
     setUseExistingDatabase(savedDraft.useExistingDatabase);
     setTargetDatabaseId(savedDraft.targetDatabaseId);
+    setPendingWriteResume(savedDraft.pendingWriteResume ?? null);
     setNotionUrl(null);
     setWriteSummary(null);
     setErrorMessage(null);
@@ -364,8 +202,7 @@ export default function ChatUI() {
   };
 
   const dismissSavedDraft = () => {
-    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
-    setSavedDraft(null);
+    clearSavedDraft();
   };
 
   const undoEdit = () => {
@@ -386,81 +223,6 @@ export default function ChatUI() {
     setEditedResult(history[nextIndex] ?? null);
   };
 
-  const streamSSE = async (
-    url: string,
-    body: unknown,
-    onUpdate: (msg: string) => void
-  ): Promise<unknown> => {
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        let message = text || `Request failed with status ${res.status}`;
-
-        try {
-          const parsed = JSON.parse(text) as { error?: string };
-          if (parsed.error) message = parsed.error;
-        } catch {
-          // Fall back to the raw response text when the error body is not JSON.
-        }
-
-        throw new Error(message);
-      }
-
-      if (!res.body) {
-        throw new Error("Streaming response was empty.");
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        let event = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            event = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            const data = JSON.parse(line.slice(6));
-            if (event === "update") onUpdate(data.message);
-            else if (event === "complete") return data;
-            else if (event === "error") {
-              const error = new Error(data.message) as Error & {
-                details?: StreamErrorPayload;
-              };
-              error.details = data as StreamErrorPayload;
-              throw error;
-            }
-          }
-        }
-      }
-
-      throw new Error(
-        "Streaming response ended unexpectedly before completion. Please try again."
-      );
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-      }
-    }
-  };
-
   const startResearch = async () => {
     if (!prompt.trim()) return;
     lastActionRef.current = "research";
@@ -478,11 +240,15 @@ export default function ChatUI() {
     try {
       addLog(`Starting research: "${prompt}"`, "info");
 
-      const data = (await streamSSE(
-        "/api/research",
-        { prompt },
-        (msg) => addLog(msg)
-      )) as ResearchResult;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const data = (await streamSSE({
+        url: "/api/research",
+        body: { prompt },
+        signal: controller.signal,
+        accessToken: appAccessToken,
+        onUpdate: (msg) => addLog(msg),
+      })) as ResearchResult;
 
       const nextResult = {
         ...data,
@@ -503,6 +269,8 @@ export default function ChatUI() {
       setErrorMessage(message);
       addLog(`Error: ${message}`, "error");
       setPhase("error");
+    } finally {
+      abortRef.current = null;
     }
   };
 
@@ -535,11 +303,15 @@ export default function ChatUI() {
         "info"
       );
 
-      const data = (await streamSSE(
-        "/api/write",
-        payload,
-        (msg) => addLog(msg)
-      )) as {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const data = (await streamSSE({
+        url: "/api/write",
+        body: payload,
+        signal: controller.signal,
+        accessToken: appAccessToken,
+        onUpdate: (msg) => addLog(msg),
+      })) as {
         databaseId: string;
         message: string;
         itemsWritten: number;
@@ -557,8 +329,7 @@ export default function ChatUI() {
         propertyCount: data.propertyCount,
         usedExistingDatabase: data.usedExistingDatabase,
       });
-      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
-      setSavedDraft(null);
+      clearSavedDraft();
       setPhase("done");
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -594,6 +365,8 @@ export default function ChatUI() {
 
       addLog(`Error: ${message}`, "error");
       setPhase("error");
+    } finally {
+      abortRef.current = null;
     }
   };
 
@@ -715,13 +488,15 @@ export default function ChatUI() {
 
   const deleteColumn = (columnName: string) => {
     updateEditedResult((previous) => {
-      const { [columnName]: _removed, ...nextSchema } = previous.schema;
+      const nextSchema = { ...previous.schema };
+      delete nextSchema[columnName];
 
       return {
         ...previous,
         schema: nextSchema,
         items: previous.items.map((item) => {
-          const { [columnName]: _value, ...rest } = item;
+          const rest = { ...item };
+          delete rest[columnName];
           return rest;
         }),
       };
@@ -741,9 +516,15 @@ export default function ChatUI() {
   const exportJson = () => {
     if (!editedResult) return;
 
-    const payload: WritePayload = useExistingDatabase && targetDatabaseId.trim()
-      ? { ...editedResult, targetDatabaseId: targetDatabaseId.trim() }
-      : editedResult;
+    const payload: WritePayload = pendingWriteResume
+      ? {
+          ...editedResult,
+          targetDatabaseId: pendingWriteResume.databaseId,
+          resumeFromIndex: pendingWriteResume.nextRowIndex,
+        }
+      : useExistingDatabase && targetDatabaseId.trim()
+        ? { ...editedResult, targetDatabaseId: targetDatabaseId.trim() }
+        : editedResult;
 
     downloadFile(
       `${getSafeFilename(editedResult.suggestedDbTitle, "research-results")}.json`,
@@ -841,13 +622,12 @@ export default function ChatUI() {
     setUseExistingDatabase(false);
     setTargetDatabaseId("");
     setLinkActionMessage(null);
-    setSavedDraft(null);
     setPendingWriteResume(null);
     setFindText("");
     setReplaceText("");
     setShowFindReplace(false);
     setPrompt("");
-    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    clearSavedDraft();
   };
 
   return (
@@ -859,6 +639,42 @@ export default function ChatUI() {
         <p style={{ color: "#666", marginTop: "0.5rem", fontSize: "0.9rem" }}>
           Browse the web → structure findings → write to Notion automatically
         </p>
+      </div>
+
+      <div
+        style={{
+          marginBottom: "1rem",
+          padding: "0.9rem 1rem",
+          background: "#f8fafc",
+          border: "1px solid #e2e8f0",
+          borderRadius: 8,
+        }}
+      >
+        <div style={{ fontSize: "0.92rem", fontWeight: 600, color: "#0f172a", marginBottom: "0.35rem" }}>
+          Local-first access
+        </div>
+        <div style={{ fontSize: "0.84rem", color: "#475569", marginBottom: "0.65rem", lineHeight: 1.5 }}>
+          Localhost requests work without extra headers. If you intentionally run this UI against a
+          private remote deployment, enter the matching <code>APP_ACCESS_TOKEN</code> so the browser
+          can send the required <code>x-app-access-token</code> header.
+        </div>
+        <label style={{ fontSize: "0.82rem", color: "#475569", display: "block", marginBottom: "0.3rem" }}>
+          App access token (optional)
+        </label>
+        <input
+          type="password"
+          value={appAccessToken}
+          onChange={(e) => setAppAccessToken(e.target.value)}
+          placeholder="Only needed for a tightly controlled remote deployment"
+          autoComplete="off"
+          style={{
+            width: "100%",
+            padding: "0.6rem 0.75rem",
+            border: "1px solid #cbd5e1",
+            borderRadius: 8,
+            boxSizing: "border-box",
+          }}
+        />
       </div>
 
       {savedDraft && phase === "idle" && (
@@ -1513,6 +1329,23 @@ export default function ChatUI() {
             </table>
           </div>
 
+          {pendingWriteResume && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                padding: "0.75rem 1rem",
+                background: "#eff6ff",
+                border: "1px solid #bfdbfe",
+                borderRadius: 8,
+                color: "#1d4ed8",
+                fontSize: "0.85rem",
+              }}
+            >
+              Resume is ready from row {pendingWriteResume.nextRowIndex + 1} in Notion database{" "}
+              <code>{pendingWriteResume.databaseId}</code>.
+            </div>
+          )}
+
           {approvalHint && (
             <div
               style={{
@@ -1576,7 +1409,7 @@ export default function ChatUI() {
                 fontWeight: 500,
               }}
             >
-              {useExistingDatabase ? "➕ Add to Notion" : "✍️ Write to Notion"} ({editedResult.items.length} rows)
+              {pendingWriteResume ? "Resume write" : useExistingDatabase ? "➕ Add to Notion" : "✍️ Write to Notion"} ({editedResult.items.length} rows)
             </button>
             <button
               onClick={reset}
