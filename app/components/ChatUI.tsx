@@ -5,17 +5,18 @@ import type { ResearchResult } from "@/lib/agent";
 import {
   buildCsv,
   buildNotionWebUrl,
-  formatPropertyTypeLabel,
   getSafeFilename,
   getUniqueColumnName,
   getValidationIssues,
   moveArrayItem,
 } from "./chat/chat-utils";
+import { CompletionPanel } from "./chat/CompletionPanel";
+import { RowEditor } from "./chat/RowEditor";
+import { SchemaEditor } from "./chat/SchemaEditor";
 import { streamSSE } from "./chat/stream";
 import type {
   EditableResult,
   LogEntry,
-  Phase,
   PendingWriteResume,
   PropertyType,
   StreamErrorPayload,
@@ -23,6 +24,7 @@ import type {
   WriteSummary,
 } from "./chat/types";
 import { useDraftPersistence } from "./chat/useDraftPersistence";
+import { usePhaseState } from "./chat/usePhaseState";
 
 const EXAMPLE_PROMPTS = [
   "Find the top 5 competitors to Notion in the productivity space",
@@ -37,14 +39,14 @@ const ACTION_TIMEOUT_WARNING_THRESHOLD_SECONDS = 100;
 
 export default function ChatUI() {
   const [prompt, setPrompt] = useState("");
-  const [phase, setPhase] = useState<Phase>("idle");
+  const { phase, setPhase, errorMessage, setErrorMessage, lastActionRef, startAction, showApproval, showDone, showError } =
+    usePhaseState();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [editedResult, setEditedResult] = useState<EditableResult | null>(null);
   const [history, setHistory] = useState<EditableResult[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [notionUrl, setNotionUrl] = useState<string | null>(null);
   const [writeSummary, setWriteSummary] = useState<WriteSummary | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [useExistingDatabase, setUseExistingDatabase] = useState(false);
   const [targetDatabaseId, setTargetDatabaseId] = useState("");
   const [linkActionMessage, setLinkActionMessage] = useState<string | null>(null);
@@ -56,7 +58,6 @@ export default function ChatUI() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const historyIndexRef = useRef(-1);
-  const lastActionRef = useRef<"research" | "write" | null>(null);
   const timeoutWarningLoggedRef = useRef(false);
 
   const { savedDraft, clearSavedDraft } = useDraftPersistence({
@@ -225,8 +226,7 @@ export default function ChatUI() {
 
   const startResearch = async () => {
     if (!prompt.trim()) return;
-    lastActionRef.current = "research";
-    setPhase("researching");
+    startAction("research");
     setLogs([]);
     setEditedResult(null);
     setHistory([]);
@@ -257,7 +257,7 @@ export default function ChatUI() {
       setEditedResult(nextResult);
       initializeHistory(nextResult);
       addLog(`✅ Research complete — found ${data.items.length} items`, "success");
-      setPhase("approving");
+      showApproval();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         addLog("Research cancelled.", "info");
@@ -266,9 +266,8 @@ export default function ChatUI() {
       }
 
       const message = err instanceof Error ? err.message : String(err);
-      setErrorMessage(message);
       addLog(`Error: ${message}`, "error");
-      setPhase("error");
+      showError(message);
     } finally {
       abortRef.current = null;
     }
@@ -276,9 +275,7 @@ export default function ChatUI() {
 
   const writeToNotion = async () => {
     if (!editedResult || !canWrite) return;
-    lastActionRef.current = "write";
-    setPhase("writing");
-    setErrorMessage(null);
+    startAction("write");
     setWriteSummary(null);
     const resumeTarget = pendingWriteResume;
     const shouldResumeWrite = !!resumeTarget;
@@ -330,11 +327,11 @@ export default function ChatUI() {
         usedExistingDatabase: data.usedExistingDatabase,
       });
       clearSavedDraft();
-      setPhase("done");
+      showDone();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         addLog("Notion write cancelled.", "info");
-        setPhase("approving");
+        showApproval();
         return;
       }
 
@@ -364,7 +361,7 @@ export default function ChatUI() {
       }
 
       addLog(`Error: ${message}`, "error");
-      setPhase("error");
+      showError(message);
     } finally {
       abortRef.current = null;
     }
@@ -377,9 +374,7 @@ export default function ChatUI() {
   const updateItemValue = (rowIndex: number, column: string, value: string) => {
     updateEditedResult((previous) => ({
       ...previous,
-      items: previous.items.map((item, index) =>
-        index === rowIndex ? { ...item, [column]: value } : item
-      ),
+      items: previous.items.map((item, index) => (index === rowIndex ? { ...item, [column]: value } : item)),
     }));
   };
 
@@ -942,391 +937,37 @@ export default function ChatUI() {
           </div>
 
           <div style={{ marginBottom: "1rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", marginBottom: "0.5rem", flexWrap: "wrap" }}>
-              <div style={{ fontSize: "0.85rem", color: "#555" }}>
-                Schema ({schemaEntries.length} properties)
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <button
-                  onClick={undoEdit}
-                  disabled={historyIndex <= 0}
-                  style={{
-                    padding: "0.45rem 0.8rem",
-                    background: historyIndex <= 0 ? "#f3f4f6" : "none",
-                    border: "1px solid #ddd",
-                    borderRadius: 8,
-                    cursor: historyIndex <= 0 ? "default" : "pointer",
-                    fontSize: "0.8rem",
-                    color: "#333",
-                  }}
-                >
-                  Undo
-                </button>
-                <button
-                  onClick={redoEdit}
-                  disabled={historyIndex >= history.length - 1}
-                  style={{
-                    padding: "0.45rem 0.8rem",
-                    background: historyIndex >= history.length - 1 ? "#f3f4f6" : "none",
-                    border: "1px solid #ddd",
-                    borderRadius: 8,
-                    cursor:
-                      historyIndex >= history.length - 1 ? "default" : "pointer",
-                    fontSize: "0.8rem",
-                    color: "#333",
-                  }}
-                >
-                  Redo
-                </button>
-                <button
-                  onClick={addColumn}
-                  style={{
-                    padding: "0.45rem 0.8rem",
-                    background: "none",
-                    border: "1px solid #ddd",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    fontSize: "0.8rem",
-                    color: "#333",
-                  }}
-                >
-                  + Add column
-                </button>
-              </div>
-            </div>
-            <div style={{ display: "grid", gap: "0.5rem" }}>
-              {schemaEntries.map(([name, type], index) => (
-                <div
-                  key={`${name}-${index}`}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(180px, 1fr) minmax(140px, 180px) auto",
-                    gap: "0.5rem",
-                    alignItems: "center",
-                  }}
-                >
-                  <input
-                    aria-label={`Column name ${index + 1}`}
-                    value={name}
-                    onChange={(e) => renameColumn(name, e.target.value)}
-                    style={{
-                      padding: "0.5rem",
-                      border: "1px solid #ddd",
-                      borderRadius: 6,
-                      width: "100%",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                  <select
-                    aria-label={`Column type for ${name}`}
-                    value={type}
-                    onChange={(e) => updateColumnType(name, e.target.value as PropertyType)}
-                    style={{
-                      padding: "0.5rem",
-                      border: "1px solid #ddd",
-                      borderRadius: 6,
-                      width: "100%",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    {PROPERTY_TYPES.map((propertyType) => (
-                      <option key={propertyType} value={propertyType}>
-                        {formatPropertyTypeLabel(propertyType)}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => deleteColumn(name)}
-                    aria-label={`Delete column ${name}`}
-                    style={{
-                      padding: "0.45rem 0.8rem",
-                      background: "none",
-                      border: "1px solid #f5c2c7",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      fontSize: "0.8rem",
-                      color: "#b42318",
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
+            <SchemaEditor
+              schemaEntries={schemaEntries}
+              propertyTypes={PROPERTY_TYPES}
+              historyIndex={historyIndex}
+              historyLength={history.length}
+              onUndo={undoEdit}
+              onRedo={redoEdit}
+              onAddColumn={addColumn}
+              onRenameColumn={renameColumn}
+              onUpdateColumnType={updateColumnType}
+              onDeleteColumn={deleteColumn}
+            />
 
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", marginBottom: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ fontSize: "0.85rem", color: "#555" }}>
-              Rows ({editedResult.items.length})
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button
-                onClick={() => setShowFindReplace((current) => !current)}
-                style={{
-                  padding: "0.45rem 0.8rem",
-                  background: "none",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                  color: "#333",
-                }}
-              >
-                {showFindReplace ? "Hide replace" : "Find & replace"}
-              </button>
-              <button
-                onClick={exportJson}
-                style={{
-                  padding: "0.45rem 0.8rem",
-                  background: "none",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                  color: "#333",
-                }}
-              >
-                Download JSON
-              </button>
-              <button
-                onClick={exportCsv}
-                style={{
-                  padding: "0.45rem 0.8rem",
-                  background: "none",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                  color: "#333",
-                }}
-              >
-                Download CSV
-              </button>
-            </div>
-          </div>
-
-          {showFindReplace && (
-            <div
-              style={{
-                marginBottom: "0.75rem",
-                padding: "0.85rem",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                background: "#fafafa",
-              }}
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(180px, 1fr) minmax(180px, 1fr) auto",
-                  gap: "0.5rem",
-                  alignItems: "center",
-                }}
-              >
-                <input
-                  value={findText}
-                  onChange={(e) => setFindText(e.target.value)}
-                  placeholder="Find text"
-                  style={{
-                    padding: "0.5rem",
-                    border: "1px solid #ddd",
-                    borderRadius: 6,
-                    width: "100%",
-                    boxSizing: "border-box",
-                  }}
-                />
-                <input
-                  value={replaceText}
-                  onChange={(e) => setReplaceText(e.target.value)}
-                  placeholder="Replace with"
-                  style={{
-                    padding: "0.5rem",
-                    border: "1px solid #ddd",
-                    borderRadius: 6,
-                    width: "100%",
-                    boxSizing: "border-box",
-                  }}
-                />
-                <button
-                  onClick={replaceAcrossRows}
-                  disabled={!findText}
-                  style={{
-                    padding: "0.5rem 0.85rem",
-                    background: findText ? "#111827" : "#d1d5db",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: findText ? "pointer" : "default",
-                    fontSize: "0.8rem",
-                  }}
-                >
-                  Replace all
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div style={{ overflowX: "auto", marginBottom: "1.25rem" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
-              <thead>
-                <tr style={{ background: "#f3f4f6" }}>
-                  {schemaEntries.map(([columnName]) => (
-                    <th
-                      key={columnName}
-                      style={{
-                        padding: "0.5rem 0.75rem",
-                        textAlign: "left",
-                        fontWeight: 500,
-                        border: "1px solid #e5e7eb",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {columnName}
-                    </th>
-                  ))}
-                  <th
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      textAlign: "left",
-                      fontWeight: 500,
-                      border: "1px solid #e5e7eb",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {editedResult.items.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={schemaEntries.length + 1}
-                      style={{
-                        padding: "0.75rem",
-                        border: "1px solid #e5e7eb",
-                        color: "#666",
-                      }}
-                    >
-                      All rows removed. Use the “Start over” button below to regenerate results.
-                    </td>
-                  </tr>
-                ) : (
-                  editedResult.items.map((item, rowIndex) => (
-                    <tr key={rowIndex} style={{ borderBottom: "1px solid #e5e7eb" }}>
-                      {schemaEntries.map(([columnName, columnType]) => (
-                        <td
-                          key={columnName}
-                          style={{
-                            padding: "0.5rem 0.75rem",
-                            border: "1px solid #e5e7eb",
-                            minWidth: 180,
-                            verticalAlign: "top",
-                          }}
-                        >
-                          <textarea
-                            aria-label={`${columnName} for row ${rowIndex + 1}`}
-                            value={item[columnName] ?? ""}
-                            onChange={(e) => updateItemValue(rowIndex, columnName, e.target.value)}
-                            rows={columnType === "rich_text" ? 3 : 2}
-                            style={{
-                              width: "100%",
-                              border: invalidCellLookup.has(`${rowIndex}:${columnName}`)
-                                ? "1px solid #f59e0b"
-                                : "1px solid #ddd",
-                              borderRadius: 6,
-                              padding: "0.45rem 0.5rem",
-                              fontSize: "0.85rem",
-                              fontFamily: "inherit",
-                              boxSizing: "border-box",
-                              background: invalidCellLookup.has(`${rowIndex}:${columnName}`)
-                                ? "#fffbeb"
-                                : "#fff",
-                              resize: "vertical",
-                            }}
-                          />
-                        </td>
-                      ))}
-                      <td
-                        style={{
-                          padding: "0.5rem 0.75rem",
-                          border: "1px solid #e5e7eb",
-                          verticalAlign: "top",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                          <button
-                            onClick={() => moveItem(rowIndex, -1)}
-                            disabled={rowIndex === 0}
-                            aria-label={`Move row ${rowIndex + 1} up`}
-                            style={{
-                              padding: "0.45rem 0.7rem",
-                              background: rowIndex === 0 ? "#f3f4f6" : "none",
-                              border: "1px solid #ddd",
-                              borderRadius: 6,
-                              cursor: rowIndex === 0 ? "default" : "pointer",
-                              fontSize: "0.8rem",
-                              color: "#333",
-                            }}
-                          >
-                            ↑
-                          </button>
-                          <button
-                            onClick={() => moveItem(rowIndex, 1)}
-                            disabled={rowIndex === editedResult.items.length - 1}
-                            aria-label={`Move row ${rowIndex + 1} down`}
-                            style={{
-                              padding: "0.45rem 0.7rem",
-                              background:
-                                rowIndex === editedResult.items.length - 1 ? "#f3f4f6" : "none",
-                              border: "1px solid #ddd",
-                              borderRadius: 6,
-                              cursor:
-                                rowIndex === editedResult.items.length - 1 ? "default" : "pointer",
-                              fontSize: "0.8rem",
-                              color: "#333",
-                            }}
-                          >
-                            ↓
-                          </button>
-                           <button
-                             onClick={() => duplicateItem(rowIndex)}
-                             aria-label={`Duplicate row ${rowIndex + 1}`}
-                             style={{
-                               padding: "0.45rem 0.7rem",
-                               background: "none",
-                               border: "1px solid #ddd",
-                               borderRadius: 6,
-                               cursor: "pointer",
-                               fontSize: "0.8rem",
-                               color: "#333",
-                             }}
-                           >
-                             Copy
-                           </button>
-                           <button
-                             onClick={() => removeItem(rowIndex)}
-                             aria-label={`Remove row ${rowIndex + 1}`}
-                             style={{
-                              padding: "0.45rem 0.7rem",
-                              background: "none",
-                              border: "1px solid #f5c2c7",
-                              borderRadius: 6,
-                              cursor: "pointer",
-                              fontSize: "0.8rem",
-                              color: "#b42318",
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <RowEditor
+              editedResult={editedResult}
+              schemaEntries={schemaEntries}
+              invalidCellLookup={invalidCellLookup}
+              showFindReplace={showFindReplace}
+              findText={findText}
+              replaceText={replaceText}
+              onToggleFindReplace={() => setShowFindReplace((current) => !current)}
+              onFindTextChange={setFindText}
+              onReplaceTextChange={setReplaceText}
+              onReplaceAcrossRows={replaceAcrossRows}
+              onExportJson={exportJson}
+              onExportCsv={exportCsv}
+              onUpdateItemValue={updateItemValue}
+              onMoveItem={moveItem}
+              onDuplicateItem={duplicateItem}
+              onRemoveItem={removeItem}
+            />
           </div>
 
           {pendingWriteResume && (
@@ -1430,127 +1071,19 @@ export default function ChatUI() {
       )}
 
       {phase === "done" && (
-        <div
-          style={{
-            marginTop: "1.5rem",
-            background: "#f0fdf4",
-            border: "1px solid #bbf7d0",
-            borderRadius: 8,
-            padding: "1.25rem",
+        <CompletionPanel
+          notionUrl={notionUrl}
+          writeSummary={writeSummary}
+          linkActionMessage={linkActionMessage}
+          canShare={typeof navigator !== "undefined" && typeof navigator.share === "function"}
+          onShare={() => {
+            void shareNotionLink();
           }}
-        >
-          <div style={{ fontSize: "1rem", fontWeight: 600, color: "#166534", marginBottom: "0.5rem" }}>
-            ✅ Written to Notion!
-          </div>
-          {writeSummary && (
-            <div
-              style={{
-                marginBottom: "0.9rem",
-                padding: "0.75rem 0.9rem",
-                background: "#dcfce7",
-                borderRadius: 8,
-                color: "#166534",
-                fontSize: "0.88rem",
-              }}
-            >
-              <div>
-                Database mode: {writeSummary.usedExistingDatabase ? "existing database" : "new database"}
-              </div>
-              <div>Rows written: {writeSummary.itemsWritten}</div>
-              <div>Properties written: {writeSummary.propertyCount}</div>
-              <div style={{ wordBreak: "break-all" }}>Database ID: {writeSummary.databaseId}</div>
-            </div>
-          )}
-          {notionUrl && (
-            <div style={{ display: "grid", gap: "0.65rem" }}>
-              <div style={{ fontSize: "0.88rem", color: "#166534" }}>
-                On Android, the easiest flow is: tap the link, and if your browser stays open,
-                use Share or Copy to hand the same link to the Notion app.
-              </div>
-              <div
-                style={{
-                  padding: "0.7rem 0.8rem",
-                  background: "#dcfce7",
-                  borderRadius: 8,
-                  fontSize: "0.84rem",
-                  color: "#166534",
-                }}
-              >
-                1. Tap <strong>Open in Notion</strong>.
-                <br />
-                2. If Android opens the browser instead of the app, tap{" "}
-                <strong>Share link</strong> or <strong>Copy Android/web link</strong>.
-                <br />
-                3. Open the shared or copied link in the Notion app.
-              </div>
-              <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap", alignItems: "center" }}>
-                <a
-                  href={notionUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: "#166534", fontSize: "0.9rem" }}
-                >
-                  Open in Notion →
-                </a>
-                {typeof navigator !== "undefined" && typeof navigator.share === "function" && (
-                  <button
-                    onClick={() => {
-                      void shareNotionLink();
-                    }}
-                    style={{
-                      padding: "0.45rem 0.8rem",
-                      background: "none",
-                      border: "1px solid #86efac",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      fontSize: "0.85rem",
-                      color: "#166534",
-                    }}
-                  >
-                    Share link
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    void copyNotionLink();
-                  }}
-                  style={{
-                    padding: "0.45rem 0.8rem",
-                    background: "none",
-                    border: "1px solid #86efac",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    fontSize: "0.85rem",
-                    color: "#166534",
-                  }}
-                >
-                  Copy Android/web link
-                </button>
-              </div>
-              <div style={{ wordBreak: "break-all", fontSize: "0.82rem", color: "#166534" }}>
-                {notionUrl}
-              </div>
-              {linkActionMessage && (
-                <div style={{ fontSize: "0.82rem", color: "#166534" }}>{linkActionMessage}</div>
-              )}
-            </div>
-          )}
-          <br />
-          <button
-            onClick={reset}
-            style={{
-              marginTop: "1rem",
-              padding: "0.6rem 1.25rem",
-              background: "none",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: "0.9rem",
-            }}
-          >
-            New research
-          </button>
-        </div>
+          onCopy={() => {
+            void copyNotionLink();
+          }}
+          onReset={reset}
+        />
       )}
 
       {phase === "error" && (

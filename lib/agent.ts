@@ -5,6 +5,7 @@ import {
   type FunctionDeclaration,
 } from "@google/generative-ai";
 import { browseAndExtract, searchWeb } from "./browser";
+import { mapWithConcurrencyLimit } from "./concurrency";
 import type { ResearchResult } from "./research-result";
 import { parseResearchResult } from "./write-payload";
 
@@ -22,12 +23,17 @@ function getGeminiClient() {
 
   return new GoogleGenerativeAI(apiKey);
 }
+const MAX_ITERATIONS = 15;
+const MAX_PARALLEL_TOOL_CALLS = 2;
+
 const SYSTEM_PROMPT = `You are a research agent that browses the web and structures findings into a Notion database.
 
 Given a research prompt, you will:
 1. Use search_web to find relevant pages
 2. Use browse_url to extract detailed information from each page
 3. Compile findings into structured rows
+
+Tool responses may fail. Failed tool responses will include {"ok": false, "error": {...}}. Treat those as failures, not as source material.
 
 When you have gathered enough data (at least 3-5 items), respond with ONLY a valid JSON object in this exact format:
 {
@@ -40,13 +46,26 @@ When you have gathered enough data (at least 3-5 items), respond with ONLY a val
     "Other Field": "rich_text"
   },
   "items": [
-    { "Name": "...", "URL": "...", "Description": "...", "Other Field": "..." }
+    {
+      "Name": "...",
+      "URL": "...",
+      "Description": "...",
+      "Other Field": "...",
+      "__provenance": {
+        "sourceUrls": ["https://example.com/a", "https://example.com/b"],
+        "evidenceByField": {
+          "Name": ["Short snippet proving the name"],
+          "Description": ["Short snippet proving the description"]
+        }
+      }
+    }
   ]
 }
 
 Schema property types: "title" (required, one per schema), "rich_text", "url", "number", "select"
 Always include a "Name" title field and a "URL" url field when relevant.
-Tailor the schema to the research topic. Be specific and useful.`;
+Every item must include "__provenance.sourceUrls" with one or more public source URLs used for that row, plus brief evidence snippets when you can support individual fields.
+Do not add "__provenance" to the schema. Tailor the schema to the research topic. Be specific and useful.`;
 
 const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
@@ -109,8 +128,6 @@ export async function runResearchAgent(
 
   const chat = model.startChat();
   let response = await chat.sendMessage(prompt);
-
-  const MAX_ITERATIONS = 15;
   let iterations = 0;
 
   while (iterations < MAX_ITERATIONS) {
@@ -142,32 +159,64 @@ export async function runResearchAgent(
       }
     }
 
-    // Execute all tool calls in parallel
-    const toolResults = await Promise.all(
-      calls.map(async (call) => {
-        let result = "";
+    // Execute tool calls with a small concurrency limit to avoid overloading browser + upstream services.
+    const toolResults = await mapWithConcurrencyLimit(
+      calls,
+      MAX_PARALLEL_TOOL_CALLS,
+      async (call) => {
         const args = getToolArgs(call.args);
 
-        if (call.name === "search_web") {
-          const query = args.query ?? "";
-          onUpdate(`🔍 Searching: "${query}"`);
-          const results = await searchWeb(query);
-          result = JSON.stringify(results, null, 2);
-        } else if (call.name === "browse_url") {
-          const url = args.url ?? "";
-          onUpdate(`🌐 Browsing: ${url}`);
-          result = await browseAndExtract(url);
-        } else {
-          result = `Unknown tool: ${call.name}`;
-        }
+        try {
+          if (call.name === "search_web") {
+            const query = args.query ?? "";
+            onUpdate(`🔍 Searching: "${query}"`);
+            const results = await searchWeb(query);
 
-        return {
-          functionResponse: {
-            name: call.name,
-            response: { result },
-          },
-        };
-      })
+            return {
+              functionResponse: {
+                name: call.name,
+                response: {
+                  ok: true,
+                  result: results,
+                },
+              },
+            };
+          }
+
+          if (call.name === "browse_url") {
+            const url = args.url ?? "";
+            onUpdate(`🌐 Browsing: ${url}`);
+            const result = await browseAndExtract(url);
+
+            return {
+              functionResponse: {
+                name: call.name,
+                response: {
+                  ok: true,
+                  result,
+                },
+              },
+            };
+          }
+
+          throw new Error(`Unknown tool: ${call.name}`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          onUpdate(`⚠️ ${call.name} failed: ${message}`);
+
+          return {
+            functionResponse: {
+              name: call.name,
+              response: {
+                ok: false,
+                error: {
+                  message,
+                },
+              },
+            },
+          };
+        }
+      }
     );
 
     response = await chat.sendMessage(toolResults);

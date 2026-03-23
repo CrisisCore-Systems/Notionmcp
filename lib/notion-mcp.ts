@@ -2,17 +2,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createRequire } from "node:module";
+import type { ResearchItem } from "@/lib/research-result";
 
 let mcpClient: Client | null = null;
 let mcpTransport: Transport | null = null;
-const NOTION_API_VERSION = "2022-06-28";
 const require = createRequire(import.meta.url);
 const dataSourceIdCache = new Map<string, string>();
 const TOOL_NAME_ALIASES: Record<string, string[]> = {
-  notion_create_database: ["notion_create_database", "API-create-a-data-source"],
-  notion_create_page: ["notion_create_page", "API-post-page"],
-  notion_retrieve_database: ["notion_retrieve_database", "API-retrieve-a-database"],
-  notion_query_data_source: ["notion_query_data_source", "API-query-data-source"],
+  notion_create_database: ["create-a-data-source", "API-create-a-data-source", "notion_create_database"],
+  notion_create_page: ["post-page", "API-post-page", "notion_create_page"],
+  notion_retrieve_database: ["retrieve-a-database", "API-retrieve-a-database", "notion_retrieve_database"],
+  notion_query_data_source: ["query-data-source", "API-query-data-source", "notion_query_data_source"],
 };
 
 interface NotionToolResponse {
@@ -37,8 +37,8 @@ interface NotionQueryResult {
 type NotionTransportFactory = () => Transport;
 
 export interface DuplicateTracker {
-  has(data: Record<string, string>): boolean;
-  remember(data: Record<string, string>): void;
+  has(data: ResearchItem): boolean;
+  remember(data: ResearchItem): void;
 }
 
 /** Read a required environment variable or throw a setup error. */
@@ -58,21 +58,56 @@ function getNotionMcpCommand(): string {
   return require.resolve("@notionhq/notion-mcp-server/bin/cli.mjs");
 }
 
+function parseOpenApiHeaders(value: string | undefined): Record<string, string> {
+  if (!value?.trim()) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string")
+        .map(([key, headerValue]) => [key, headerValue.trim()])
+        .filter(([, headerValue]) => headerValue.length > 0)
+    );
+  } catch {
+    return {};
+  }
+}
+
+function buildNotionMcpEnv(notionToken: string): Record<string, string> {
+  const headers = parseOpenApiHeaders(process.env.OPENAPI_MCP_HEADERS);
+  const notionApiVersion = process.env.NOTION_API_VERSION?.trim();
+  const mergedHeaders = {
+    ...headers,
+    Authorization: headers.Authorization || `Bearer ${notionToken}`,
+    ...(notionApiVersion ? { "Notion-Version": notionApiVersion } : {}),
+  };
+
+  return Object.fromEntries(
+    Object.entries({
+      ...process.env,
+      NOTION_TOKEN: notionToken,
+      ...(Object.keys(headers).length > 0 || notionApiVersion
+        ? { OPENAPI_MCP_HEADERS: JSON.stringify(mergedHeaders) }
+        : {}),
+    }).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+  );
+}
+
 const notionTransportFactory: NotionTransportFactory = () => {
   const notionToken = getRequiredEnv("NOTION_TOKEN");
 
   return new StdioClientTransport({
     command: process.execPath,
     args: [getNotionMcpCommand()],
-    env: {
-      ...process.env,
-      // The local stdio transport is intentionally isolated behind this factory so the
-      // rest of the integration can swap to a different transport in the future.
-      OPENAPI_MCP_HEADERS: JSON.stringify({
-        Authorization: `Bearer ${notionToken}`,
-        "Notion-Version": NOTION_API_VERSION,
-      }),
-    },
+    env: buildNotionMcpEnv(notionToken),
   });
 };
 
@@ -350,14 +385,14 @@ function getIdentityPropertyNames(schema: NotionSchema): string[] {
 }
 
 export function buildDuplicateFingerprint(
-  data: Record<string, string>,
+  data: ResearchItem,
   schema: NotionSchema
 ): string | null {
   const parts = getIdentityPropertyNames(schema)
     .map((key) => {
       const type = schema[key];
       const rawValue = data[key];
-      const trimmedValue = rawValue?.trim();
+      const trimmedValue = typeof rawValue === "string" ? rawValue.trim() : "";
 
       if (!type || !trimmedValue) {
         return null;
@@ -515,7 +550,7 @@ export async function createDuplicateTracker(
 
 export async function addRow(
   databaseId: string,
-  data: Record<string, string>,
+  data: ResearchItem,
   schema: NotionSchema,
   duplicateTracker?: DuplicateTracker
 ): Promise<{ created: boolean }> {
@@ -527,7 +562,7 @@ export async function addRow(
 
   for (const [key, value] of Object.entries(data)) {
     const type = schema[key];
-    if (!type || !value) continue;
+    if (!type || typeof value !== "string" || !value) continue;
 
     if (type === "title") {
       properties[key] = { title: [{ text: { content: value } }] };

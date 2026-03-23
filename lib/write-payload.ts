@@ -1,5 +1,10 @@
 import type { NotionSchema } from "@/lib/notion-mcp";
-import type { ResearchResult } from "@/lib/research-result";
+import {
+  RESEARCH_ITEM_PROVENANCE_KEY,
+  type ResearchItem,
+  type ResearchItemProvenance,
+  type ResearchResult,
+} from "@/lib/research-result";
 
 const NOTION_PROPERTY_TYPES = new Set(["title", "rich_text", "url", "number", "select"]);
 
@@ -45,6 +50,69 @@ function normalizeTextValue(value: unknown): string {
   return "";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeSourceUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+
+  return value
+    .map((entry) => normalizeTextValue(entry))
+    .filter((entry) => {
+      if (!entry || !isValidHttpUrl(entry) || seen.has(entry)) {
+        return false;
+      }
+
+      seen.add(entry);
+      return true;
+    });
+}
+
+function normalizeEvidenceByField(value: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const normalized = Object.fromEntries(
+    Object.entries(value)
+      .map(([fieldName, fieldEvidence]) => [
+        normalizeTextValue(fieldName),
+        Array.isArray(fieldEvidence)
+          ? fieldEvidence
+              .map((entry) => normalizeTextValue(entry))
+              .filter(Boolean)
+              .slice(0, 5)
+          : [],
+      ])
+      .filter(([fieldName, fieldEvidence]) => fieldName && fieldEvidence.length > 0)
+  );
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeProvenance(value: unknown): ResearchItemProvenance | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const sourceUrls = normalizeSourceUrls(value.sourceUrls);
+  const evidenceByField = normalizeEvidenceByField(value.evidenceByField);
+
+  if (sourceUrls.length === 0 && !evidenceByField) {
+    return undefined;
+  }
+
+  return {
+    ...(sourceUrls.length > 0 ? { sourceUrls } : { sourceUrls: [] }),
+    ...(evidenceByField ? { evidenceByField } : {}),
+  };
+}
+
 export function normalizeResearchResult(result: ResearchResult): ResearchResult {
   const suggestedDbTitle = result.suggestedDbTitle.trim();
   const summary = result.summary.trim();
@@ -71,7 +139,7 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
 
   const normalizedItems = result.items
     .map((item, rowIndex) => {
-      const normalizedItem: Record<string, string> = {};
+      const normalizedItem: ResearchItem = {};
 
       for (const [originalKey, normalizedKey] of normalizedKeyLookup.entries()) {
         const propertyType = normalizedSchema[normalizedKey];
@@ -107,9 +175,22 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
         normalizedItem[normalizedKey] = value;
       }
 
+      const provenance = normalizeProvenance(item[RESEARCH_ITEM_PROVENANCE_KEY]);
+
+      if (provenance) {
+        normalizedItem[RESEARCH_ITEM_PROVENANCE_KEY] = provenance;
+      }
+
       return normalizedItem;
     })
-    .filter((item) => Object.values(item).some((value) => value.trim().length > 0));
+    .filter((item) =>
+      Object.entries(item).some(
+        ([key, value]) =>
+          key !== RESEARCH_ITEM_PROVENANCE_KEY &&
+          typeof value === "string" &&
+          value.trim().length > 0
+      )
+    );
 
   if (normalizedItems.length === 0) {
     throw new Error("At least one non-empty item is required");

@@ -1,16 +1,31 @@
-import { chromium, Browser, type Page } from "playwright";
+import {
+  chromium,
+  Browser,
+  type BrowserContext,
+  type Page,
+  type Route,
+} from "playwright";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 let browser: Browser | null = null;
 const MAX_SEARCH_RESULTS = 6;
 const MAX_EXTRACTED_CHARACTERS = 8000;
+const MAX_EVIDENCE_SNIPPETS = 8;
 const blockedUrlValidationCache = new Map<string, Promise<void>>();
 
 export interface SearchResult {
   title: string;
   url: string;
   snippet: string;
+}
+
+export interface BrowseResult {
+  url: string;
+  title: string;
+  content: string;
+  sourceUrls: string[];
+  evidenceSnippets: string[];
 }
 
 type SearchAdapter = {
@@ -31,6 +46,29 @@ async function waitForSettledPage(page: Page): Promise<void> {
   } catch {
     // Some pages never fully settle. Continue with the best available DOM.
   }
+}
+
+async function allowOnlyPublicRequests(route: Route): Promise<void> {
+  try {
+    await validatePublicHttpUrl(route.request().url());
+    await route.continue();
+  } catch {
+    await route.abort();
+  }
+}
+
+async function createIsolatedPage(): Promise<{ context: BrowserContext; page: Page }> {
+  const b = await getBrowser();
+  const context = await b.newContext({
+    serviceWorkers: "block",
+  });
+
+  await context.route("**/*", allowOnlyPublicRequests);
+
+  return {
+    context,
+    page: await context.newPage(),
+  };
 }
 
 function normalizeIpAddress(value: string): string {
@@ -266,8 +304,7 @@ async function searchWithSerper(query: string): Promise<SearchResult[]> {
 }
 
 async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
-  const b = await getBrowser();
-  const page = await b.newPage();
+  const { context, page } = await createIsolatedPage();
 
   try {
     await page.goto(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
@@ -297,7 +334,7 @@ async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
 
     return normalizeSearchResults(results);
   } finally {
-    await page.close();
+    await context.close();
   }
 }
 
@@ -310,24 +347,15 @@ function getSearchAdapter(): SearchAdapter {
 }
 
 /** Navigate to a URL and extract readable text content */
-export async function browseAndExtract(url: string): Promise<string> {
-  const b = await getBrowser();
-  const page = await b.newPage();
+export async function browseAndExtract(url: string): Promise<BrowseResult> {
+  const { context, page } = await createIsolatedPage();
 
   try {
     await validatePublicHttpUrl(url);
-    await page.route("**/*", async (route) => {
-      try {
-        await validatePublicHttpUrl(route.request().url());
-        await route.continue();
-      } catch {
-        await route.abort();
-      }
-    });
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await waitForSettledPage(page);
 
-    const content = await page.evaluate((maxCharacters) => {
+    const content = await page.evaluate(({ maxCharacters, maxEvidenceSnippets }) => {
       const root =
         document.querySelector("main, article, [role='main'], .main, #main") ??
         document.body;
@@ -415,14 +443,25 @@ export async function browseAndExtract(url: string): Promise<string> {
         }
       }
 
-      return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, maxCharacters);
-    }, MAX_EXTRACTED_CHARACTERS);
+      return {
+        title: document.title.trim(),
+        content: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, maxCharacters),
+        sourceUrls: Array.from(new Set([document.location.href, ...notableLinks
+          .map((entry) => entry.split(": ").slice(1).join(": ").trim())
+          .filter(Boolean)])),
+        evidenceSnippets: lines.slice(0, maxEvidenceSnippets),
+      };
+    }, { maxCharacters: MAX_EXTRACTED_CHARACTERS, maxEvidenceSnippets: MAX_EVIDENCE_SNIPPETS });
 
-    return content || "No content extracted.";
-  } catch (err) {
-    return `Error browsing ${url}: ${err instanceof Error ? err.message : String(err)}`;
+    return {
+      url: page.url(),
+      title: content.title,
+      content: content.content || "No content extracted.",
+      sourceUrls: Array.from(new Set(content.sourceUrls)).slice(0, MAX_SEARCH_RESULTS + 1),
+      evidenceSnippets: content.evidenceSnippets,
+    };
   } finally {
-    await page.close();
+    await context.close();
   }
 }
 
@@ -430,6 +469,10 @@ export async function browseAndExtract(url: string): Promise<string> {
 export async function searchWeb(
   query: string
 ): Promise<SearchResult[]> {
+  if (!query.trim()) {
+    throw new Error("Search query cannot be empty.");
+  }
+
   const adapter = getSearchAdapter();
 
   try {
@@ -438,17 +481,18 @@ export async function searchWeb(
     if (adapter.name !== "duckduckgo") {
       try {
         return await searchWithDuckDuckGo(query);
-      } catch {
-        // Fall through to the standard error payload below.
+      } catch (fallbackError) {
+        const primaryMessage = err instanceof Error ? err.message : String(err);
+        const fallbackMessage =
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        throw new Error(
+          `Search failed via ${adapter.name} (${primaryMessage}) and duckduckgo (${fallbackMessage}).`
+        );
       }
     }
 
-    return [
-      {
-        title: `Search error (${adapter.name})`,
-        url: "",
-        snippet: err instanceof Error ? err.message : String(err),
-      },
-    ];
+    throw new Error(
+      `Search failed via ${adapter.name}: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
