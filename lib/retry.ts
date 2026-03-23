@@ -91,9 +91,11 @@ function getErrorStatusCode(error: unknown): number | undefined {
 
   const seen = new Set<object>();
   const queue: unknown[] = [error];
+  let index = 0;
 
-  while (queue.length > 0) {
-    const candidate = queue.shift();
+  while (index < queue.length) {
+    const candidate = queue[index];
+    index += 1;
 
     if (!candidate || typeof candidate !== "object" || seen.has(candidate)) {
       continue;

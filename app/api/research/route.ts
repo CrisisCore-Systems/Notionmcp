@@ -56,7 +56,9 @@ export async function POST(req: NextRequest) {
           send("complete", result);
         }
       } catch (err) {
-        if (!isAbortError(err) && !req.signal.aborted) {
+        const requestWasCancelled = isAbortError(err) || req.signal.aborted;
+
+        if (!requestWasCancelled) {
           send("error", {
             message: err instanceof Error ? err.message : String(err),
           });

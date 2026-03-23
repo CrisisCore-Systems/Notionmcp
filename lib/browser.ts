@@ -353,6 +353,7 @@ function abortBrowserContextOnSignal(
   signal?: AbortSignal
 ): () => void {
   return onAbort(signal, () => {
+    // Cleanup is best-effort here because the original abort reason is the meaningful failure.
     void context.close().catch(() => {});
   });
 }
