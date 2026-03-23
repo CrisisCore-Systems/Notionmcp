@@ -6,7 +6,7 @@ import {
 } from "@google/generative-ai";
 import { browseAndExtract, searchWeb } from "./browser";
 import { mapWithConcurrencyLimit } from "./concurrency";
-import type { ResearchResult } from "./research-result";
+import { RESEARCH_RUN_METADATA_KEY, type ResearchResult } from "./research-result";
 import { parseResearchResult } from "./write-payload";
 
 export type { ResearchResult } from "./research-result";
@@ -266,6 +266,10 @@ export async function runResearchAgent(
   const startedAtMs = Date.now();
   const searchCache = new Map<string, Promise<SearchResult>>();
   const browseCache = new Map<string, Promise<BrowseResult>>();
+  const searchQuerySet = new Set<string>();
+  const candidateSourceSet = new Set<string>();
+  const pagesBrowsedSet = new Set<string>();
+  const rejectedUrlSet = new Set<string>();
 
   while (iterations < MAX_ITERATIONS) {
     iterations++;
@@ -273,7 +277,7 @@ export async function runResearchAgent(
 
     // No more tool calls → final structured response
     if (!calls || calls.length === 0) {
-      return parseResearchResponseWithReconciliation(response.response.text(), {
+      const result = await parseResearchResponseWithReconciliation(response.response.text(), {
         maxReconciliationAttempts: MAX_RECONCILIATION_ATTEMPTS,
         startedAtMs,
         onUpdate,
@@ -282,6 +286,26 @@ export async function runResearchAgent(
           return repairedResponse.response.text();
         },
       });
+
+      const sourceSet = Array.from(
+        new Set(
+          result.items.flatMap((item) => item.__provenance?.sourceUrls ?? []).filter(Boolean)
+        )
+      ).sort((left, right) => left.localeCompare(right));
+
+      return {
+        ...result,
+        [RESEARCH_RUN_METADATA_KEY]: {
+          sourceSet,
+          extractionCounts: {
+            searchQueries: searchQuerySet.size,
+            candidateSources: candidateSourceSet.size,
+            pagesBrowsed: pagesBrowsedSet.size,
+            rowsExtracted: result.items.length,
+          },
+          rejectedUrls: Array.from(rejectedUrlSet).sort((left, right) => left.localeCompare(right)),
+        },
+      };
     }
 
     // Execute tool calls with a small concurrency limit to avoid overloading browser + upstream services.
@@ -294,10 +318,16 @@ export async function runResearchAgent(
         try {
           if (call.name === "search_web") {
             const query = args.query ?? "";
+            searchQuerySet.add(normalizeSearchCacheKey(query));
             onUpdate(`🔍 Searching: "${query}"`);
             const results = await getCachedToolResult(searchCache, normalizeSearchCacheKey(query), () =>
               searchWeb(query)
             );
+            for (const result of results) {
+              if (result.url) {
+                candidateSourceSet.add(normalizeBrowseCacheKey(result.url));
+              }
+            }
             onUpdate(
               `📚 Search returned ${results.length} candidate source${results.length === 1 ? "" : "s"}.`
             );
@@ -319,6 +349,9 @@ export async function runResearchAgent(
             const result = await getCachedToolResult(browseCache, normalizeBrowseCacheKey(url), () =>
               browseAndExtract(url)
             );
+            if (result.url) {
+              pagesBrowsedSet.add(normalizeBrowseCacheKey(result.url));
+            }
 
             return {
               functionResponse: {
@@ -334,6 +367,9 @@ export async function runResearchAgent(
           throw new Error(`Unknown tool: ${call.name}`);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          if (call.name === "browse_url" && args.url) {
+            rejectedUrlSet.add(normalizeBrowseCacheKey(args.url));
+          }
           onUpdate(`⚠️ ${call.name} failed: ${message}`);
 
           return {

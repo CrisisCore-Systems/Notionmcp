@@ -4,6 +4,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createRequire } from "node:module";
 import { enforceNotionValueLimit, isValidHttpUrl } from "@/lib/notion-validation";
 import type { ResearchItem } from "@/lib/research-result";
+import type { RowWriteMetadata } from "@/lib/write-audit";
 
 let mcpClient: Client | null = null;
 let mcpTransport: Transport | null = null;
@@ -30,6 +31,14 @@ interface NotionDataSourceRecord extends NotionRecordWithId {
   data_sources: NotionRecordWithId[];
 }
 
+interface NotionDatabasePropertyRecord {
+  type: string;
+}
+
+interface NotionDatabaseRecord extends NotionDataSourceRecord {
+  properties?: Record<string, NotionDatabasePropertyRecord>;
+}
+
 interface NotionQueryResult {
   results: unknown[];
   has_more?: boolean;
@@ -39,9 +48,30 @@ interface NotionQueryResult {
 type NotionTransportFactory = () => Transport;
 
 export interface DuplicateTracker {
-  has(data: ResearchItem): boolean;
-  remember(data: ResearchItem): void;
+  has(data: ResearchItem, operationKey?: string): boolean;
+  remember(data: ResearchItem, operationKey?: string): void;
 }
+
+export const NOTION_ROW_METADATA_PROPERTIES = {
+  operationKey: "Operator Operation Key",
+  sourceSet: "Operator Source Set",
+  confidenceScore: "Operator Confidence",
+  evidenceSummary: "Operator Evidence Summary",
+} as const;
+
+export type NotionWriteMetadataSupport = {
+  operationKey: boolean;
+  sourceSet: boolean;
+  confidenceScore: boolean;
+  evidenceSummary: boolean;
+};
+
+const FULL_NOTION_WRITE_METADATA_SUPPORT: NotionWriteMetadataSupport = {
+  operationKey: true,
+  sourceSet: true,
+  confidenceScore: true,
+  evidenceSummary: true,
+};
 
 /** Read a required environment variable or throw a setup error. */
 function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string {
@@ -132,6 +162,23 @@ function isDatabaseWithDataSources(value: unknown): value is NotionDataSourceRec
   return (
     Array.isArray(dataSources) &&
     dataSources.every(isRecordWithId)
+  );
+}
+
+function isDatabasePropertyRecord(value: unknown): value is NotionDatabasePropertyRecord {
+  return isRecord(value) && typeof value.type === "string";
+}
+
+function isDatabaseRecord(value: unknown): value is NotionDatabaseRecord {
+  if (!isDatabaseWithDataSources(value) || !isRecord(value)) {
+    return false;
+  }
+
+  const properties = value.properties;
+
+  return (
+    properties === undefined ||
+    (isRecord(properties) && Object.values(properties).every(isDatabasePropertyRecord))
   );
 }
 
@@ -289,6 +336,16 @@ export interface NotionSchema {
   [propertyName: string]: "title" | "rich_text" | "url" | "number" | "select";
 }
 
+export function buildOperationalSchema(schema: NotionSchema): NotionSchema {
+  return {
+    ...schema,
+    [NOTION_ROW_METADATA_PROPERTIES.operationKey]: "rich_text",
+    [NOTION_ROW_METADATA_PROPERTIES.sourceSet]: "rich_text",
+    [NOTION_ROW_METADATA_PROPERTIES.confidenceScore]: "number",
+    [NOTION_ROW_METADATA_PROPERTIES.evidenceSummary]: "rich_text",
+  };
+}
+
 /** Create a new Notion database under the configured parent page */
 export async function createDatabase(
   title: string,
@@ -344,6 +401,21 @@ async function getDataSourceId(databaseId: string): Promise<string> {
 
   dataSourceIdCache.set(databaseId, dataSourceId);
   return dataSourceId;
+}
+
+export async function getDatabaseMetadataSupport(
+  databaseId: string
+): Promise<NotionWriteMetadataSupport> {
+  const result = await callNotion("notion_retrieve_database", { database_id: databaseId });
+  const database = extractStructuredPayload(result, isDatabaseRecord);
+  const properties = database?.properties ?? {};
+
+  return {
+    operationKey: properties[NOTION_ROW_METADATA_PROPERTIES.operationKey]?.type === "rich_text",
+    sourceSet: properties[NOTION_ROW_METADATA_PROPERTIES.sourceSet]?.type === "rich_text",
+    confidenceScore: properties[NOTION_ROW_METADATA_PROPERTIES.confidenceScore]?.type === "number",
+    evidenceSummary: properties[NOTION_ROW_METADATA_PROPERTIES.evidenceSummary]?.type === "rich_text",
+  };
 }
 
 function normalizeDuplicateText(value: string): string {
@@ -497,12 +569,17 @@ function buildDuplicateFingerprintFromPage(
   return buildDuplicateFingerprint(identityData, schema);
 }
 
-async function getExistingDuplicateFingerprints(
+function getOperationKeyFromPage(page: unknown): string {
+  return getPagePropertyValue(page, NOTION_ROW_METADATA_PROPERTIES.operationKey, "rich_text");
+}
+
+async function getExistingDuplicateRecords(
   databaseId: string,
   schema: NotionSchema
-): Promise<Set<string>> {
+): Promise<{ fingerprints: Set<string>; operationKeys: Set<string> }> {
   const dataSourceId = await getDataSourceId(databaseId);
   const fingerprints = new Set<string>();
+  const operationKeys = new Set<string>();
   let nextCursor: string | null | undefined = undefined;
 
   do {
@@ -515,15 +592,20 @@ async function getExistingDuplicateFingerprints(
 
     for (const row of queryResult?.results ?? []) {
       const fingerprint = buildDuplicateFingerprintFromPage(row, schema);
+      const operationKey = getOperationKeyFromPage(row);
 
       if (fingerprint) {
         fingerprints.add(fingerprint);
+      }
+
+      if (operationKey) {
+        operationKeys.add(operationKey);
       }
     }
 
     nextCursor = queryResult?.has_more ? queryResult.next_cursor ?? null : null;
   } while (nextCursor);
-  return fingerprints;
+  return { fingerprints, operationKeys };
 }
 
 export async function createDuplicateTracker(
@@ -531,21 +613,29 @@ export async function createDuplicateTracker(
   schema: NotionSchema,
   options?: { prefetchExisting?: boolean }
 ): Promise<DuplicateTracker> {
-  const fingerprints =
+  const records =
     options?.prefetchExisting === false
-      ? new Set<string>()
-      : await getExistingDuplicateFingerprints(databaseId, schema);
+      ? { fingerprints: new Set<string>(), operationKeys: new Set<string>() }
+      : await getExistingDuplicateRecords(databaseId, schema);
 
   return {
-    has(data) {
+    has(data, operationKey) {
+      if (operationKey && records.operationKeys.has(operationKey)) {
+        return true;
+      }
+
       const fingerprint = buildDuplicateFingerprint(data, schema);
-      return fingerprint ? fingerprints.has(fingerprint) : false;
+      return fingerprint ? records.fingerprints.has(fingerprint) : false;
     },
-    remember(data) {
+    remember(data, operationKey) {
       const fingerprint = buildDuplicateFingerprint(data, schema);
 
       if (fingerprint) {
-        fingerprints.add(fingerprint);
+        records.fingerprints.add(fingerprint);
+      }
+
+      if (operationKey) {
+        records.operationKeys.add(operationKey);
       }
     },
   };
@@ -555,26 +645,30 @@ export async function addRow(
   databaseId: string,
   data: ResearchItem,
   schema: NotionSchema,
-  duplicateTracker?: DuplicateTracker
+  duplicateTracker?: DuplicateTracker,
+  writeMetadata?: RowWriteMetadata,
+  metadataSupport: NotionWriteMetadataSupport = FULL_NOTION_WRITE_METADATA_SUPPORT
 ): Promise<{ created: boolean }> {
-  if (duplicateTracker?.has(data)) {
+  if (duplicateTracker?.has(data, writeMetadata?.operationKey)) {
     return { created: false };
   }
 
-  const properties = buildNotionPageProperties(data, schema);
+  const properties = buildNotionPageProperties(data, schema, writeMetadata, metadataSupport);
 
   await callNotion("notion_create_page", {
     parent: { database_id: databaseId },
     properties,
   });
 
-  duplicateTracker?.remember(data);
+  duplicateTracker?.remember(data, writeMetadata?.operationKey);
   return { created: true };
 }
 
 export function buildNotionPageProperties(
   data: ResearchItem,
-  schema: NotionSchema
+  schema: NotionSchema,
+  writeMetadata?: RowWriteMetadata,
+  metadataSupport: NotionWriteMetadataSupport = FULL_NOTION_WRITE_METADATA_SUPPORT
 ): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
 
@@ -605,6 +699,30 @@ export function buildNotionPageProperties(
     } else {
       properties[key] = { rich_text: [{ text: { content: enforceNotionValueLimit(value, type) } }] };
     }
+  }
+
+  if (writeMetadata?.operationKey && metadataSupport.operationKey) {
+    properties[NOTION_ROW_METADATA_PROPERTIES.operationKey] = {
+      rich_text: [{ text: { content: enforceNotionValueLimit(writeMetadata.operationKey, "rich_text") } }],
+    };
+  }
+
+  if (writeMetadata?.sourceSet && metadataSupport.sourceSet) {
+    properties[NOTION_ROW_METADATA_PROPERTIES.sourceSet] = {
+      rich_text: [{ text: { content: enforceNotionValueLimit(writeMetadata.sourceSet, "rich_text") } }],
+    };
+  }
+
+  if (writeMetadata && metadataSupport.confidenceScore) {
+    properties[NOTION_ROW_METADATA_PROPERTIES.confidenceScore] = {
+      number: writeMetadata.confidenceScore,
+    };
+  }
+
+  if (writeMetadata?.evidenceSummary && metadataSupport.evidenceSummary) {
+    properties[NOTION_ROW_METADATA_PROPERTIES.evidenceSummary] = {
+      rich_text: [{ text: { content: enforceNotionValueLimit(writeMetadata.evidenceSummary, "rich_text") } }],
+    };
   }
 
   return properties;

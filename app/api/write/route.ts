@@ -1,14 +1,23 @@
 import { NextRequest } from "next/server";
 import {
   addRow,
+  buildOperationalSchema,
   createDatabase,
   createDuplicateTracker,
   type DuplicateTracker,
   type NotionSchema,
+  getDatabaseMetadataSupport,
+  type NotionWriteMetadataSupport,
 } from "@/lib/notion-mcp";
 import { validateApiRequest } from "@/lib/request-security";
 import { isRetryableUpstreamError, runWithRetry } from "@/lib/retry";
 import type { ResearchItem } from "@/lib/research-result";
+import {
+  buildRowWriteMetadata,
+  buildWriteAuditTrail,
+  type RowWriteAuditEntry,
+  type RowWriteMetadata,
+} from "@/lib/write-audit";
 import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
 
 export const runtime = "nodejs";
@@ -37,11 +46,13 @@ async function addRowWithRetry(
   data: ResearchItem,
   schema: NotionSchema,
   rowIndex: number,
-  duplicateTracker: DuplicateTracker
+  duplicateTracker: DuplicateTracker,
+  writeMetadata: RowWriteMetadata,
+  metadataSupport: NotionWriteMetadataSupport
 ): Promise<{ attempt: number; duplicate: boolean }> {
   try {
     const { attempt, value } = await runWithRetry(
-      () => addRow(databaseId, data, schema, duplicateTracker),
+      () => addRow(databaseId, data, schema, duplicateTracker, writeMetadata, metadataSupport),
       {
         maxAttempts: ROW_WRITE_MAX_ATTEMPTS,
         retryDelayMs: ROW_WRITE_RETRY_DELAY_MS,
@@ -59,6 +70,30 @@ async function addRowWithRetry(
         : `Failed to write row ${rowIndex + 1} without retry because the upstream error is permanent: ${message}`
     );
   }
+}
+
+function buildRowAuditEntries(
+  operationKeys: string[],
+  startIndex: number,
+  totalRows: number,
+  confirmedWrittenRows: Set<number>,
+  duplicateRows: Set<number>
+): RowWriteAuditEntry[] {
+  const entries: RowWriteAuditEntry[] = [];
+
+  for (let index = startIndex; index < totalRows; index++) {
+    entries.push({
+      rowIndex: index,
+      operationKey: operationKeys[index] ?? "",
+      status: confirmedWrittenRows.has(index)
+        ? "written"
+        : duplicateRows.has(index)
+          ? "duplicate"
+          : "unresolved",
+    });
+  }
+
+  return entries;
 }
 
 export async function POST(req: NextRequest) {
@@ -130,6 +165,8 @@ export async function POST(req: NextRequest) {
   const summary = normalizedBody.summary;
   const schema = normalizedBody.schema;
   const items = normalizedBody.items;
+  const rowWriteMetadata = items.map((item) => buildRowWriteMetadata(item, schema));
+  const operationKeys = rowWriteMetadata.map((entry) => entry.operationKey);
 
   if (!suggestedDbTitle || !summary) {
     return new Response(JSON.stringify({ error: "A complete research result is required" }), {
@@ -165,15 +202,29 @@ export async function POST(req: NextRequest) {
       let databaseId = targetDatabaseId;
       let nextRowIndex = resumeFromIndex;
       let duplicateTracker: DuplicateTracker | null = null;
-      let itemsWritten = 0;
-      let itemsSkipped = 0;
+      let metadataSupport: NotionWriteMetadataSupport = {
+        operationKey: false,
+        sourceSet: false,
+        confidenceScore: false,
+        evidenceSummary: false,
+      };
+      let rowsAttempted = 0;
+      const confirmedWrittenRows = new Set<number>();
+      const duplicateRows = new Set<number>();
 
       try {
         if (databaseId) {
           send("update", { message: `Using existing Notion database "${databaseId}"...` });
+          metadataSupport = await getDatabaseMetadataSupport(databaseId);
         } else {
           send("update", { message: `Creating Notion database "${suggestedDbTitle}"...` });
-          databaseId = await createDatabase(suggestedDbTitle, schema);
+          databaseId = await createDatabase(suggestedDbTitle, buildOperationalSchema(schema));
+          metadataSupport = {
+            operationKey: true,
+            sourceSet: true,
+            confidenceScore: true,
+            evidenceSummary: true,
+          };
         }
 
         duplicateTracker = await createDuplicateTracker(databaseId, schema, {
@@ -188,18 +239,21 @@ export async function POST(req: NextRequest) {
 
         for (let index = resumeFromIndex; index < items.length; index++) {
           nextRowIndex = index;
+          rowsAttempted += 1;
           const { attempt, duplicate } = await addRowWithRetry(
             databaseId,
             items[index],
             schema,
             index,
-            duplicateTracker
+            duplicateTracker,
+            rowWriteMetadata[index] as RowWriteMetadata,
+            metadataSupport
           );
 
           if (duplicate) {
-            itemsSkipped += 1;
+            duplicateRows.add(index);
           } else {
-            itemsWritten += 1;
+            confirmedWrittenRows.add(index);
           }
 
           send("update", {
@@ -213,26 +267,91 @@ export async function POST(req: NextRequest) {
         }
 
         send("update", {
-          message: `📊 Write finished in ${((Date.now() - startedAtMs) / 1000).toFixed(1)}s with ${itemsWritten} row${
-            itemsWritten === 1 ? "" : "s"
-          } written and ${itemsSkipped} duplicate${itemsSkipped === 1 ? "" : "s"} skipped.`,
+          message: `📊 Write finished in ${((Date.now() - startedAtMs) / 1000).toFixed(1)}s with ${
+            confirmedWrittenRows.size
+          } row${confirmedWrittenRows.size === 1 ? "" : "s"} written and ${duplicateRows.size} duplicate${
+            duplicateRows.size === 1 ? "" : "s"
+          } skipped.`,
         });
+        const auditTrail = buildWriteAuditTrail(
+          normalizedBody,
+          buildRowAuditEntries(operationKeys, resumeFromIndex, items.length, confirmedWrittenRows, duplicateRows),
+          rowsAttempted
+        );
         send("complete", {
           databaseId,
-          itemsWritten,
-          itemsSkipped,
+          itemsWritten: confirmedWrittenRows.size,
+          itemsSkipped: duplicateRows.size,
           propertyCount: Object.keys(schema).length,
           usedExistingDatabase: !!targetDatabaseId,
           resumedFromIndex: resumeFromIndex,
-          message: formatWriteCompleteMessage(!!targetDatabaseId, itemsWritten, itemsSkipped),
+          message: formatWriteCompleteMessage(
+            !!targetDatabaseId,
+            confirmedWrittenRows.size,
+            duplicateRows.size
+          ),
+          auditTrail,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        let reconciled = false;
+
+        if (databaseId && nextRowIndex < items.length) {
+          try {
+            const reconciliationTracker = await createDuplicateTracker(databaseId, schema, {
+              prefetchExisting: true,
+            });
+
+            if (reconciliationTracker.has(items[nextRowIndex] as ResearchItem, operationKeys[nextRowIndex])) {
+              confirmedWrittenRows.add(nextRowIndex);
+              nextRowIndex += 1;
+              reconciled = true;
+              send("update", {
+                message: `🧭 Reconciliation confirmed row ${nextRowIndex} landed in Notion. Future retries will start from row ${
+                  nextRowIndex + 1
+                }.`,
+              });
+            }
+          } catch (reconciliationError) {
+            send("update", {
+              message: `⚠️ Reconciliation check failed: ${
+                reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError)
+              }`,
+            });
+          }
+        }
+
+        const auditTrail = buildWriteAuditTrail(
+          normalizedBody,
+          buildRowAuditEntries(operationKeys, resumeFromIndex, items.length, confirmedWrittenRows, duplicateRows),
+          rowsAttempted
+        );
+
+        if (databaseId && nextRowIndex >= items.length) {
+          send("complete", {
+            databaseId,
+            itemsWritten: confirmedWrittenRows.size,
+            itemsSkipped: duplicateRows.size,
+            propertyCount: Object.keys(schema).length,
+            usedExistingDatabase: !!targetDatabaseId,
+            resumedFromIndex: resumeFromIndex,
+            message: formatWriteCompleteMessage(
+              !!targetDatabaseId,
+              confirmedWrittenRows.size,
+              duplicateRows.size
+            ),
+            auditTrail,
+          });
+          return;
+        }
 
         send("error", {
-          message,
+          message: reconciled
+            ? `${message} Reconciliation verified the last ambiguous row before pausing.`
+            : message,
           databaseId: databaseId || undefined,
           nextRowIndex,
+          auditTrail,
         });
       } finally {
         controller.close();
