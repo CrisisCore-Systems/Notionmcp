@@ -1,7 +1,19 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createRequire } from "node:module";
 
 let mcpClient: Client | null = null;
+const NOTION_API_VERSION = "2022-06-28";
+const require = createRequire(import.meta.url);
+
+interface NotionToolResponse {
+  content?: unknown;
+  structuredContent?: unknown;
+}
+
+interface NotionRecordWithId {
+  id: string;
+}
 
 /** Read a required environment variable or throw a setup error. */
 function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string {
@@ -16,20 +28,82 @@ function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string 
   return value;
 }
 
+function getNotionMcpCommand(): string {
+  return require.resolve("@notionhq/notion-mcp-server/bin/cli.mjs");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRecordWithId(value: unknown): value is NotionRecordWithId {
+  return isRecord(value) && typeof value.id === "string" && value.id.trim().length > 0;
+}
+
+function extractStructuredPayload<T>(
+  response: NotionToolResponse,
+  isMatch: (value: unknown) => value is T
+): T | null {
+  const queue: unknown[] = [response.structuredContent, response.content];
+
+  while (queue.length > 0) {
+    const candidate = queue.shift();
+
+    if (candidate == null) {
+      continue;
+    }
+
+    if (isMatch(candidate)) {
+      return candidate;
+    }
+
+    if (typeof candidate === "string") {
+      try {
+        queue.push(JSON.parse(candidate));
+      } catch {
+        continue;
+      }
+
+      continue;
+    }
+
+    if (Array.isArray(candidate)) {
+      queue.push(...candidate);
+      continue;
+    }
+
+    if (!isRecord(candidate)) {
+      continue;
+    }
+
+    if (typeof candidate.text === "string") {
+      try {
+        queue.push(JSON.parse(candidate.text));
+      } catch {
+        // Some tool responses include plain text. Ignore non-JSON text payloads.
+      }
+    }
+
+    queue.push(...Object.values(candidate));
+  }
+
+  return null;
+}
+
 /** Lazily start and connect to the Notion MCP server subprocess */
 async function getClient(): Promise<Client> {
   if (mcpClient) return mcpClient;
   const notionToken = getRequiredEnv("NOTION_TOKEN");
 
   const transport = new StdioClientTransport({
-    command: "npx",
-    args: ["-y", "@notionhq/notion-mcp-server"],
+    command: process.execPath,
+    args: [getNotionMcpCommand()],
     env: {
       ...process.env,
       // Notion MCP server reads auth from this header string
       OPENAPI_MCP_HEADERS: JSON.stringify({
         Authorization: `Bearer ${notionToken}`,
-        "Notion-Version": "2022-06-28",
+        "Notion-Version": NOTION_API_VERSION,
       }),
     },
   });
@@ -47,7 +121,7 @@ async function getClient(): Promise<Client> {
 export async function callNotion(
   tool: string,
   args: Record<string, unknown>
-): Promise<unknown> {
+): Promise<NotionToolResponse> {
   const client = await getClient();
   const result = await client.callTool({ name: tool, arguments: args });
 
@@ -55,7 +129,10 @@ export async function callNotion(
     throw new Error(`Notion MCP error on "${tool}": ${JSON.stringify(result.content)}`);
   }
 
-  return result.content;
+  return {
+    content: result.content,
+    structuredContent: "structuredContent" in result ? result.structuredContent : undefined,
+  };
 }
 
 export interface NotionSchema {
@@ -90,13 +167,12 @@ export async function createDatabase(
     parent: { page_id: parentPageId },
     title: [{ type: "text", text: { content: title } }],
     properties,
-  })) as { id?: string }[];
+  }));
+  const database = extractStructuredPayload(result, isRecordWithId);
 
-  // Extract the database ID from the response
-  const content = result[0] as { text?: string };
-  const text = content?.text ?? "";
-  const match = text.match(/"id":\s*"([a-f0-9-]{36})"/);
-  if (match) return match[1];
+  if (database) {
+    return database.id;
+  }
 
   throw new Error("Could not extract database ID from Notion response");
 }

@@ -47,8 +47,8 @@ can be opened in a browser or shared into the Notion app on Android.
 ## Stack
 
 - **LLM**: Gemini 2.0 Flash (free via Google AI Studio)
-- **Browser automation**: Playwright (headless Chromium)
-- **Notion integration**: Official `@notionhq/notion-mcp-server` via MCP
+- **Search + browsing**: Serper (optional API-backed search) or DuckDuckGo fallback, plus Playwright for page browsing
+- **Notion integration**: Pinned `@notionhq/notion-mcp-server` via MCP
 - **Frontend**: Next.js 15 with streaming SSE
 
 ## Setup
@@ -75,6 +75,7 @@ Fill in `.env.local`:
 | Variable | Where to get it |
 |---|---|
 | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — free, no credit card |
+| `SERPER_API_KEY` | Optional. [serper.dev](https://serper.dev) — enables API-backed search instead of the built-in DuckDuckGo fallback |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 
@@ -103,7 +104,7 @@ Open [http://localhost:3000](http://localhost:3000)
 User prompt
     ↓
 Gemini 2.0 Flash (agent loop)
-    ├── search_web() → Playwright → Google
+    ├── search_web() → Serper API or DuckDuckGo adapter
     └── browse_url() → Playwright → target page
     ↓
 Structured JSON (items + schema)
@@ -111,7 +112,7 @@ Structured JSON (items + schema)
 Human approval UI ← YOU REVIEW HERE
     ↓
 Notion MCP Server (subprocess via stdio)
-    └── notion_create_database + notion_create_page × N
+    └── notion_create_database + notion_create_page × N (with row retries + resume support)
     ↓
 Notion database ✅
 ```
