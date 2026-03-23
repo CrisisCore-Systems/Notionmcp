@@ -7,6 +7,7 @@ import {
 } from "@/lib/research-result";
 
 const NOTION_PROPERTY_TYPES = new Set(["title", "rich_text", "url", "number", "select"]);
+const MIN_EVIDENCE_DENSITY = 0.5;
 
 export function isValidDatabaseId(value: string): boolean {
   return (
@@ -73,7 +74,10 @@ function normalizeSourceUrls(value: unknown): string[] {
     });
 }
 
-function normalizeEvidenceByField(value: unknown): Record<string, string[]> | undefined {
+function normalizeEvidenceByField(
+  value: unknown,
+  normalizedKeyLookup?: Map<string, string>
+): Record<string, string[]> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -81,7 +85,7 @@ function normalizeEvidenceByField(value: unknown): Record<string, string[]> | un
   const normalized = Object.fromEntries(
     Object.entries(value)
       .map(([fieldName, fieldEvidence]) => [
-        normalizeTextValue(fieldName),
+        normalizedKeyLookup?.get(fieldName) ?? normalizeTextValue(fieldName),
         Array.isArray(fieldEvidence)
           ? fieldEvidence
               .map((entry) => normalizeTextValue(entry))
@@ -95,13 +99,16 @@ function normalizeEvidenceByField(value: unknown): Record<string, string[]> | un
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeProvenance(value: unknown): ResearchItemProvenance | undefined {
+function normalizeProvenanceForSchema(
+  value: unknown,
+  normalizedKeyLookup: Map<string, string>
+): ResearchItemProvenance | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
 
   const sourceUrls = normalizeSourceUrls(value.sourceUrls);
-  const evidenceByField = normalizeEvidenceByField(value.evidenceByField);
+  const evidenceByField = normalizeEvidenceByField(value.evidenceByField, normalizedKeyLookup);
 
   if (sourceUrls.length === 0 && !evidenceByField) {
     return undefined;
@@ -110,6 +117,66 @@ function normalizeProvenance(value: unknown): ResearchItemProvenance | undefined
   return {
     ...(sourceUrls.length > 0 ? { sourceUrls } : { sourceUrls: [] }),
     ...(evidenceByField ? { evidenceByField } : {}),
+  };
+}
+
+function getPopulatedFieldNames(item: ResearchItem, schema: NotionSchema): string[] {
+  return Object.entries(schema)
+    .filter(([key, type]) => type !== "url" && typeof item[key] === "string" && item[key].trim().length > 0)
+    .map(([key]) => key);
+}
+
+function hasAnyPopulatedValue(item: ResearchItem, schema: NotionSchema): boolean {
+  return Object.keys(schema).some(
+    (key) => typeof item[key] === "string" && item[key].trim().length > 0
+  );
+}
+
+function validateItemProvenance(
+  item: ResearchItem,
+  schema: NotionSchema,
+  rowIndex: number
+): ResearchItemProvenance {
+  const provenance = item[RESEARCH_ITEM_PROVENANCE_KEY];
+
+  if (!provenance || typeof provenance !== "object") {
+    throw new Error(`Row ${rowIndex + 1} is missing provenance.`);
+  }
+
+  const normalizedProvenance = provenance as ResearchItemProvenance;
+  const sourceUrls = normalizeSourceUrls(normalizedProvenance.sourceUrls);
+
+  if (sourceUrls.length === 0) {
+    throw new Error(`Row ${rowIndex + 1} must include at least one provenance source URL.`);
+  }
+
+  const evidenceByField = normalizeEvidenceByField(normalizedProvenance.evidenceByField);
+
+  if (!evidenceByField) {
+    throw new Error(`Row ${rowIndex + 1} must include field-level evidence snippets.`);
+  }
+
+  const titleField = Object.entries(schema).find(([, type]) => type === "title")?.[0];
+  const populatedFields = getPopulatedFieldNames(item, schema);
+  const evidencedFields = populatedFields.filter((fieldName) => (evidenceByField[fieldName] ?? []).length > 0);
+  const minimumEvidenceFields = Math.max(
+    1,
+    Math.ceil(populatedFields.length * MIN_EVIDENCE_DENSITY)
+  );
+
+  if (titleField && populatedFields.includes(titleField) && !evidenceByField[titleField]?.length) {
+    throw new Error(`Row ${rowIndex + 1} must include evidence for "${titleField}".`);
+  }
+
+  if (evidencedFields.length < minimumEvidenceFields) {
+    throw new Error(
+      `Row ${rowIndex + 1} needs denser evidence coverage before approval.`
+    );
+  }
+
+  return {
+    sourceUrls,
+    evidenceByField,
   };
 }
 
@@ -175,10 +242,21 @@ export function normalizeResearchResult(result: ResearchResult): ResearchResult 
         normalizedItem[normalizedKey] = value;
       }
 
-      const provenance = normalizeProvenance(item[RESEARCH_ITEM_PROVENANCE_KEY]);
+      const provenance = normalizeProvenanceForSchema(
+        item[RESEARCH_ITEM_PROVENANCE_KEY],
+        normalizedKeyLookup
+      );
 
       if (provenance) {
         normalizedItem[RESEARCH_ITEM_PROVENANCE_KEY] = provenance;
+      }
+
+      if (hasAnyPopulatedValue(normalizedItem, normalizedSchema)) {
+        normalizedItem[RESEARCH_ITEM_PROVENANCE_KEY] = validateItemProvenance(
+          normalizedItem,
+          normalizedSchema,
+          rowIndex
+        );
       }
 
       return normalizedItem;

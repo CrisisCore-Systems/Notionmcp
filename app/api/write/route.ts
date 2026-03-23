@@ -7,7 +7,7 @@ import {
   type NotionSchema,
 } from "@/lib/notion-mcp";
 import { validateApiRequest } from "@/lib/request-security";
-import { runWithRetry } from "@/lib/retry";
+import { isRetryableUpstreamError, runWithRetry } from "@/lib/retry";
 import type { ResearchItem } from "@/lib/research-result";
 import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
 
@@ -45,14 +45,18 @@ async function addRowWithRetry(
       {
         maxAttempts: ROW_WRITE_MAX_ATTEMPTS,
         retryDelayMs: ROW_WRITE_RETRY_DELAY_MS,
+        shouldRetry: (error) => isRetryableUpstreamError(error),
       }
     );
 
     return { attempt, duplicate: !value.created };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const retryable = isRetryableUpstreamError(error);
     throw new Error(
-      `Failed to write row ${rowIndex + 1} after ${ROW_WRITE_MAX_ATTEMPTS} attempts: ${message}`
+      retryable
+        ? `Failed to write row ${rowIndex + 1} after ${ROW_WRITE_MAX_ATTEMPTS} attempts: ${message}`
+        : `Failed to write row ${rowIndex + 1} without retry because the upstream error is permanent: ${message}`
     );
   }
 }
@@ -76,6 +80,27 @@ export async function POST(req: NextRequest) {
 
   if (!Number.isInteger(resumeFromIndex) || resumeFromIndex < 0) {
     return new Response(JSON.stringify({ error: "resumeFromIndex must be a non-negative integer" }), {
+      status: 400,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  if (resumeFromIndex > 0 && !targetDatabaseId) {
+    return new Response(
+      JSON.stringify({ error: "targetDatabaseId is required when resuming a partial write" }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  }
+
+  if (targetDatabaseId && !isValidDatabaseId(targetDatabaseId)) {
+    return new Response(JSON.stringify({ error: "A valid Notion database ID is required" }), {
       status: 400,
       headers: {
         "Content-Type": "application/json",
@@ -115,18 +140,6 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  if (resumeFromIndex > 0 && !targetDatabaseId) {
-    return new Response(
-      JSON.stringify({ error: "targetDatabaseId is required when resuming a partial write" }),
-      {
-        status: 400,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
-    );
-  }
-
   if (resumeFromIndex > items.length) {
     return new Response(
       JSON.stringify({ error: "resumeFromIndex cannot be greater than the number of items" }),
@@ -137,15 +150,6 @@ export async function POST(req: NextRequest) {
         },
       }
     );
-  }
-
-  if (targetDatabaseId && !isValidDatabaseId(targetDatabaseId)) {
-    return new Response(JSON.stringify({ error: "A valid Notion database ID is required" }), {
-      status: 400,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
   }
 
   const encoder = new TextEncoder();

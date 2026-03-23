@@ -26,12 +26,288 @@ export interface BrowseResult {
   content: string;
   sourceUrls: string[];
   evidenceSnippets: string[];
+  structuredData?: StructuredPageData;
 }
 
 type SearchAdapter = {
   name: "serper" | "duckduckgo";
   search: (query: string) => Promise<SearchResult[]>;
 };
+
+type RawStructuredBrowseData = {
+  canonicalUrl?: string;
+  openGraph?: Record<string, string>;
+  schemaFields?: Array<{ name: string; value: string }>;
+  jsonLdBlocks?: string[];
+};
+
+export interface StructuredPageData {
+  canonicalUrl?: string;
+  openGraph?: Record<string, string>;
+  schemaFields?: Record<string, string>;
+  jsonLd?: Array<{
+    type: string;
+    properties: Record<string, string>;
+  }>;
+}
+
+const COMMON_SCHEMA_FIELD_NAMES = new Set([
+  "name",
+  "headline",
+  "description",
+  "brand",
+  "price",
+  "pricecurrency",
+  "availability",
+  "url",
+  "sameas",
+  "author",
+  "publisher",
+  "datepublished",
+  "datemodified",
+  "startdate",
+  "enddate",
+  "jobtitle",
+  "addresslocality",
+  "addressregion",
+]);
+const MAX_JSON_LD_ITEMS = 4;
+const MAX_JSON_LD_PROPERTIES = 6;
+const MAX_STRUCTURED_SUMMARY_LINES = 12;
+
+function normalizeStructuredText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.replace(/\s+/g, " ").trim();
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeStructuredText(entry)).filter(Boolean).join(", ");
+  }
+
+  if (value && typeof value === "object") {
+    const candidate = value as Record<string, unknown>;
+
+    for (const key of ["name", "headline", "title", "url", "price", "priceCurrency"]) {
+      const normalized = normalizeStructuredText(candidate[key]);
+
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+
+  return "";
+}
+
+function normalizeHttpUrlCandidate(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function collectJsonLdNodes(value: unknown): Record<string, unknown>[] {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectJsonLdNodes(entry));
+  }
+
+  if (typeof value !== "object") {
+    return [];
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const graphNodes = collectJsonLdNodes(candidate["@graph"]);
+
+  return [candidate, ...graphNodes];
+}
+
+function summarizeJsonLdNode(node: Record<string, unknown>) {
+  const rawType = node["@type"];
+  const type = normalizeStructuredText(Array.isArray(rawType) ? rawType[0] : rawType) || "Thing";
+  const properties: Record<string, string> = {};
+
+  for (const [key, rawValue] of Object.entries(node)) {
+    if (key.startsWith("@") || properties[key]) {
+      continue;
+    }
+
+    const normalizedKey = key.toLowerCase();
+
+    if (!COMMON_SCHEMA_FIELD_NAMES.has(normalizedKey)) {
+      continue;
+    }
+
+    const normalizedValue = normalizeStructuredText(rawValue);
+
+    if (normalizedValue) {
+      properties[key] = normalizedValue;
+    }
+
+    if (Object.keys(properties).length >= MAX_JSON_LD_PROPERTIES) {
+      break;
+    }
+  }
+
+  return Object.keys(properties).length > 0 ? { type, properties } : undefined;
+}
+
+export function normalizeStructuredPageData(
+  raw: RawStructuredBrowseData | undefined
+): StructuredPageData | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  const canonicalUrl = normalizeHttpUrlCandidate(normalizeStructuredText(raw.canonicalUrl));
+  const openGraph = Object.fromEntries(
+    Object.entries(raw.openGraph ?? {})
+      .map(([key, value]) => [key.trim().toLowerCase(), normalizeStructuredText(value)])
+      .filter(([, value]) => Boolean(value))
+  );
+  const schemaFields = Object.fromEntries(
+    (raw.schemaFields ?? [])
+      .map((entry) => [entry.name.trim(), normalizeStructuredText(entry.value)])
+      .filter(([name, value]) => Boolean(name) && Boolean(value))
+  );
+  const jsonLd = (raw.jsonLdBlocks ?? [])
+    .flatMap((block) => {
+      try {
+        return collectJsonLdNodes(JSON.parse(block));
+      } catch {
+        return [];
+      }
+    })
+    .map((node) => summarizeJsonLdNode(node))
+    .filter((entry): entry is NonNullable<ReturnType<typeof summarizeJsonLdNode>> => Boolean(entry))
+    .slice(0, MAX_JSON_LD_ITEMS);
+
+  if (
+    !canonicalUrl &&
+    Object.keys(openGraph).length === 0 &&
+    Object.keys(schemaFields).length === 0 &&
+    jsonLd.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(canonicalUrl ? { canonicalUrl } : {}),
+    ...(Object.keys(openGraph).length > 0 ? { openGraph } : {}),
+    ...(Object.keys(schemaFields).length > 0 ? { schemaFields } : {}),
+    ...(jsonLd.length > 0 ? { jsonLd } : {}),
+  };
+}
+
+export function buildStructuredDataLines(structuredData: StructuredPageData | undefined): string[] {
+  if (!structuredData) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  const push = (label: string, value: string | undefined) => {
+    const normalizedValue = normalizeStructuredText(value);
+
+    if (!normalizedValue || lines.length >= MAX_STRUCTURED_SUMMARY_LINES) {
+      return;
+    }
+
+    lines.push(`${label}: ${normalizedValue}`);
+  };
+
+  push("Canonical URL", structuredData.canonicalUrl);
+  push("Open Graph title", structuredData.openGraph?.["og:title"]);
+  push("Open Graph description", structuredData.openGraph?.["og:description"]);
+  push("Open Graph type", structuredData.openGraph?.["og:type"]);
+  push("Open Graph URL", structuredData.openGraph?.["og:url"]);
+
+  for (const [name, value] of Object.entries(structuredData.schemaFields ?? {})) {
+    push(`Schema ${name}`, value);
+  }
+
+  for (const entry of structuredData.jsonLd ?? []) {
+    for (const [name, value] of Object.entries(entry.properties)) {
+      push(`JSON-LD ${entry.type}.${name}`, value);
+    }
+  }
+
+  return lines;
+}
+
+function collectStructuredSourceUrls(structuredData: StructuredPageData | undefined): string[] {
+  if (!structuredData) {
+    return [];
+  }
+
+  const urls = new Set<string>();
+  const add = (value: string | undefined) => {
+    const normalized = normalizeHttpUrlCandidate(normalizeStructuredText(value));
+
+    if (normalized) {
+      urls.add(normalized);
+    }
+  };
+
+  add(structuredData.canonicalUrl);
+  add(structuredData.openGraph?.["og:url"]);
+
+  for (const [name, value] of Object.entries(structuredData.schemaFields ?? {})) {
+    if (name.toLowerCase().includes("url") || name.toLowerCase() === "sameas") {
+      value
+        .split(/\s*,\s*/)
+        .forEach((entry) => add(entry));
+    }
+  }
+
+  for (const entry of structuredData.jsonLd ?? []) {
+    for (const [name, value] of Object.entries(entry.properties)) {
+      if (name.toLowerCase().includes("url") || name.toLowerCase() === "sameas") {
+        value
+          .split(/\s*,\s*/)
+          .forEach((candidate) => add(candidate));
+      }
+    }
+  }
+
+  return Array.from(urls);
+}
+
+function collapseLines(lines: string[], maxCharacters: number): string {
+  const kept: string[] = [];
+  let currentLength = 0;
+
+  for (const line of lines) {
+    const normalized = normalizeStructuredText(line);
+
+    if (!normalized || kept.includes(normalized)) {
+      continue;
+    }
+
+    const nextLength = currentLength + normalized.length + 1;
+
+    if (nextLength > maxCharacters && kept.length > 0) {
+      break;
+    }
+
+    kept.push(normalized);
+    currentLength = nextLength;
+  }
+
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 async function getBrowser(): Promise<Browser> {
   if (!browser || !browser.isConnected()) {
@@ -355,7 +631,7 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await waitForSettledPage(page);
 
-    const content = await page.evaluate(({ maxCharacters, maxEvidenceSnippets }) => {
+    const content = await page.evaluate(({ maxEvidenceSnippets }) => {
       const root =
         document.querySelector("main, article, [role='main'], .main, #main") ??
         document.body;
@@ -368,7 +644,6 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         .forEach((el) => el.remove());
 
       const lines: string[] = [];
-      let currentLength = 0;
       const pushLine = (value?: string | null) => {
         const nextValue = value?.replace(/\s+/g, " ").trim();
 
@@ -377,7 +652,6 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         }
 
         lines.push(nextValue);
-        currentLength += nextValue.length + 1;
       };
 
       pushLine(document.title);
@@ -393,9 +667,6 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
 
       for (const value of textNodes) {
         pushLine(value);
-        if (currentLength >= maxCharacters) {
-          break;
-        }
       }
 
       const tableRows = Array.from(container.querySelectorAll("table"))
@@ -412,9 +683,6 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
 
       for (const row of tableRows) {
         pushLine(row);
-        if (currentLength >= maxCharacters) {
-          break;
-        }
       }
 
       const notableLinks = Array.from(container.querySelectorAll("a[href]"))
@@ -438,27 +706,72 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
 
       for (const link of notableLinks) {
         pushLine(link);
-        if (currentLength >= maxCharacters) {
-          break;
-        }
       }
+
+      const openGraph = Object.fromEntries(
+        Array.from(document.querySelectorAll("meta[property]"))
+          .map((meta) => [
+            meta.getAttribute("property")?.trim() ?? "",
+            meta.getAttribute("content")?.replace(/\s+/g, " ").trim() ?? "",
+          ])
+          .filter(([name, value]) => name.startsWith("og:") && Boolean(value))
+      );
+      const schemaFields = Array.from(container.querySelectorAll("[itemprop]"))
+        .slice(0, 24)
+        .map((element) => {
+          const name = element.getAttribute("itemprop")?.trim() ?? "";
+          const value =
+            element.getAttribute("content")?.replace(/\s+/g, " ").trim() ??
+            element.textContent?.replace(/\s+/g, " ").trim() ??
+            "";
+
+          return { name, value };
+        })
+        .filter((entry) => entry.name && entry.value);
+      const jsonLdBlocks = Array.from(
+        document.querySelectorAll("script[type='application/ld+json']")
+      )
+        .map((script) => script.textContent?.trim() ?? "")
+        .filter(Boolean)
+        .slice(0, 6);
 
       return {
         title: document.title.trim(),
-        content: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, maxCharacters),
+        textLines: lines,
         sourceUrls: Array.from(new Set([document.location.href, ...notableLinks
           .map((entry) => entry.split(": ").slice(1).join(": ").trim())
           .filter(Boolean)])),
         evidenceSnippets: lines.slice(0, maxEvidenceSnippets),
+        structured: {
+          canonicalUrl: document.querySelector("link[rel='canonical']")?.getAttribute("href") ?? "",
+          openGraph,
+          schemaFields,
+          jsonLdBlocks,
+        },
       };
-    }, { maxCharacters: MAX_EXTRACTED_CHARACTERS, maxEvidenceSnippets: MAX_EVIDENCE_SNIPPETS });
+    }, { maxEvidenceSnippets: MAX_EVIDENCE_SNIPPETS });
+
+    const structuredData = normalizeStructuredPageData(content.structured);
+    const structuredLines = buildStructuredDataLines(structuredData);
+    const mergedSourceUrls = Array.from(
+      new Set([
+        ...content.sourceUrls,
+        ...collectStructuredSourceUrls(structuredData),
+      ])
+    ).slice(0, MAX_SEARCH_RESULTS + 2);
+    const evidenceSnippets = Array.from(
+      new Set([...structuredLines, ...content.evidenceSnippets])
+    ).slice(0, MAX_EVIDENCE_SNIPPETS);
 
     return {
       url: page.url(),
       title: content.title,
-      content: content.content || "No content extracted.",
-      sourceUrls: Array.from(new Set(content.sourceUrls)).slice(0, MAX_SEARCH_RESULTS + 1),
-      evidenceSnippets: content.evidenceSnippets,
+      content:
+        collapseLines([...structuredLines, ...content.textLines], MAX_EXTRACTED_CHARACTERS) ||
+        "No content extracted.",
+      sourceUrls: mergedSourceUrls,
+      evidenceSnippets,
+      ...(structuredData ? { structuredData } : {}),
     };
   } finally {
     await context.close();

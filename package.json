@@ -1,6 +1,16 @@
 {
   "name": "notion-research-agent",
   "version": "0.1.0",
+  "description": "Human-reviewed web research agent for Gemini, Playwright, and Notion MCP.",
+  "keywords": [
+    "nextjs",
+    "gemini",
+    "notion",
+    "mcp",
+    "playwright",
+    "web-research",
+    "human-in-the-loop"
+  ],
   "private": true,
   "scripts": {
     "status": "node scripts/repo-status.cjs",
