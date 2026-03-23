@@ -1,4 +1,4 @@
-import type { NotionSchema } from "@/lib/notion-mcp";
+import type { NotionSchema } from "@/lib/notion/provider";
 
 export const RESEARCH_ITEM_PROVENANCE_KEY = "__provenance";
 export const RESEARCH_RUN_METADATA_KEY = "__runMetadata";

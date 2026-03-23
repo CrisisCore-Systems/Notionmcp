@@ -2,6 +2,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createRequire } from "node:module";
+import type {
+  DuplicateTracker,
+  NotionSchema,
+  NotionWriteMetadataSupport,
+} from "@/lib/notion/provider";
 import { enforceNotionValueLimit, isValidHttpUrl } from "@/lib/notion-validation";
 import type { ResearchItem } from "@/lib/research-result";
 import type { RowWriteMetadata } from "@/lib/write-audit";
@@ -51,24 +56,12 @@ type NotionMcpLaunchSpec = {
   args: string[];
 };
 
-export interface DuplicateTracker {
-  has(data: ResearchItem, operationKey?: string): boolean;
-  remember(data: ResearchItem, operationKey?: string): void;
-}
-
 export const NOTION_ROW_METADATA_PROPERTIES = {
   operationKey: "Operator Operation Key",
   sourceSet: "Operator Source Set",
   confidenceScore: "Operator Confidence",
   evidenceSummary: "Operator Evidence Summary",
 } as const;
-
-export type NotionWriteMetadataSupport = {
-  operationKey: boolean;
-  sourceSet: boolean;
-  confidenceScore: boolean;
-  evidenceSummary: boolean;
-};
 
 const FULL_NOTION_WRITE_METADATA_SUPPORT: NotionWriteMetadataSupport = {
   operationKey: true,
@@ -364,10 +357,6 @@ export async function callNotion(
     await resetClient();
     return await callNotionToolOnce(tool, args);
   }
-}
-
-export interface NotionSchema {
-  [propertyName: string]: "title" | "rich_text" | "url" | "number" | "select";
 }
 
 export function buildOperationalSchema(schema: NotionSchema): NotionSchema {

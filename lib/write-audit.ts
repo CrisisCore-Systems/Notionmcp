@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { NotionSchema } from "@/lib/notion-mcp";
+import type { NotionSchema } from "@/lib/notion/provider";
 import {
   RESEARCH_ITEM_PROVENANCE_KEY,
   RESEARCH_RUN_METADATA_KEY,
