@@ -12,6 +12,8 @@ type UseDraftPersistenceOptions = {
   persistenceEnabled: boolean;
 };
 
+export type DraftPersistenceNoticeTone = "success" | "privacy" | "error";
+
 export function useDraftPersistence({
   phase,
   prompt,
@@ -23,6 +25,7 @@ export function useDraftPersistence({
 }: UseDraftPersistenceOptions) {
   const [savedDraft, setSavedDraft] = useState<StoredDraft | null>(null);
   const [draftPersistenceNotice, setDraftPersistenceNotice] = useState<string | null>(null);
+  const [draftPersistenceNoticeTone, setDraftPersistenceNoticeTone] = useState<DraftPersistenceNoticeTone | null>(null);
 
   const clearSavedDraft = useCallback(() => {
     window.localStorage.removeItem(DRAFT_STORAGE_KEY);
@@ -36,7 +39,10 @@ export function useDraftPersistence({
   useEffect(() => {
     if (!persistenceEnabled) {
       clearSavedDraft();
-      setDraftPersistenceNotice("Draft persistence is off for this browser session.");
+      setDraftPersistenceNotice(
+        "Privacy mode keeps draft persistence off by default on this browser. Turn it on only on a trusted machine."
+      );
+      setDraftPersistenceNoticeTone("privacy");
       return;
     }
 
@@ -53,6 +59,9 @@ export function useDraftPersistence({
     const result = saveStoredDraft(window.localStorage, draft);
     setSavedDraft(result.savedDraft);
     setDraftPersistenceNotice(result.notice);
+    setDraftPersistenceNoticeTone(
+      result.notice ? (result.savedDraft ? "success" : "error") : null
+    );
   }, [
     clearSavedDraft,
     editedResult,
@@ -69,5 +78,6 @@ export function useDraftPersistence({
     setSavedDraft,
     clearSavedDraft,
     draftPersistenceNotice,
+    draftPersistenceNoticeTone,
   };
 }

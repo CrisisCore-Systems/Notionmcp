@@ -18,6 +18,7 @@ import {
   type RowWriteAuditEntry,
   type RowWriteMetadata,
 } from "@/lib/write-audit";
+import { buildWriteAuditUrl, persistWriteAuditRecord } from "@/lib/write-audit-store";
 import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
 
 export const runtime = "nodejs";
@@ -94,6 +95,18 @@ function buildRowAuditEntries(
   }
 
   return entries;
+}
+
+function buildDuplicateTrackerOptions(
+  operationKeySupport: boolean,
+  operationKeys: string[],
+  useExistingDatabase: boolean
+) {
+  return {
+    prefetchExisting: useExistingDatabase && !operationKeySupport,
+    useOperationKeyLookup: useExistingDatabase && operationKeySupport,
+    operationKeys,
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -228,7 +241,11 @@ export async function POST(req: NextRequest) {
         }
 
         duplicateTracker = await createDuplicateTracker(databaseId, schema, {
-          prefetchExisting: !!targetDatabaseId,
+          ...buildDuplicateTrackerOptions(
+            metadataSupport.operationKey,
+            operationKeys.slice(resumeFromIndex),
+            !!targetDatabaseId
+          ),
         });
 
         if (resumeFromIndex > 0) {
@@ -278,6 +295,18 @@ export async function POST(req: NextRequest) {
           buildRowAuditEntries(operationKeys, resumeFromIndex, items.length, confirmedWrittenRows, duplicateRows),
           rowsAttempted
         );
+        const persistedAudit = await persistWriteAuditRecord({
+          databaseId,
+          status: "complete",
+          usedExistingDatabase: !!targetDatabaseId,
+          resumedFromIndex: resumeFromIndex,
+          message: formatWriteCompleteMessage(
+            !!targetDatabaseId,
+            confirmedWrittenRows.size,
+            duplicateRows.size
+          ),
+          auditTrail,
+        });
         send("complete", {
           databaseId,
           itemsWritten: confirmedWrittenRows.size,
@@ -290,6 +319,8 @@ export async function POST(req: NextRequest) {
             confirmedWrittenRows.size,
             duplicateRows.size
           ),
+          auditId: persistedAudit.id,
+          auditUrl: buildWriteAuditUrl(persistedAudit.id),
           auditTrail,
         });
       } catch (err) {
@@ -299,7 +330,11 @@ export async function POST(req: NextRequest) {
         if (databaseId && nextRowIndex < items.length) {
           try {
             const reconciliationTracker = await createDuplicateTracker(databaseId, schema, {
-              prefetchExisting: true,
+              ...buildDuplicateTrackerOptions(
+                metadataSupport.operationKey,
+                [operationKeys[nextRowIndex] ?? ""],
+                true
+              ),
             });
 
             if (reconciliationTracker.has(items[nextRowIndex] as ResearchItem, operationKeys[nextRowIndex])) {
@@ -326,6 +361,17 @@ export async function POST(req: NextRequest) {
           buildRowAuditEntries(operationKeys, resumeFromIndex, items.length, confirmedWrittenRows, duplicateRows),
           rowsAttempted
         );
+        const persistedAudit = await persistWriteAuditRecord({
+          databaseId: databaseId || undefined,
+          status: databaseId && nextRowIndex >= items.length ? "complete" : "error",
+          usedExistingDatabase: !!targetDatabaseId,
+          resumedFromIndex: resumeFromIndex,
+          nextRowIndex: databaseId && nextRowIndex < items.length ? nextRowIndex : undefined,
+          message: reconciled
+            ? `${message} Reconciliation verified the last ambiguous row before pausing.`
+            : message,
+          auditTrail,
+        });
 
         if (databaseId && nextRowIndex >= items.length) {
           send("complete", {
@@ -340,6 +386,8 @@ export async function POST(req: NextRequest) {
               confirmedWrittenRows.size,
               duplicateRows.size
             ),
+            auditId: persistedAudit.id,
+            auditUrl: buildWriteAuditUrl(persistedAudit.id),
             auditTrail,
           });
           return;
@@ -351,6 +399,8 @@ export async function POST(req: NextRequest) {
             : message,
           databaseId: databaseId || undefined,
           nextRowIndex,
+          auditId: persistedAudit.id,
+          auditUrl: buildWriteAuditUrl(persistedAudit.id),
           auditTrail,
         });
       } finally {

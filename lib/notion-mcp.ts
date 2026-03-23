@@ -46,6 +46,10 @@ interface NotionQueryResult {
 }
 
 type NotionTransportFactory = () => Transport;
+type NotionMcpLaunchSpec = {
+  command: string;
+  args: string[];
+};
 
 export interface DuplicateTracker {
   has(data: ResearchItem, operationKey?: string): boolean;
@@ -88,6 +92,35 @@ function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string 
 
 function getNotionMcpCommand(): string {
   return require.resolve("@notionhq/notion-mcp-server/bin/cli.mjs");
+}
+
+function parseNotionMcpArgs(value: string | undefined): string[] {
+  if (!value?.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function getNotionMcpLaunchSpec(env: NodeJS.ProcessEnv = process.env): NotionMcpLaunchSpec {
+  const command = env.NOTION_MCP_COMMAND?.trim();
+
+  if (command) {
+    return {
+      command,
+      args: parseNotionMcpArgs(env.NOTION_MCP_ARGS),
+    };
+  }
+
+  return {
+    command: process.execPath,
+    args: [getNotionMcpCommand()],
+  };
 }
 
 function parseOpenApiHeaders(value: string | undefined): Record<string, string> {
@@ -136,10 +169,11 @@ export function buildNotionMcpEnv(notionToken: string): Record<string, string> {
 
 const notionTransportFactory: NotionTransportFactory = () => {
   const notionToken = getRequiredEnv("NOTION_TOKEN");
+  const launchSpec = getNotionMcpLaunchSpec();
 
   return new StdioClientTransport({
-    command: process.execPath,
-    args: [getNotionMcpCommand()],
+    command: launchSpec.command,
+    args: launchSpec.args,
     env: buildNotionMcpEnv(notionToken),
   });
 };
@@ -608,15 +642,63 @@ async function getExistingDuplicateRecords(
   return { fingerprints, operationKeys };
 }
 
+const OPERATION_KEY_LOOKUP_BATCH_SIZE = 25;
+
+async function getExistingOperationKeys(
+  databaseId: string,
+  operationKeys: string[]
+): Promise<Set<string>> {
+  const dataSourceId = await getDataSourceId(databaseId);
+  const uniqueOperationKeys = Array.from(
+    new Set(operationKeys.map((operationKey) => operationKey.trim()).filter(Boolean))
+  );
+  const existingOperationKeys = new Set<string>();
+
+  for (let index = 0; index < uniqueOperationKeys.length; index += OPERATION_KEY_LOOKUP_BATCH_SIZE) {
+    const batch = uniqueOperationKeys.slice(index, index + OPERATION_KEY_LOOKUP_BATCH_SIZE);
+    const result = await callNotion("notion_query_data_source", {
+      data_source_id: dataSourceId,
+      page_size: batch.length,
+      filter: {
+        or: batch.map((operationKey) => ({
+          property: NOTION_ROW_METADATA_PROPERTIES.operationKey,
+          rich_text: {
+            equals: operationKey,
+          },
+        })),
+      },
+    });
+    const queryResult = extractStructuredPayload(result, isQueryResult);
+
+    for (const row of queryResult?.results ?? []) {
+      const existingOperationKey = getOperationKeyFromPage(row);
+
+      if (existingOperationKey) {
+        existingOperationKeys.add(existingOperationKey);
+      }
+    }
+  }
+
+  return existingOperationKeys;
+}
+
 export async function createDuplicateTracker(
   databaseId: string,
   schema: NotionSchema,
-  options?: { prefetchExisting?: boolean }
+  options?: { prefetchExisting?: boolean; useOperationKeyLookup?: boolean; operationKeys?: string[] }
 ): Promise<DuplicateTracker> {
   const records =
     options?.prefetchExisting === false
       ? { fingerprints: new Set<string>(), operationKeys: new Set<string>() }
       : await getExistingDuplicateRecords(databaseId, schema);
+
+  if (options?.useOperationKeyLookup) {
+    const existingOperationKeys = await getExistingOperationKeys(databaseId, options.operationKeys ?? []);
+
+    for (const operationKey of existingOperationKeys) {
+      records.operationKeys.add(operationKey);
+    }
+  }
 
   return {
     has(data, operationKey) {
