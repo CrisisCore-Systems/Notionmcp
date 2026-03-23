@@ -22,3 +22,10 @@ test("validatePublicHttpUrl blocks private IP targets", async () => {
     /Local, private, and link-local addresses are blocked/
   );
 });
+
+test("validatePublicHttpUrl blocks non-http protocols", async () => {
+  await assert.rejects(
+    () => validatePublicHttpUrl("file:///etc/passwd"),
+    /Only public http\(s\) URLs can be browsed/
+  );
+});

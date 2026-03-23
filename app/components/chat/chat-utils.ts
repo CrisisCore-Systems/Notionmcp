@@ -1,3 +1,8 @@
+import {
+  RESEARCH_ITEM_PROVENANCE_KEY,
+  type ResearchItem,
+  type ResearchItemProvenance,
+} from "@/lib/research-result";
 import type { EditableResult, PropertyType, ValidationIssue } from "./types";
 
 export function formatPropertyTypeLabel(type: PropertyType): string {
@@ -68,7 +73,7 @@ export function buildCsv(result: EditableResult): string {
   const columns = Object.keys(result.schema);
   const header = columns.map(escapeCsvValue).join(",");
   const rows = result.items.map((item) =>
-    columns.map((column) => escapeCsvValue(item[column] ?? "")).join(",")
+    columns.map((column) => escapeCsvValue(getItemTextValue(item, column))).join(",")
   );
 
   return [header, ...rows].join("\n");
@@ -87,12 +92,21 @@ function isValidHttpUrl(value: string): boolean {
   }
 }
 
+export function getItemTextValue(item: ResearchItem, key: string): string {
+  return typeof item[key] === "string" ? item[key] : "";
+}
+
+export function getItemProvenance(item: ResearchItem): ResearchItemProvenance | undefined {
+  const provenance = item[RESEARCH_ITEM_PROVENANCE_KEY];
+  return provenance && typeof provenance === "object" ? (provenance as ResearchItemProvenance) : undefined;
+}
+
 export function getValidationIssues(result: EditableResult): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const titleColumn = Object.entries(result.schema).find(([, type]) => type === "title")?.[0];
 
   result.items.forEach((item, rowIndex) => {
-    if (titleColumn && !item[titleColumn]?.trim()) {
+    if (titleColumn && !getItemTextValue(item, titleColumn).trim()) {
       issues.push({
         rowIndex,
         columnName: titleColumn,
@@ -101,7 +115,7 @@ export function getValidationIssues(result: EditableResult): ValidationIssue[] {
     }
 
     for (const [columnName, propertyType] of Object.entries(result.schema)) {
-      const value = item[columnName]?.trim() ?? "";
+      const value = getItemTextValue(item, columnName).trim();
 
       if (!value) continue;
 

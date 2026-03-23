@@ -24,6 +24,13 @@ test("normalizeResearchResult trims values and deduplicates schema names", () =>
         name: true as unknown as string,
         URL: " https://example.com ",
         Score: "42",
+        __provenance: {
+          sourceUrls: ["https://example.com", "notaurl"],
+          evidenceByField: {
+            Name: ["  Alpha company  "],
+            Empty: [""],
+          },
+        },
       },
     ],
   });
@@ -40,6 +47,12 @@ test("normalizeResearchResult trims values and deduplicates schema names", () =>
       "name 2": "true",
       URL: "https://example.com",
       Score: "42",
+      __provenance: {
+        sourceUrls: ["https://example.com"],
+        evidenceByField: {
+          Name: ["Alpha company"],
+        },
+      },
     },
   ]);
 });

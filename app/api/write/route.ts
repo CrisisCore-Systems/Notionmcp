@@ -8,6 +8,7 @@ import {
 } from "@/lib/notion-mcp";
 import { validateApiRequest } from "@/lib/request-security";
 import { runWithRetry } from "@/lib/retry";
+import type { ResearchItem } from "@/lib/research-result";
 import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
 
 export const runtime = "nodejs";
@@ -33,7 +34,7 @@ function formatWriteCompleteMessage(
 
 async function addRowWithRetry(
   databaseId: string,
-  data: Record<string, string>,
+  data: ResearchItem,
   schema: NotionSchema,
   rowIndex: number,
   duplicateTracker: DuplicateTracker
