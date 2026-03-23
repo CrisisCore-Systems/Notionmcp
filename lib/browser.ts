@@ -274,7 +274,7 @@ function collectStructuredSourceUrls(structuredData: StructuredPageData | undefi
 
   for (const entry of structuredData.jsonLd ?? []) {
     for (const [name, value] of Object.entries(entry.properties)) {
-      if (name.toLowerCase().includes("url") || name.toLowerCase() === "sameAs".toLowerCase()) {
+      if (name.toLowerCase().includes("url") || name.toLowerCase() === "sameas") {
         value
           .split(/\s*,\s*/)
           .forEach((candidate) => add(candidate));
