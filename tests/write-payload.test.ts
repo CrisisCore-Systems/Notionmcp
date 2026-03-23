@@ -4,7 +4,9 @@ import {
   isResearchResult,
   isValidDatabaseId,
   normalizeResearchResult,
+  parseResearchResult,
 } from "@/lib/write-payload";
+import { buildDuplicateFingerprint } from "@/lib/notion-mcp";
 
 test("normalizeResearchResult trims values and deduplicates schema names", () => {
   const result = normalizeResearchResult({
@@ -63,6 +65,22 @@ test("normalizeResearchResult rejects invalid numeric values", () => {
   );
 });
 
+test("parseResearchResult rejects malformed payloads before the UI boundary", () => {
+  assert.throws(
+    () =>
+      parseResearchResult(
+        {
+          suggestedDbTitle: "Broken",
+          summary: "Summary",
+          schema: { Name: "title" },
+          items: ["not-an-object"],
+        },
+        "Agent returned an invalid research payload."
+      ),
+    /Agent returned an invalid research payload/
+  );
+});
+
 test("isResearchResult rejects malformed payloads", () => {
   assert.equal(
     isResearchResult({
@@ -78,4 +96,31 @@ test("isResearchResult rejects malformed payloads", () => {
 test("isValidDatabaseId accepts only valid Notion database IDs", () => {
   assert.equal(isValidDatabaseId("1234"), false);
   assert.equal(isValidDatabaseId("1a2b3c4d5e6f77889900aabbccddeeff"), true);
+});
+
+test("buildDuplicateFingerprint uses stable title and URL identity", () => {
+  const schema = {
+    Name: "title",
+    URL: "url",
+    Summary: "rich_text",
+  } as const;
+
+  const first = buildDuplicateFingerprint(
+    {
+      Name: "Linear",
+      URL: "https://example.com/company/",
+      Summary: "Original summary",
+    },
+    schema
+  );
+  const second = buildDuplicateFingerprint(
+    {
+      Name: "  linear  ",
+      URL: "https://example.com/company",
+      Summary: "Different summary text",
+    },
+    schema
+  );
+
+  assert.equal(first, second);
 });

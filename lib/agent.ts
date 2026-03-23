@@ -5,7 +5,10 @@ import {
   type FunctionDeclaration,
 } from "@google/generative-ai";
 import { browseAndExtract, searchWeb } from "./browser";
-import type { NotionSchema } from "./notion-mcp";
+import type { ResearchResult } from "./research-result";
+import { parseResearchResult } from "./write-payload";
+
+export type { ResearchResult } from "./research-result";
 
 /** Create a Gemini client or throw a setup error if the API key is missing. */
 function getGeminiClient() {
@@ -19,14 +22,6 @@ function getGeminiClient() {
 
   return new GoogleGenerativeAI(apiKey);
 }
-
-export interface ResearchResult {
-  suggestedDbTitle: string;
-  summary: string;
-  schema: NotionSchema;
-  items: Record<string, string>[];
-}
-
 const SYSTEM_PROMPT = `You are a research agent that browses the web and structures findings into a Notion database.
 
 Given a research prompt, you will:
@@ -134,9 +129,16 @@ export async function runResearchAgent(
         .trim();
 
       try {
-        return JSON.parse(cleaned) as ResearchResult;
-      } catch {
-        throw new Error(`Agent returned non-JSON response: ${text.slice(0, 200)}`);
+        return parseResearchResult(
+          JSON.parse(cleaned),
+          "Agent returned an invalid research payload."
+        );
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new Error(`Agent returned non-JSON response: ${text.slice(0, 200)}`);
+        }
+
+        throw error;
       }
     }
 
