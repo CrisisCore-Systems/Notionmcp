@@ -130,6 +130,88 @@ Previous response:
 ${previousResponse}`;
 }
 
+function normalizeModelResponseText(text: string): string {
+  return text
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+function countUniqueSourceUrls(result: ResearchResult): number {
+  const sourceUrls = new Set<string>();
+
+  for (const item of result.items) {
+    for (const url of item.__provenance?.sourceUrls ?? []) {
+      if (url) {
+        sourceUrls.add(url);
+      }
+    }
+  }
+
+  return sourceUrls.size;
+}
+
+type ParseResearchResponseOptions = {
+  maxReconciliationAttempts?: number;
+  reconcile?: (repairPrompt: string) => Promise<string>;
+  onUpdate?: (msg: string) => void;
+  startedAtMs?: number;
+};
+
+export async function parseResearchResponseWithReconciliation(
+  responseText: string,
+  {
+    maxReconciliationAttempts = MAX_RECONCILIATION_ATTEMPTS,
+    reconcile,
+    onUpdate,
+    startedAtMs,
+  }: ParseResearchResponseOptions = {}
+): Promise<ResearchResult> {
+  let cleaned = normalizeModelResponseText(responseText);
+  let reconciliationAttempts = 0;
+
+  while (true) {
+    try {
+      const result = parseResearchResult(
+        JSON.parse(cleaned),
+        "Agent returned an invalid research payload."
+      );
+      const uniqueSourceCount = countUniqueSourceUrls(result);
+      const durationSuffix =
+        typeof startedAtMs === "number"
+          ? ` in ${((Date.now() - startedAtMs) / 1000).toFixed(1)}s`
+          : "";
+      const reconciliationSuffix =
+        reconciliationAttempts > 0
+          ? ` after ${reconciliationAttempts} reconciliation attempt${
+              reconciliationAttempts === 1 ? "" : "s"
+            }`
+          : "";
+
+      onUpdate?.(
+        `✅ Structured ${result.items.length} row${result.items.length === 1 ? "" : "s"} from ${uniqueSourceCount} unique source${uniqueSourceCount === 1 ? "" : "s"}${reconciliationSuffix}${durationSuffix}.`
+      );
+      return result;
+    } catch (error) {
+      if (reconciliationAttempts >= maxReconciliationAttempts || !reconcile) {
+        if (error instanceof SyntaxError) {
+          throw new Error(`Agent returned non-JSON response: ${cleaned.slice(0, 200)}`);
+        }
+
+        throw error;
+      }
+
+      reconciliationAttempts += 1;
+      onUpdate?.("🧭 Reconciling extracted rows before approval...");
+      cleaned = normalizeModelResponseText(
+        await reconcile(buildReconciliationPrompt(cleaned, error))
+      );
+    }
+  }
+}
+
 export async function runResearchAgent(
   prompt: string,
   onUpdate: (msg: string) => void
@@ -146,7 +228,7 @@ export async function runResearchAgent(
   const chat = model.startChat();
   let response = await chat.sendMessage(prompt);
   let iterations = 0;
-  let reconciliationAttempts = 0;
+  const startedAtMs = Date.now();
 
   while (iterations < MAX_ITERATIONS) {
     iterations++;
@@ -154,34 +236,15 @@ export async function runResearchAgent(
 
     // No more tool calls → final structured response
     if (!calls || calls.length === 0) {
-      const text = response.response.text().trim();
-
-      // Strip markdown code fences if present
-      const cleaned = text
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-
-      try {
-        return parseResearchResult(
-          JSON.parse(cleaned),
-          "Agent returned an invalid research payload."
-        );
-      } catch (error) {
-        if (reconciliationAttempts >= MAX_RECONCILIATION_ATTEMPTS) {
-          if (error instanceof SyntaxError) {
-            throw new Error(`Agent returned non-JSON response: ${text.slice(0, 200)}`);
-          }
-
-          throw error;
-        }
-
-        reconciliationAttempts += 1;
-        onUpdate("🧭 Reconciling extracted rows before approval...");
-        response = await chat.sendMessage(buildReconciliationPrompt(cleaned, error));
-        continue;
-      }
+      return parseResearchResponseWithReconciliation(response.response.text(), {
+        maxReconciliationAttempts: MAX_RECONCILIATION_ATTEMPTS,
+        startedAtMs,
+        onUpdate,
+        reconcile: async (repairPrompt) => {
+          const repairedResponse = await chat.sendMessage(repairPrompt);
+          return repairedResponse.response.text();
+        },
+      });
     }
 
     // Execute tool calls with a small concurrency limit to avoid overloading browser + upstream services.
@@ -196,6 +259,9 @@ export async function runResearchAgent(
             const query = args.query ?? "";
             onUpdate(`🔍 Searching: "${query}"`);
             const results = await searchWeb(query);
+            onUpdate(
+              `📚 Search returned ${results.length} candidate source${results.length === 1 ? "" : "s"}.`
+            );
 
             return {
               functionResponse: {

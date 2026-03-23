@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ResearchResult } from "@/lib/agent";
 import {
   buildCsv,
   buildNotionWebUrl,
   getSafeFilename,
   getUniqueColumnName,
-  getValidationIssues,
   moveArrayItem,
 } from "./chat/chat-utils";
 import { CompletionPanel } from "./chat/CompletionPanel";
 import { RowEditor } from "./chat/RowEditor";
 import { SchemaEditor } from "./chat/SchemaEditor";
+import { useApprovalValidation } from "./chat/useApprovalValidation";
 import { streamSSE } from "./chat/stream";
 import type {
   EditableResult,
@@ -68,50 +68,18 @@ export default function ChatUI() {
     targetDatabaseId,
     pendingWriteResume,
   });
-  const schemaEntries = editedResult
-    ? (Object.entries(editedResult.schema) as [string, PropertyType][])
-    : [];
-  const titleFieldCount = schemaEntries.filter(([, type]) => type === "title").length;
-  const hasSchema = schemaEntries.length > 0;
-  const targetDatabaseValid =
-    !!pendingWriteResume || !useExistingDatabase || !!targetDatabaseId.trim();
-  const validationIssues = useMemo(
-    () => (editedResult ? getValidationIssues(editedResult) : []),
-    [editedResult]
-  );
-  const invalidCellLookup = useMemo(() => {
-    const lookup = new Set<string>();
-
-    for (const issue of validationIssues) {
-      lookup.add(`${issue.rowIndex}:${issue.columnName}`);
-    }
-
-    return lookup;
-  }, [validationIssues]);
-  const canWrite =
-    !!editedResult &&
-    editedResult.items.length > 0 &&
-    hasSchema &&
-    titleFieldCount === 1 &&
-    !!editedResult.suggestedDbTitle.trim() &&
-    !!editedResult.summary.trim() &&
-    targetDatabaseValid &&
-    validationIssues.length === 0;
-
-  let approvalHint: string | null = null;
-  if (editedResult) {
-    if (titleFieldCount !== 1) {
-      approvalHint = "Your schema must contain exactly one title field before writing to Notion.";
-    } else if (!targetDatabaseValid) {
-      approvalHint = "Enter an existing Notion database ID or switch back to creating a new database.";
-    } else if (validationIssues.length > 0) {
-      approvalHint = validationIssues[0]?.message ?? "Fix the highlighted cells before writing to Notion.";
-    } else if (!editedResult.summary.trim()) {
-      approvalHint = "Add a summary before writing to Notion.";
-    } else if (!editedResult.suggestedDbTitle.trim()) {
-      approvalHint = "Add a database title before writing to Notion.";
-    }
-  }
+  const {
+    schemaEntries,
+    validationIssues,
+    invalidCellLookup,
+    canWrite,
+    approvalHint,
+  } = useApprovalValidation({
+    editedResult,
+    useExistingDatabase,
+    targetDatabaseId,
+    pendingWriteResume,
+  });
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
     setLogs((prev) => [...prev, { type, message }]);
