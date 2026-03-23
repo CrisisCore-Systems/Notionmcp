@@ -47,6 +47,21 @@ test("write route rejects resume requests without a target database", async () =
   assert.match(await response.text(), /targetDatabaseId is required when resuming/);
 });
 
+test("write route rejects invalid existing database IDs before touching Notion", async () => {
+  const response = await postWrite(
+    createRequest("http://localhost:3000/api/write", {
+      suggestedDbTitle: "Research",
+      summary: "Summary",
+      schema: { Name: "title" },
+      items: [{ Name: "Alpha" }],
+      targetDatabaseId: "not-a-real-database-id",
+    })
+  );
+
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /valid Notion database ID/);
+});
+
 test("runWithRetry retries transient failures before succeeding", async () => {
   let attempts = 0;
 

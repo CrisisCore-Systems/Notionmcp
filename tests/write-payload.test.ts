@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { NOTION_FIELD_LIMITS } from "@/lib/notion-validation";
 import {
   isResearchResult,
   isValidDatabaseId,
@@ -80,6 +81,46 @@ test("normalizeResearchResult rejects invalid numeric values", () => {
       }),
     /non-numeric value/
   );
+});
+
+test("normalizeResearchResult truncates oversized Notion text and URL values", () => {
+  const longTitle = "A".repeat(NOTION_FIELD_LIMITS.title + 25);
+  const longDescription = "B".repeat(NOTION_FIELD_LIMITS.rich_text + 250);
+  const longUrl = `https://example.com/${"path/".repeat(450)}`;
+  const result = normalizeResearchResult({
+    suggestedDbTitle: "Research",
+    summary: "Summary",
+    schema: {
+      Name: "title",
+      Description: "rich_text",
+      URL: "url",
+    },
+    items: [
+      {
+        Name: longTitle,
+        Description: longDescription,
+        URL: longUrl,
+        __provenance: {
+          sourceUrls: ["https://example.com/source"],
+          evidenceByField: {
+            Name: ["The page names the company."],
+            Description: ["The page includes a long description."],
+          },
+        },
+      },
+    ],
+  });
+
+  const normalizedItem = result.items[0] ?? {};
+  const normalizedTitle = typeof normalizedItem.Name === "string" ? normalizedItem.Name : "";
+  const normalizedDescription =
+    typeof normalizedItem.Description === "string" ? normalizedItem.Description : "";
+  const normalizedUrl = typeof normalizedItem.URL === "string" ? normalizedItem.URL : "";
+
+  assert.equal(normalizedTitle.length, NOTION_FIELD_LIMITS.title);
+  assert.equal(normalizedDescription.length, NOTION_FIELD_LIMITS.rich_text);
+  assert.equal(normalizedUrl.length <= NOTION_FIELD_LIMITS.url, true);
+  assert.equal(new URL(normalizedUrl).protocol, "https:");
 });
 
 test("parseResearchResult rejects malformed payloads before the UI boundary", () => {
@@ -187,6 +228,32 @@ test("buildNotionPageProperties preserves numeric zero without fallback coercion
     Name: { title: [{ text: { content: "Alpha" } }] },
     Score: { number: 0 },
   });
+});
+
+test("buildNotionPageProperties clamps oversized Notion text and URL payloads", () => {
+  const properties = buildNotionPageProperties(
+    {
+      Name: "A".repeat(NOTION_FIELD_LIMITS.title + 10),
+      Description: "B".repeat(NOTION_FIELD_LIMITS.rich_text + 10),
+      URL: `https://example.com/${"x".repeat(NOTION_FIELD_LIMITS.url + 50)}`,
+    },
+    {
+      Name: "title",
+      Description: "rich_text",
+      URL: "url",
+    }
+  );
+
+  assert.equal(
+    ((properties.Name as { title: Array<{ text: { content: string } }> }).title[0]?.text.content ?? "").length,
+    NOTION_FIELD_LIMITS.title
+  );
+  assert.equal(
+    ((properties.Description as { rich_text: Array<{ text: { content: string } }> }).rich_text[0]?.text.content ?? "")
+      .length,
+    NOTION_FIELD_LIMITS.rich_text
+  );
+  assert.equal(((properties.URL as { url: string }).url ?? "").length <= NOTION_FIELD_LIMITS.url, true);
 });
 
 test("buildNotionPageProperties rejects invalid numeric strings", () => {

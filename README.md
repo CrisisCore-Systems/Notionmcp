@@ -39,6 +39,9 @@ Add `-- --json` if you want the same information as structured JSON.
 4. **You review** the structured data and proposed Notion schema
 5. **One click** writes everything to Notion via the official Notion MCP server
 
+The write path clamps Notion `title`, `rich_text`, and `url` values to Notion-safe lengths before page
+creation so oversized model output cannot fail the whole write.
+
 After the write completes, the UI gives you a standard `https://www.notion.so/...` link. That link
 can be opened in a browser or shared into the Notion app on Android.
 
@@ -104,7 +107,8 @@ By default, `/api/research` and `/api/write` only accept local requests. If you 
 app for tightly controlled private use, set **both** `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN`, then
 send the matching token in either the `x-app-access-token` header or a `Bearer` token. Cross-origin
 requests are rejected either way. The built-in UI now includes an optional access-token field for that
-private remote mode; leave it blank for normal localhost use.
+private remote mode; leave it blank for normal localhost use. Review drafts are stored only in the
+current browser, expire automatically after 7 days, and can be disabled per session from the UI.
 
 ### 3. Run
 
