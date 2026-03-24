@@ -53,10 +53,10 @@ export function buildApiSurfaceHeaders(
 
   return {
     "Cache-Control": "no-store",
-    "X-Notionmcp-Surface": kind,
-    "X-Notionmcp-Deployment-Mode": context.deploymentMode,
-    "X-Notionmcp-Durable-Execution": context.durableExecutionMode,
-    ...(providerState ? { "X-Notionmcp-Provider-Mode": providerState.mode } : {}),
+    "x-notionmcp-surface": kind,
+    "x-notionmcp-deployment-mode": context.deploymentMode,
+    "x-notionmcp-durable-execution": context.durableExecutionMode,
+    ...(providerState ? { "x-notionmcp-provider-mode": providerState.mode } : {}),
   };
 }
 

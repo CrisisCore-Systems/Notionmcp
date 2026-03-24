@@ -64,7 +64,7 @@ test("research route rejects unknown research lanes instead of silently falling 
   );
 
   assert.equal(response.status, 400);
-  assert.match(await response.text(), /researchMode must be one of the deliberate reviewed lanes/);
+  assert.match(await response.text(), /Supported values are: \\"fast\\", \\"deep\\"/);
 });
 
 test("write route rejects an incomplete payload before touching Notion", async () => {

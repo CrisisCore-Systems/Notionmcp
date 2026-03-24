@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
     if (requestedResearchMode && !researchMode) {
       return new Response(
         JSON.stringify({
-          error: "researchMode must be one of the deliberate reviewed lanes: fast or deep",
+          error: 'Invalid researchMode. Supported values are: "fast", "deep".',
         }),
         {
           status: 400,
