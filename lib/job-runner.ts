@@ -47,17 +47,21 @@ export async function processJob(jobId: string): Promise<void> {
 
   try {
     if (record.kind === "research") {
-      const payload = record.payload as { prompt?: string };
-      const result = await runResearchAgent(payload.prompt ?? "", async (message, checkpoint) => {
-        const mergedCheckpoint: Partial<JobCheckpoint> = {
-          phase: checkpoint?.phase,
-          searchQueries: checkpoint?.searchQueries,
-          evidenceDocumentCount: checkpoint?.evidenceDocumentCount,
-          pagesBrowsed: checkpoint?.pagesBrowsed,
-        };
-        await appendJobEvent(jobId, "update", { message }, mergedCheckpoint);
-        await touchJobHeartbeat(jobId, mergedCheckpoint);
-      });
+      const payload = record.payload as { prompt?: string; researchMode?: string };
+      const result = await runResearchAgent(
+        payload.prompt ?? "",
+        async (message, checkpoint) => {
+          const mergedCheckpoint: Partial<JobCheckpoint> = {
+            phase: checkpoint?.phase,
+            searchQueries: checkpoint?.searchQueries,
+            evidenceDocumentCount: checkpoint?.evidenceDocumentCount,
+            pagesBrowsed: checkpoint?.pagesBrowsed,
+          };
+          await appendJobEvent(jobId, "update", { message }, mergedCheckpoint);
+          await touchJobHeartbeat(jobId, mergedCheckpoint);
+        },
+        { researchMode: payload.researchMode }
+      );
 
       await markJobComplete(jobId, result, {
         phase: "complete",

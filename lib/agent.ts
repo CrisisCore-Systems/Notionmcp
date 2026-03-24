@@ -8,10 +8,51 @@ export type { ResearchResult } from "./research-result";
 
 const MODEL_NAME = "gemini-2.0-flash";
 const MAX_RECONCILIATION_ATTEMPTS = 1;
-const MAX_PARALLEL_EXTRACTIONS = 2;
-const MAX_PLANNED_QUERIES = 4;
-const MAX_BROWSE_PER_QUERY = 2;
-const MAX_EVIDENCE_DOCUMENTS = 8;
+const DEFAULT_RESEARCH_MODE = "fast";
+
+export type ResearchMode = "fast" | "deep";
+
+type ResearchProfile = {
+  mode: ResearchMode;
+  maxParallelExtractions: number;
+  maxPlannedQueries: number;
+  maxBrowsePerQuery: number;
+  maxEvidenceDocuments: number;
+  minUniqueDomains: number;
+  minSourceClasses: number;
+  maxPerDomain: number;
+};
+
+const RESEARCH_PROFILES: Record<ResearchMode, ResearchProfile> = {
+  fast: {
+    mode: "fast",
+    maxParallelExtractions: 2,
+    maxPlannedQueries: 4,
+    maxBrowsePerQuery: 2,
+    maxEvidenceDocuments: 8,
+    minUniqueDomains: 0,
+    minSourceClasses: 0,
+    maxPerDomain: Number.POSITIVE_INFINITY,
+  },
+  deep: {
+    mode: "deep",
+    maxParallelExtractions: 2,
+    maxPlannedQueries: 6,
+    maxBrowsePerQuery: 3,
+    maxEvidenceDocuments: 12,
+    minUniqueDomains: 4,
+    minSourceClasses: 3,
+    maxPerDomain: 2,
+  },
+};
+
+type SourceClass = "official" | "editorial" | "directory" | "community" | "reference" | "other";
+
+type CandidateSource = {
+  url: string;
+  domain: string;
+  sourceClass: SourceClass;
+};
 
 type ParseResearchResponseOptions = {
   maxReconciliationAttempts?: number;
@@ -36,6 +77,207 @@ type RunResearchUpdateCheckpoint = {
   evidenceDocumentCount?: number;
   pagesBrowsed?: number;
 };
+
+function normalizeResearchMode(value: string | undefined): ResearchMode {
+  const normalized = value?.trim().toLowerCase();
+
+  if (
+    normalized === "deep" ||
+    normalized === "deep-research" ||
+    normalized === "reviewed" ||
+    normalized === "reviewed-deep"
+  ) {
+    return "deep";
+  }
+
+  return DEFAULT_RESEARCH_MODE;
+}
+
+export function getResearchProfile(mode: string | undefined = DEFAULT_RESEARCH_MODE): ResearchProfile {
+  return RESEARCH_PROFILES[normalizeResearchMode(mode)];
+}
+
+function getFallbackPlannerQueries(prompt: string, profile: ResearchProfile): string[] {
+  const trimmedPrompt = prompt.trim();
+
+  if (!trimmedPrompt) {
+    return [];
+  }
+
+  const variants =
+    profile.mode === "deep"
+      ? [
+          trimmedPrompt,
+          `${trimmedPrompt} official site`,
+          `${trimmedPrompt} independent review`,
+          `${trimmedPrompt} documentation`,
+          `${trimmedPrompt} industry analysis`,
+        ]
+      : [trimmedPrompt];
+
+  return Array.from(new Set(variants)).slice(0, profile.maxPlannedQueries);
+}
+
+function getDomainForUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+export function classifySourceClass(url: string): SourceClass {
+  const domain = getDomainForUrl(url);
+  const pathname = (() => {
+    try {
+      return new URL(url).pathname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  const combined = `${domain}${pathname}`;
+
+  if (
+    combined.includes("docs") ||
+    combined.includes("developer") ||
+    combined.includes("support") ||
+    combined.includes("help") ||
+    combined.includes("knowledge-base")
+  ) {
+    return "official";
+  }
+
+  if (
+    combined.includes("news") ||
+    combined.includes("press") ||
+    combined.includes("blog") ||
+    combined.includes("journal") ||
+    combined.includes("magazine") ||
+    combined.includes("medium.com") ||
+    combined.includes("substack.com")
+  ) {
+    return "editorial";
+  }
+
+  if (
+    combined.includes("github.com") ||
+    combined.includes("gitlab.com") ||
+    combined.includes("reddit.com") ||
+    combined.includes("stackoverflow.com") ||
+    combined.includes("forum") ||
+    combined.includes("community")
+  ) {
+    return "community";
+  }
+
+  if (
+    combined.includes("directory") ||
+    combined.includes("compare") ||
+    combined.includes("alternatives") ||
+    combined.includes("list") ||
+    combined.includes("rank")
+  ) {
+    return "directory";
+  }
+
+  if (
+    combined.includes("wikipedia.org") ||
+    combined.includes("crunchbase.com") ||
+    combined.includes("linkedin.com") ||
+    combined.includes("g2.com") ||
+    combined.includes("capterra.com") ||
+    combined.includes("arxiv.org") ||
+    combined.includes("pubmed")
+  ) {
+    return "reference";
+  }
+
+  return "other";
+}
+
+function createCandidateSource(url: string): CandidateSource {
+  return {
+    url,
+    domain: getDomainForUrl(url),
+    sourceClass: classifySourceClass(url),
+  };
+}
+
+export function buildDeepResearchBrowseQueue(
+  urls: string[],
+  profile: ResearchProfile = RESEARCH_PROFILES.deep
+): string[] {
+  const candidates = Array.from(
+    new Map(
+      urls
+        .map((url) => url.trim())
+        .filter(Boolean)
+        .map((url) => [url, createCandidateSource(url)] as const)
+    ).values()
+  );
+  const selected: CandidateSource[] = [];
+  const selectedUrls = new Set<string>();
+  const selectedDomains = new Set<string>();
+  const selectedSourceClasses = new Set<SourceClass>();
+  const domainCounts = new Map<string, number>();
+
+  const pushCandidate = (candidate: CandidateSource, ignoreDomainCap = false): boolean => {
+    if (selected.length >= profile.maxEvidenceDocuments || selectedUrls.has(candidate.url)) {
+      return false;
+    }
+
+    const nextCount = (domainCounts.get(candidate.domain) ?? 0) + 1;
+
+    if (!ignoreDomainCap && candidate.domain && nextCount > profile.maxPerDomain) {
+      return false;
+    }
+
+    selected.push(candidate);
+    selectedUrls.add(candidate.url);
+    if (candidate.domain) {
+      selectedDomains.add(candidate.domain);
+      domainCounts.set(candidate.domain, nextCount);
+    }
+    selectedSourceClasses.add(candidate.sourceClass);
+    return true;
+  };
+
+  for (const candidate of candidates) {
+    if (!selectedDomains.has(candidate.domain) && !selectedSourceClasses.has(candidate.sourceClass)) {
+      pushCandidate(candidate);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (selectedDomains.size >= profile.minUniqueDomains) {
+      break;
+    }
+
+    if (!selectedDomains.has(candidate.domain)) {
+      pushCandidate(candidate);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (selectedSourceClasses.size >= profile.minSourceClasses) {
+      break;
+    }
+
+    if (!selectedSourceClasses.has(candidate.sourceClass)) {
+      pushCandidate(candidate);
+    }
+  }
+
+  for (const candidate of candidates) {
+    pushCandidate(candidate);
+  }
+
+  for (const candidate of candidates) {
+    pushCandidate(candidate, true);
+  }
+
+  return selected.map((candidate) => candidate.url);
+}
 
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -98,7 +340,7 @@ async function generateText(systemInstruction: string, prompt: string): Promise<
   return response.response.text();
 }
 
-function normalizePlannerOutput(text: string, prompt: string): PlannerOutput {
+function normalizePlannerOutput(text: string, prompt: string, profile: ResearchProfile): PlannerOutput {
   try {
     const parsed = JSON.parse(normalizeModelResponseText(text)) as Partial<PlannerOutput>;
     const searchQueries = Array.from(
@@ -108,7 +350,7 @@ function normalizePlannerOutput(text: string, prompt: string): PlannerOutput {
           .map((entry) => entry.trim())
           .filter(Boolean)
       )
-    ).slice(0, MAX_PLANNED_QUERIES);
+    ).slice(0, profile.maxPlannedQueries);
 
     if (searchQueries.length > 0) {
       return { searchQueries };
@@ -118,17 +360,21 @@ function normalizePlannerOutput(text: string, prompt: string): PlannerOutput {
   }
 
   return {
-    searchQueries: [prompt.trim()].filter(Boolean),
+    searchQueries: getFallbackPlannerQueries(prompt, profile),
   };
 }
 
 async function planResearchQueries(
   prompt: string,
-  onUpdate: (msg: string, checkpoint?: RunResearchUpdateCheckpoint) => Promise<void> | void
+  onUpdate: (msg: string, checkpoint?: RunResearchUpdateCheckpoint) => Promise<void> | void,
+  profile: ResearchProfile
 ): Promise<PlannerOutput> {
-  await onUpdate("🧭 Planning search strategy...", {
+  await onUpdate(
+    profile.mode === "deep" ? "🧭 Planning reviewed deep-research strategy..." : "🧭 Planning search strategy...",
+    {
     phase: "planning",
-  });
+    }
+  );
   const response = await generateText(
     `You are a research planner.
 
@@ -137,12 +383,13 @@ Return JSON only in this format:
   "searchQueries": ["query 1", "query 2", "query 3"]
 }
 
-- Plan 2 to 4 search queries.
+- Plan ${profile.mode === "deep" ? "4 to 6" : "2 to 4"} search queries.
 - Queries should maximize source diversity and evidence quality.
+- ${profile.mode === "deep" ? "In deep mode, bias toward distinct domains and a mix of official, editorial, reference, and community evidence." : "Stay concise and optimize for fast reviewed coverage."}
 - Do not include explanations.`,
     `Research prompt: ${prompt}`
   );
-  const plan = normalizePlannerOutput(response, prompt);
+  const plan = normalizePlannerOutput(response, prompt, profile);
   await onUpdate(`🧭 Planned ${plan.searchQueries.length} search quer${plan.searchQueries.length === 1 ? "y" : "ies"}.`, {
     phase: "planning",
     searchQueries: plan.searchQueries,
@@ -170,7 +417,8 @@ function serializeEvidenceDocuments(evidenceDocuments: EvidenceDocument[]): stri
 
 async function collectEvidenceDocuments(
   plan: PlannerOutput,
-  onUpdate: (msg: string, checkpoint?: RunResearchUpdateCheckpoint) => Promise<void> | void
+  onUpdate: (msg: string, checkpoint?: RunResearchUpdateCheckpoint) => Promise<void> | void,
+  profile: ResearchProfile
 ): Promise<{
   evidenceDocuments: EvidenceDocument[];
   candidateSourceSet: Set<string>;
@@ -178,6 +426,8 @@ async function collectEvidenceDocuments(
   rejectedUrlSet: Set<string>;
   searchProvidersUsed: Set<string>;
   configuredSearchProviders: string[];
+  selectedDomains: Set<string>;
+  selectedSourceClasses: Set<string>;
 }> {
   const candidateSourceSet = new Set<string>();
   const pagesBrowsedSet = new Set<string>();
@@ -215,18 +465,43 @@ async function collectEvidenceDocuments(
       }
     }
 
+    const candidateResultLimit = profile.mode === "deep" ? results.length : profile.maxBrowsePerQuery;
+
     candidateUrls.push(
       ...results
-        .slice(0, MAX_BROWSE_PER_QUERY)
+        .slice(0, candidateResultLimit)
         .map((result) => result.url)
         .filter((url) => !candidateUrls.includes(url))
     );
   }
 
+  const selectedCandidateUrls =
+    profile.mode === "deep"
+      ? buildDeepResearchBrowseQueue(candidateUrls, profile)
+      : candidateUrls.slice(0, profile.maxEvidenceDocuments);
+  const selectedDomains = new Set(selectedCandidateUrls.map((url) => getDomainForUrl(url)).filter(Boolean));
+  const selectedSourceClasses = new Set(
+    selectedCandidateUrls.map((url) => classifySourceClass(url)).filter(Boolean)
+  );
+
+  if (profile.mode === "deep") {
+    await onUpdate(
+      `🧪 Deep research mode queued ${selectedCandidateUrls.length} review page${
+        selectedCandidateUrls.length === 1 ? "" : "s"
+      } across ${selectedDomains.size} domain${selectedDomains.size === 1 ? "" : "s"} and ${
+        selectedSourceClasses.size
+      } source class${selectedSourceClasses.size === 1 ? "" : "es"}.`,
+      {
+        phase: "extracting",
+        searchQueries: plan.searchQueries,
+      }
+    );
+  }
+
   const evidenceDocuments = (
     await mapWithConcurrencyLimit(
-      candidateUrls.slice(0, MAX_EVIDENCE_DOCUMENTS),
-      MAX_PARALLEL_EXTRACTIONS,
+      selectedCandidateUrls,
+      profile.maxParallelExtractions,
       async (url) => {
         try {
           await onUpdate(`🌐 Browsing: ${url}`, {
@@ -266,6 +541,8 @@ async function collectEvidenceDocuments(
     rejectedUrlSet,
     searchProvidersUsed,
     configuredSearchProviders,
+    selectedDomains,
+    selectedSourceClasses,
   };
 }
 
@@ -362,12 +639,24 @@ export async function parseResearchResponseWithReconciliation(
 
 export async function runResearchAgent(
   prompt: string,
-  onUpdate: (msg: string, checkpoint?: RunResearchUpdateCheckpoint) => Promise<void> | void
+  onUpdate: (msg: string, checkpoint?: RunResearchUpdateCheckpoint) => Promise<void> | void,
+  options: {
+    researchMode?: string;
+  } = {}
 ): Promise<ResearchResult> {
   const startedAtMs = Date.now();
-  const plan = await planResearchQueries(prompt, onUpdate);
-  const { evidenceDocuments, candidateSourceSet, pagesBrowsedSet, rejectedUrlSet, searchProvidersUsed, configuredSearchProviders } =
-    await collectEvidenceDocuments(plan, onUpdate);
+  const profile = getResearchProfile(options.researchMode);
+  const plan = await planResearchQueries(prompt, onUpdate, profile);
+  const {
+    evidenceDocuments,
+    candidateSourceSet,
+    pagesBrowsedSet,
+    rejectedUrlSet,
+    searchProvidersUsed,
+    configuredSearchProviders,
+    selectedDomains,
+    selectedSourceClasses,
+  } = await collectEvidenceDocuments(plan, onUpdate, profile);
 
   if (evidenceDocuments.length === 0) {
     throw new Error("Research agent could not extract any usable evidence documents.");
@@ -483,6 +772,9 @@ ${serializeEvidenceDocuments(evidenceDocuments)}`;
         configuredProviders: configuredSearchProviders,
         usedProviders: Array.from(searchProvidersUsed),
         degraded: searchProvidersUsed.has("duckduckgo"),
+        mode: profile.mode,
+        uniqueDomains: Array.from(selectedDomains).sort((left, right) => left.localeCompare(right)),
+        sourceClasses: Array.from(selectedSourceClasses).sort((left, right) => left.localeCompare(right)),
       },
     },
   };

@@ -54,6 +54,10 @@ export function isValidJobId(jobId: string): boolean {
   return JOB_ID_PATTERN.test(jobId.trim());
 }
 
+export function buildJobStateUrl(jobId: string): string {
+  return `/api/jobs/${encodeURIComponent(jobId.trim())}`;
+}
+
 function getJobPath(jobId: string): string {
   if (!isValidJobId(jobId)) {
     throw new Error("Invalid job ID");

@@ -41,6 +41,11 @@ Add `-- --json` if you want the same information as structured JSON.
 5. **You review** the structured data and proposed Notion schema
 6. **One click** writes everything to Notion via the configured provider mode, with continuous row checkpoints
 
+The UI now exposes two reviewed research lanes:
+
+- **Fast lane** — the current default path with the existing low-latency evidence budget
+- **Deep research** — a reviewed mode with higher evidence caps, domain-diversity minimums, and source-class balancing before approval
+
 The write path clamps Notion `title`, `rich_text`, and `url` values to Notion-safe lengths before page
 creation so oversized model output cannot fail the whole write.
 
@@ -102,10 +107,11 @@ non-HTML content types, and strips instruction-like text before the verifier see
 to the local subprocess transport.
 
 - **`direct-api` (default)** — use the configured operator token against Notion's official REST API
-- **`local-mcp`** — keep using the bundled `@notionhq/notion-mcp-server` subprocess as a compatibility mode
+- **`local-mcp`** — keep using the bundled `@notionhq/notion-mcp-server` subprocess only as a legacy compatibility fallback
 
 The direct API path is the default because this repo is optimized for a private operator workflow with a
-single reviewed write lane. The local MCP transport stays available, but it is no longer the architectural spine.
+single reviewed write lane. The local MCP transport stays available, but it is no longer the architectural spine
+and should be treated as quarantined compatibility plumbing rather than the canonical path.
 
 ## Setup
 
@@ -134,13 +140,14 @@ Fill in `.env.local`:
 | `SERPER_API_KEY` | Optional. [serper.dev](https://serper.dev) — enables one stable API-backed search provider |
 | `BRAVE_SEARCH_API_KEY` | Optional. [search.brave.com](https://search.brave.com/) — enables a second API-backed search provider path |
 | `SEARCH_PROVIDERS` | Optional. Comma-separated provider order such as `serper,brave,duckduckgo` |
+| `NOTIONMCP_DEPLOYMENT_MODE` | Optional explicit deployment mode. `localhost-operator` is the default; set `remote-private-host` for intentional remote private hosting |
 | `APP_ALLOWED_ORIGIN` | Optional. Exact origin to allow when you intentionally expose the API beyond localhost |
 | `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
 | `APP_RATE_LIMIT_MAX` / `APP_RATE_LIMIT_WINDOW_MS` | Optional remote private-mode rate limiting for API routes |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 | `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by both provider modes |
-| `NOTION_PROVIDER` | Optional provider mode. `direct-api` is the default; set `local-mcp` for the subprocess compatibility path |
+| `NOTION_PROVIDER` | Optional provider mode. `direct-api` is the default; set `local-mcp` only for the legacy subprocess compatibility path |
 | `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` | Optional local MCP replacement command and JSON-array args |
 | `WRITE_AUDIT_DIR` | Optional server-side directory for persisted write audit JSON records |
 | `WRITE_AUDIT_RETENTION_DAYS` | Optional retention window before old write-audit JSON files are removed. Defaults to 30 |
@@ -152,26 +159,31 @@ Fill in `.env.local`:
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
 
-By default, `/api/research` and `/api/write` only accept local requests. If you intentionally deploy the
-app for tightly controlled private use, set **all three** of `APP_ALLOWED_ORIGIN`, `APP_ACCESS_TOKEN`, and
-`PERSISTED_STATE_ENCRYPTION_KEY`, then send the matching token in either the `x-app-access-token` header or
-a `Bearer` token. Cross-origin requests are rejected either way, and the app now refuses to boot remote
-private mode without persisted-state encryption. The built-in UI includes an optional access-token field for
-that private remote mode; leave it blank for normal localhost use. Review drafts can be enabled per browser
-session from the UI, stay off by default for privacy, and expire automatically after 7 days when enabled.
+By default, `/api/research` and `/api/write` run in **`localhost-operator`** mode and only accept local
+requests. If you intentionally deploy the app for tightly controlled private use, set
+`NOTIONMCP_DEPLOYMENT_MODE=remote-private-host` together with **all three** of `APP_ALLOWED_ORIGIN`,
+`APP_ACCESS_TOKEN`, and `PERSISTED_STATE_ENCRYPTION_KEY`, then send the matching token in either the
+`x-app-access-token` header or a `Bearer` token. Cross-origin requests are rejected either way, and the app
+now refuses to boot remote private-host mode unless detached durable jobs remain enabled. The built-in UI
+includes an optional access-token field for that private remote mode; leave it blank for normal localhost
+use. Review drafts can be enabled per browser session from the UI, stay off by default for privacy, and
+expire automatically after 7 days when enabled.
 
 The Notion provider layer pins the `Notion-Version` header to `2025-09-03` by default so the app does not
 silently drift with ambient API defaults. If you intentionally test a newer Notion API release, set
 `NOTION_API_VERSION` explicitly in `.env.local`. Leave `NOTION_PROVIDER` unset for the default direct API
-mode, or set `NOTION_PROVIDER=local-mcp` if you intentionally want the bundled subprocess path.
+mode, or set `NOTION_PROVIDER=local-mcp` only if you intentionally want the bundled subprocess fallback.
 
 Every write now also persists a server-side JSON audit record outside transient UI state and returns a
-download link from the completion panel. By default those records live under `.notionmcp-data/write-audits`
-in the project root, or you can redirect them with `WRITE_AUDIT_DIR`. Durable research/write job state lives
-under `.notionmcp-data/jobs` by default, or you can redirect it with `JOB_STATE_DIR`. Old persisted job and
-audit JSON files are cleaned up automatically after 30 days by default via `JOB_STATE_RETENTION_DAYS` and
-`WRITE_AUDIT_RETENTION_DAYS`. Local-only setups can leave persisted state unencrypted, but any remote private
-deployment must set `PERSISTED_STATE_ENCRYPTION_KEY` so those JSON files stay encrypted at rest.
+download link from the completion panel. The same completion panel now also links to the persisted durable
+job JSON so operators can inspect checkpoints, replayable event history, and the final result/error record as
+a first-class proof surface. By default those records live under `.notionmcp-data/write-audits` and
+`.notionmcp-data/jobs` in the project root, or you can redirect them with `WRITE_AUDIT_DIR` and
+`JOB_STATE_DIR`. The matching API proof endpoints are `/api/write-audits/{auditId}` and `/api/jobs/{jobId}`.
+Old persisted job and audit JSON files are cleaned up automatically after 30 days by default via
+`JOB_STATE_RETENTION_DAYS` and `WRITE_AUDIT_RETENTION_DAYS`. Local-only setups can leave persisted state
+unencrypted, but any remote private deployment must set `PERSISTED_STATE_ENCRYPTION_KEY` so those JSON files
+stay encrypted at rest.
 
 ### 3. Run
 
@@ -205,7 +217,13 @@ URL vetting, and resumable writes make that local/private mode much safer, but t
 substitute for production-grade containment.
 
 If you choose to deploy it beyond localhost, treat that as a private environment with additional
-hardening requirements:
+hardening requirements. The app now models that as an explicit deployment boundary:
+
+- **`localhost-operator`** — local workstation mode; fastest path for a single trusted operator
+- **`remote-private-host`** — remote private-host mode; fails closed unless remote access controls,
+  persisted-state encryption, and detached durable jobs are all configured
+
+Remote private-host mode still requires these operational controls:
 
 - run it on a long-lived Node host with persistent local storage whenever detached durable jobs are enabled
 - keep `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN` configured together
@@ -265,6 +283,9 @@ Notion database ✅
 5. For writes, the job checkpoint stores the last confirmed row index, so the next worker resume starts from the
    next unresolved row instead of replaying the whole append.
 
+After completion, the UI exposes both the write-audit JSON and the durable-job JSON so the operator can prove
+what evidence was used, what rows were attempted, and where the resumable worker checkpoint ended.
+
 ## Example write audit shape
 
 ```json
@@ -283,6 +304,16 @@ Notion database ✅
   }
 }
 ```
+
+## Trust artifact surface
+
+The durable write lane now leaves behind two operator-facing proof artifacts:
+
+1. **Write audit JSON** — source set, extraction counts, row outcomes, operation keys, duplicate skips, and unresolved rows
+2. **Durable job JSON** — queued/running/complete status, replayable event log, checkpoints, worker heartbeat, final result, and resumable state
+
+That proof surface is visible from the completion panel and persists independently of the browser tab, which is
+the main trust differentiator in this repository compared with typical “research agent to Notion” demos.
 
 ## Threat model notes for hostile web content
 

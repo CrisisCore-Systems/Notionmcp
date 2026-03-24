@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
     }
   } else {
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const researchMode = typeof body.researchMode === "string" ? body.researchMode.trim() : undefined;
 
     if (!prompt) {
       return new Response(JSON.stringify({ error: "Prompt is required" }), {
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const job = await createDurableJob("research", { prompt });
+    const job = await createDurableJob("research", { prompt, researchMode });
     jobId = job.id;
   }
 

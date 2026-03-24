@@ -7,6 +7,7 @@ import test from "node:test";
 import { getDetachedJobWorkerCommand } from "@/lib/job-runner";
 import {
   appendJobEvent,
+  buildJobStateUrl,
   createJob,
   isJobWorkerStale,
   loadJobRecord,
@@ -105,4 +106,10 @@ test("job store requires persisted state encryption in remote private mode", asy
     createJob("research", { prompt: "Remote job" }),
     /PERSISTED_STATE_ENCRYPTION_KEY/
   );
+});
+
+test("buildJobStateUrl returns the API path for persisted job JSON", () => {
+  const jobId = "11111111-1111-1111-1111-111111111111";
+
+  assert.equal(buildJobStateUrl(jobId), `/api/jobs/${jobId}`);
 });

@@ -19,6 +19,9 @@ export interface ResearchSearchMetadata {
   configuredProviders: string[];
   usedProviders: string[];
   degraded: boolean;
+  mode?: "fast" | "deep";
+  uniqueDomains?: string[];
+  sourceClasses?: string[];
 }
 
 export interface ResearchRunMetadata {
