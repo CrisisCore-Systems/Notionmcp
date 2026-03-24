@@ -1,4 +1,5 @@
 import type { NotionSchema } from "@/lib/notion/provider";
+import { sanitizeEvidenceText } from "@/lib/evidence-reduction";
 import {
   NOTION_PROPERTY_TYPES,
   enforceNotionValueLimit,
@@ -67,7 +68,12 @@ function normalizeEvidenceByField(
         normalizedKeyLookup?.get(fieldName) ?? normalizeTextValue(fieldName),
         Array.isArray(fieldEvidence)
           ? fieldEvidence
-              .map((entry) => normalizeTextValue(entry))
+              .flatMap((entry) =>
+                sanitizeEvidenceText(normalizeTextValue(entry))
+                  .split("\n")
+                  .map((snippet) => snippet.trim())
+                  .filter(Boolean)
+              )
               .filter(Boolean)
               .slice(0, 5)
           : [],

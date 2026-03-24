@@ -16,7 +16,7 @@ export const maxDuration = 120;
 
 export async function GET(req: NextRequest) {
   assertDeploymentReadiness();
-  const requestError = validateApiRequest(req);
+  const requestError = await validateApiRequest(req);
 
   if (requestError) {
     return requestError;
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   assertDeploymentReadiness();
   warnIfDurableJobsNeedLongLivedHost();
-  const requestError = validateApiRequest(req);
+  const requestError = await validateApiRequest(req);
 
   if (requestError) {
     return requestError;

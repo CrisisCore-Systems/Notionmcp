@@ -7,6 +7,7 @@ import {
 } from "playwright";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { sanitizeEvidenceText } from "@/lib/evidence-reduction";
 
 let browser: Browser | null = null;
 const MAX_SEARCH_RESULTS = 6;
@@ -336,42 +337,6 @@ function collapseLines(lines: string[], maxCharacters: number): string {
   }
 
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
-function isInstructionLikeText(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-
-  return (
-    normalized.startsWith("system:") ||
-    normalized.startsWith("assistant:") ||
-    normalized.startsWith("user:") ||
-    normalized.startsWith("developer:") ||
-    normalized.includes("ignore previous instructions") ||
-    normalized.includes("ignore all previous instructions") ||
-    normalized.includes("disregard previous instructions") ||
-    normalized.includes("ignore the above instructions") ||
-    normalized.includes("follow these instructions") ||
-    normalized.includes("reveal the system prompt") ||
-    normalized.includes("system prompt") ||
-    normalized.includes("you are chatgpt") ||
-    normalized.includes("you are an ai assistant") ||
-    normalized.includes("developer message") ||
-    normalized.includes("prompt injection") ||
-    normalized.includes("<system") ||
-    normalized.includes("<assistant") ||
-    normalized.includes("<user") ||
-    normalized.includes("<developer")
-  );
-}
-
-export function sanitizeEvidenceText(value: string): string {
-  return value
-    .split(/\r?\n+/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .filter((line) => !isInstructionLikeText(line))
-    .join("\n")
-    .trim();
 }
 
 function buildEvidenceDocument(input: {

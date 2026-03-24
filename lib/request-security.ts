@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
 import type { NextRequest } from "next/server";
+import { getDeploymentMode } from "@/lib/deployment-boundary";
+import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 type RateLimitEntry = {
   count: number;
@@ -6,6 +10,13 @@ type RateLimitEntry = {
 };
 
 const remoteRequestRateLimit = new Map<string, RateLimitEntry>();
+const REMOTE_RATE_LIMIT_RETENTION_ENV_VAR = "REMOTE_RATE_LIMIT_RETENTION_DAYS";
+
+export const requestSecurityTestOverrides = {
+  clearRateLimitState() {
+    remoteRequestRateLimit.clear();
+  },
+};
 
 function jsonError(message: string, status: number): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -103,21 +114,75 @@ function getRateLimitMaxRequests(): number {
   return Number.isFinite(configured) && configured > 0 ? configured : 60;
 }
 
-function isRemoteRequestRateLimited(req: NextRequest, requestOrigin: string | null): boolean {
+function shouldPersistRemoteRateLimitState(env: NodeJS.ProcessEnv = process.env): boolean {
+  return getDeploymentMode(env) === "remote-private-host";
+}
+
+function getRemoteRateLimitDirectory(): string {
+  const configured = process.env.REMOTE_RATE_LIMIT_DIR?.trim();
+  return configured || path.join(process.cwd(), ".notionmcp-data", "request-rate-limits");
+}
+
+function getRemoteRateLimitPath(key: string): string {
+  const digest = createHash("sha256").update(key, "utf8").digest("hex");
+  return path.join(getRemoteRateLimitDirectory(), `${digest}.json`);
+}
+
+async function loadPersistedRemoteRateLimitEntry(key: string): Promise<RateLimitEntry | null> {
+  try {
+    return await readPersistedStateFile<RateLimitEntry>(
+      getRemoteRateLimitPath(key),
+      REMOTE_RATE_LIMIT_RETENTION_ENV_VAR
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+async function savePersistedRemoteRateLimitEntry(key: string, entry: RateLimitEntry): Promise<void> {
+  await writePersistedStateFile(
+    getRemoteRateLimitPath(key),
+    entry,
+    REMOTE_RATE_LIMIT_RETENTION_ENV_VAR
+  );
+}
+
+async function isRemoteRequestRateLimited(req: NextRequest, requestOrigin: string | null): Promise<boolean> {
   const key = getRemoteRateLimitKey(req, requestOrigin);
   const now = Date.now();
-  const current = remoteRequestRateLimit.get(key);
+  const current = shouldPersistRemoteRateLimitState()
+    ? await loadPersistedRemoteRateLimitEntry(key)
+    : remoteRequestRateLimit.get(key);
 
   if (!current || current.resetAt <= now) {
-    remoteRequestRateLimit.set(key, {
+    const nextEntry = {
       count: 1,
       resetAt: now + getRateLimitWindowMs(),
-    });
+    };
+    remoteRequestRateLimit.set(key, nextEntry);
+
+    if (shouldPersistRemoteRateLimitState()) {
+      await savePersistedRemoteRateLimitEntry(key, nextEntry);
+    }
+
     return false;
   }
 
-  current.count += 1;
-  return current.count > getRateLimitMaxRequests();
+  const nextEntry = {
+    count: current.count + 1,
+    resetAt: current.resetAt,
+  };
+  remoteRequestRateLimit.set(key, nextEntry);
+
+  if (shouldPersistRemoteRateLimitState()) {
+    await savePersistedRemoteRateLimitEntry(key, nextEntry);
+  }
+
+  return nextEntry.count > getRateLimitMaxRequests();
 }
 
 function logFailedAccessAttempt(req: NextRequest, message: string) {
@@ -138,7 +203,7 @@ function reject(req: NextRequest, message: string, status: number): Response {
   return jsonError(message, status);
 }
 
-export function validateApiRequest(req: NextRequest): Response | null {
+export async function validateApiRequest(req: NextRequest): Promise<Response | null> {
   const requestOrigin = getRequestOrigin(req);
   const expectedOrigin = getExpectedOrigin(req);
   const hostname = getRequestHostname(req);
@@ -170,8 +235,18 @@ export function validateApiRequest(req: NextRequest): Response | null {
     return reject(req, "A valid API access token is required.", 401);
   }
 
-  if (isRemoteRequestRateLimited(req, requestOrigin)) {
-    return reject(req, "Remote API rate limit exceeded. Please slow down and retry shortly.", 429);
+  try {
+    if (await isRemoteRequestRateLimited(req, requestOrigin)) {
+      return reject(req, "Remote API rate limit exceeded. Please slow down and retry shortly.", 429);
+    }
+  } catch (error) {
+    return reject(
+      req,
+      `Remote API request coordination is unavailable on this host: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      503
+    );
   }
 
   return null;

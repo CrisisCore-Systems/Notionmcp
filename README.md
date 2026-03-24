@@ -151,6 +151,7 @@ Fill in `.env.local`:
 | `APP_ALLOWED_ORIGIN` | Optional. Exact origin to allow when you intentionally expose the API beyond localhost |
 | `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
 | `APP_RATE_LIMIT_MAX` / `APP_RATE_LIMIT_WINDOW_MS` | Optional remote private-mode rate limiting for API routes |
+| `REMOTE_RATE_LIMIT_DIR` / `REMOTE_RATE_LIMIT_RETENTION_DAYS` | Optional persisted directory and retention window for remote-private-host rate-limit state |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 | `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by both provider modes |
@@ -195,7 +196,9 @@ a first-class proof surface. By default those records live under `.notionmcp-dat
 `.notionmcp-data/jobs` in the project root, or you can redirect them with `WRITE_AUDIT_DIR` and
 `JOB_STATE_DIR`. The matching API proof endpoints are `/api/write-audits/{auditId}` and `/api/jobs/{jobId}`.
 Those proof endpoints now return their own proof contracts in the JSON payload and response headers so audit
-artifacts remain inspectable even outside the UI.
+artifacts remain inspectable even outside the UI. Remote private-host request rate limiting now also persists
+state under `.notionmcp-data/request-rate-limits` by default (or `REMOTE_RATE_LIMIT_DIR`) so it no longer
+depends on a single in-memory process, but it still assumes one long-lived host with shared local storage.
 Old persisted job and audit JSON files are cleaned up automatically after 30 days by default via
 `JOB_STATE_RETENTION_DAYS` and `WRITE_AUDIT_RETENTION_DAYS`. Local-only setups can leave persisted state
 unencrypted, but any remote private deployment must set `PERSISTED_STATE_ENCRYPTION_KEY` so those JSON files
@@ -243,7 +246,9 @@ Remote private-host mode still requires these operational controls:
 
 - run it on a long-lived Node host with persistent local storage whenever detached durable jobs are enabled
 - keep `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN` configured together
-- add your own rate limiting, request logging, and operational monitoring
+- add your own edge/network rate limiting, request logging, and operational monitoring
+- keep all app instances behind a single shared persistence surface if you rely on the built-in durable jobs
+  and request-rate-limit coordination; the shipped coordination remains single-host/private-host oriented
 - isolate browser automation so arbitrary page ingestion cannot reach sensitive internal systems
 - scope the Notion integration to the smallest practical permission set and parent page
 
