@@ -357,7 +357,10 @@ function isInstructionLikeText(value: string): boolean {
     normalized.includes("you are an ai assistant") ||
     normalized.includes("developer message") ||
     normalized.includes("prompt injection") ||
-    /<(system|assistant|user|developer)\b/i.test(normalized)
+    normalized.includes("<system") ||
+    normalized.includes("<assistant") ||
+    normalized.includes("<user") ||
+    normalized.includes("<developer")
   );
 }
 
