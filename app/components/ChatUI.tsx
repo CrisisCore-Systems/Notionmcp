@@ -1079,8 +1079,11 @@ export default function ChatUI() {
             {reviewedResearchMode === "deep"
               ? " increased the evidence cap and balanced reviewed pages across domains and source classes before approval."
               : " kept the default fast reviewed lane so you can move quickly to operator review."}{" "}
-            {reviewedUniqueDomainCount > 0 &&
-              `This run covered ${reviewedUniqueDomainCount} domain${reviewedUniqueDomainCount === 1 ? "" : "s"} and ${reviewedSourceClassCount} source class${reviewedSourceClassCount === 1 ? "" : "es"}.`}
+            {reviewedUniqueDomainCount > 0 && reviewedSourceClassCount > 0
+              ? `This run covered ${reviewedUniqueDomainCount} domain${reviewedUniqueDomainCount === 1 ? "" : "s"} and ${reviewedSourceClassCount} source class${reviewedSourceClassCount === 1 ? "" : "es"}.`
+              : reviewedUniqueDomainCount > 0
+                ? `This run covered ${reviewedUniqueDomainCount} distinct domain${reviewedUniqueDomainCount === 1 ? "" : "s"}.`
+                : ""}
           </div>
 
           <div style={{ marginBottom: "1rem" }}>

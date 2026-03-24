@@ -108,10 +108,10 @@ function getFallbackPlannerQueries(prompt: string, profile: ResearchProfile): st
     profile.mode === "deep"
       ? [
           trimmedPrompt,
-          `${trimmedPrompt} official site`,
-          `${trimmedPrompt} independent review`,
-          `${trimmedPrompt} documentation`,
-          `${trimmedPrompt} industry analysis`,
+          `"${trimmedPrompt}" official site`,
+          `"${trimmedPrompt}" independent review`,
+          `"${trimmedPrompt}" documentation`,
+          `"${trimmedPrompt}" industry analysis`,
         ]
       : [trimmedPrompt];
 
@@ -272,6 +272,8 @@ export function buildDeepResearchBrowseQueue(
     pushCandidate(candidate);
   }
 
+  // If the diversity-first passes and per-domain cap leave unused evidence budget, fill the remainder with the
+  // best-ranked leftovers instead of ending the deep run early with avoidable empty slots.
   for (const candidate of candidates) {
     pushCandidate(candidate, true);
   }
