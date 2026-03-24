@@ -339,7 +339,7 @@ the main trust differentiator in this repository compared with typical “resear
 - redirect hops are revalidated as public `http(s)` destinations
 - non-HTML responses fail closed before extraction
 - evidence is normalized into explicit evidence fields instead of handing semi-raw page blobs to the verifier
-- instruction-like page text is stripped before downstream model use
+- instruction-like and prompt-injection-like page text is stripped line-by-line before downstream model use
 - unsupported rows are rejected with explicit reasons instead of being silently repaired into existence
 
 ## Known limits

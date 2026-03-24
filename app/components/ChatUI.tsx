@@ -941,10 +941,10 @@ export default function ChatUI() {
               }}
             >
               <option value="fast">Fast lane — default reviewed coverage</option>
-              <option value="deep">Deep research — higher evidence caps and diversity balancing</option>
+              <option value="deep">Deep lane — higher evidence caps and diversity balancing</option>
             </select>
             <div style={{ fontSize: "0.8rem", color: "#4b5563", lineHeight: 1.45 }}>
-              Deep research keeps the same reviewed write flow, but spends extra browse budget on domain diversity
+              The deep lane keeps the same reviewed write flow, but spends extra browse budget on domain diversity
               and source-class balancing before it concludes.
             </div>
           </div>
@@ -1076,7 +1076,7 @@ export default function ChatUI() {
               lineHeight: 1.45,
             }}
           >
-            <strong>{reviewedResearchMode === "deep" ? "Deep research mode" : "Fast research mode"}</strong>
+            <strong>{reviewedResearchMode === "deep" ? "Deep lane mode" : "Fast research mode"}</strong>
             {reviewedResearchMode === "deep"
               ? reviewedProfile
                 ? ` planned up to ${reviewedProfile.maxPlannedQueries} search queries, queued up to ${reviewedProfile.maxEvidenceDocuments} evidence documents, and required ${reviewedProfile.minSourceClasses} source classes before approval.`

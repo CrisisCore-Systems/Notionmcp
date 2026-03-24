@@ -82,7 +82,8 @@ export function getResearchRouteContract(env: NodeJS.ProcessEnv = process.env) {
         },
         {
           mode: deep.mode,
-          intent: "deliberate deep lane",
+          intent: "higher-budget deep lane",
+          minPlannedQueries: deep.minPlannedQueries,
           maxPlannedQueries: deep.maxPlannedQueries,
           maxBrowsePerQuery: deep.maxBrowsePerQuery,
           maxEvidenceDocuments: deep.maxEvidenceDocuments,

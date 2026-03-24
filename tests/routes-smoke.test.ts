@@ -32,8 +32,10 @@ test("research route publishes the fast and deep lane contract on GET", async ()
       default: string;
       available: Array<{
         mode: string;
+        minPlannedQueries?: number;
         minUniqueDomains?: number;
         minSourceClasses?: number;
+        maxEvidenceDocuments?: number;
       }>;
     };
   };
@@ -45,14 +47,11 @@ test("research route publishes the fast and deep lane contract on GET", async ()
     payload.researchModes.available.map((entry) => entry.mode),
     ["fast", "deep"]
   );
-  assert.equal(
-    payload.researchModes.available.find((entry) => entry.mode === "deep")?.minUniqueDomains,
-    4
-  );
-  assert.equal(
-    payload.researchModes.available.find((entry) => entry.mode === "deep")?.minSourceClasses,
-    3
-  );
+  const deepMode = payload.researchModes.available.find((entry) => entry.mode === "deep");
+  assert.equal(deepMode?.minPlannedQueries, 5);
+  assert.equal(deepMode?.minUniqueDomains, 5);
+  assert.equal(deepMode?.minSourceClasses, 4);
+  assert.equal(deepMode?.maxEvidenceDocuments, 16);
 });
 
 test("research route rejects unknown research lanes instead of silently falling back", async () => {

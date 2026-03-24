@@ -21,6 +21,11 @@ import { executeWriteJob, WriteExecutionError, type WriteExecutionInput } from "
 
 const require = createRequire(import.meta.url);
 
+export const jobRunnerTestOverrides: {
+  runResearchAgent?: typeof runResearchAgent;
+  executeWriteJob?: typeof executeWriteJob;
+} = {};
+
 export async function createDurableJob(kind: JobKind, payload: unknown): Promise<PersistedJobRecord> {
   return await createJob(kind, payload);
 }
@@ -49,7 +54,7 @@ export async function processJob(jobId: string): Promise<void> {
   try {
     if (record.kind === "research") {
       const payload = record.payload as { prompt?: string; researchMode?: string };
-      const result = await runResearchAgent(
+      const result = await (jobRunnerTestOverrides.runResearchAgent ?? runResearchAgent)(
         payload.prompt ?? "",
         async (message, checkpoint) => {
           const mergedCheckpoint: Partial<JobCheckpoint> = {
@@ -76,7 +81,7 @@ export async function processJob(jobId: string): Promise<void> {
       targetDatabaseId: record.checkpoint?.databaseId ?? payload.targetDatabaseId,
       resumeFromIndex: record.checkpoint?.nextRowIndex ?? payload.resumeFromIndex ?? 0,
     };
-    const result = await executeWriteJob(resumedPayload, {
+    const result = await (jobRunnerTestOverrides.executeWriteJob ?? executeWriteJob)(resumedPayload, {
       onUpdate: async (message, checkpoint) => {
         const mergedCheckpoint: Partial<JobCheckpoint> = {
           phase: "writing",

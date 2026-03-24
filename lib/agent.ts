@@ -41,13 +41,13 @@ const RESEARCH_PROFILES: Record<ResearchMode, ResearchProfile> = {
   },
   deep: {
     mode: "deep",
-    maxParallelExtractions: 2,
-    minPlannedQueries: 4,
-    maxPlannedQueries: 6,
-    maxBrowsePerQuery: 3,
-    maxEvidenceDocuments: 12,
-    minUniqueDomains: 4,
-    minSourceClasses: 3,
+    maxParallelExtractions: 3,
+    minPlannedQueries: 5,
+    maxPlannedQueries: 8,
+    maxBrowsePerQuery: 4,
+    maxEvidenceDocuments: 16,
+    minUniqueDomains: 5,
+    minSourceClasses: 4,
     maxPerDomain: 2,
   },
 };
@@ -387,7 +387,7 @@ async function planResearchQueries(
   profile: ResearchProfile
 ): Promise<PlannerOutput> {
   await onUpdate(
-    profile.mode === "deep" ? "🧭 Planning reviewed deep-research strategy..." : "🧭 Planning search strategy...",
+    profile.mode === "deep" ? "🧭 Planning higher-budget reviewed deep lane..." : "🧭 Planning search strategy...",
     {
     phase: "planning",
     }
@@ -400,7 +400,7 @@ Return JSON only in this format:
   "searchQueries": ["query 1", "query 2", "query 3"]
 }
 
-- Plan ${profile.mode === "deep" ? "4 to 6" : "2 to 4"} search queries.
+    - Plan ${profile.mode === "deep" ? "5 to 8" : "2 to 4"} search queries.
 - Queries should maximize source diversity and evidence quality.
 - ${profile.mode === "deep" ? "In deep mode, bias toward distinct domains and a mix of official, editorial, reference, and community evidence." : "Stay concise and optimize for fast reviewed coverage."}
 - Do not include explanations.`,

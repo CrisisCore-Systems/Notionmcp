@@ -10,11 +10,12 @@ test("getResearchProfile keeps the fast lane as default and exposes higher deep 
   assert.equal(fast.minPlannedQueries, 1);
   assert.equal(fast.maxEvidenceDocuments, 8);
   assert.equal(deep.mode, "deep");
-  assert.equal(deep.minPlannedQueries, 4);
-  assert.equal(deep.maxPlannedQueries, 6);
-  assert.equal(deep.maxEvidenceDocuments, 12);
-  assert.equal(deep.minUniqueDomains, 4);
-  assert.equal(deep.minSourceClasses, 3);
+  assert.equal(deep.minPlannedQueries, 5);
+  assert.equal(deep.maxPlannedQueries, 8);
+  assert.equal(deep.maxBrowsePerQuery, 4);
+  assert.equal(deep.maxEvidenceDocuments, 16);
+  assert.equal(deep.minUniqueDomains, 5);
+  assert.equal(deep.minSourceClasses, 4);
 });
 
 test("parseResearchMode keeps deliberate aliases explicit and rejects unknown lanes", () => {
