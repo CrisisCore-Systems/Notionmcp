@@ -14,9 +14,40 @@ type EncryptedStateEnvelope = {
   ciphertext: string;
 };
 
+function hasConfiguredValue(value: string | undefined): boolean {
+  return Boolean(value?.trim());
+}
+
 function getPersistenceSecret(env: NodeJS.ProcessEnv = process.env): string | null {
   const configured = env.PERSISTED_STATE_ENCRYPTION_KEY?.trim();
   return configured ? configured : null;
+}
+
+export function isRemotePrivateMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return hasConfiguredValue(env.APP_ALLOWED_ORIGIN) && hasConfiguredValue(env.APP_ACCESS_TOKEN);
+}
+
+export function getPersistedStateEncryptionRequirementError(
+  env: NodeJS.ProcessEnv = process.env
+): string | null {
+  if (!isRemotePrivateMode(env) || getPersistenceSecret(env)) {
+    return null;
+  }
+
+  return (
+    "Remote private deployments must set PERSISTED_STATE_ENCRYPTION_KEY so persisted durable-job " +
+    "and write-audit state is encrypted at rest."
+  );
+}
+
+export function assertPersistedStateEncryptionRequirement(
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  const error = getPersistedStateEncryptionRequirementError(env);
+
+  if (error) {
+    throw new Error(error);
+  }
 }
 
 function deriveEncryptionKey(secret: string): Buffer {
@@ -119,6 +150,7 @@ export async function writePersistedStateFile(
   envVarName: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
+  assertPersistedStateEncryptionRequirement(env);
   const directory = path.dirname(filePath);
   await mkdir(directory, { recursive: true });
   await cleanupExpiredPersistedStateFiles(directory, envVarName, env);
@@ -134,6 +166,7 @@ export async function readPersistedStateFile<T>(
   envVarName: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<T> {
+  assertPersistedStateEncryptionRequirement(env);
   await cleanupExpiredPersistedStateFiles(path.dirname(filePath), envVarName, env);
   const raw = await readFile(filePath, "utf8");
   const parsed = JSON.parse(raw) as unknown;

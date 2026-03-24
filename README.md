@@ -6,7 +6,7 @@ Notionmcp is a **private, single-operator research workstation**. It is optimize
 
 - **Description**: Private operator research workstation for durable Gemini web research and audited Notion writes.
 - **Topics**: `nextjs`, `gemini`, `notion`, `mcp`, `playwright`, `web-research`, `human-in-the-loop`, `private-operator-tool`
-- **Release tags**: `v0.2.0` (current durable-jobs baseline), `v0.2.x` (stability and evidence hardening). Mirror these in GitHub releases/tags so operators can verify what build they are running.
+- **Release tags**: `v0.2.1` (worker path + remote encryption hardening), `v0.2.x` (stability and evidence hardening). Mirror these in GitHub releases/tags so operators can verify what build they are running, and keep `CHANGELOG.md` aligned with each tag.
 
 ## What this repository is
 
@@ -146,17 +146,18 @@ Fill in `.env.local`:
 | `WRITE_AUDIT_RETENTION_DAYS` | Optional retention window before old write-audit JSON files are removed. Defaults to 30 |
 | `JOB_STATE_DIR` | Optional server-side directory for persisted research/write job state |
 | `JOB_STATE_RETENTION_DAYS` | Optional retention window before old durable-job JSON files are removed. Defaults to 30 |
-| `PERSISTED_STATE_ENCRYPTION_KEY` | Optional secret that enables AES-256-GCM encryption for persisted job/audit state at rest |
+| `PERSISTED_STATE_ENCRYPTION_KEY` | Optional for localhost, required for any remote private deployment so persisted job/audit state is encrypted at rest |
 | `NOTIONMCP_RUN_JOBS_INLINE` | Optional escape hatch for inline debugging. Leave unset for the default detached durable-job mode |
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
 
 By default, `/api/research` and `/api/write` only accept local requests. If you intentionally deploy the
-app for tightly controlled private use, set **both** `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN`, then
-send the matching token in either the `x-app-access-token` header or a `Bearer` token. Cross-origin
-requests are rejected either way. The built-in UI now includes an optional access-token field for that
-private remote mode; leave it blank for normal localhost use. Review drafts can be enabled per browser
+app for tightly controlled private use, set **all three** of `APP_ALLOWED_ORIGIN`, `APP_ACCESS_TOKEN`, and
+`PERSISTED_STATE_ENCRYPTION_KEY`, then send the matching token in either the `x-app-access-token` header or
+a `Bearer` token. Cross-origin requests are rejected either way, and the app now refuses to boot remote
+private mode without persisted-state encryption. The built-in UI includes an optional access-token field for
+that private remote mode; leave it blank for normal localhost use. Review drafts can be enabled per browser
 session from the UI, stay off by default for privacy, and expire automatically after 7 days when enabled.
 
 The Notion provider layer pins the `Notion-Version` header to `2025-09-03` by default so the app does not
@@ -169,8 +170,8 @@ download link from the completion panel. By default those records live under `.n
 in the project root, or you can redirect them with `WRITE_AUDIT_DIR`. Durable research/write job state lives
 under `.notionmcp-data/jobs` by default, or you can redirect it with `JOB_STATE_DIR`. Old persisted job and
 audit JSON files are cleaned up automatically after 30 days by default via `JOB_STATE_RETENTION_DAYS` and
-`WRITE_AUDIT_RETENTION_DAYS`, and you can opt into AES-256-GCM state-at-rest encryption by setting
-`PERSISTED_STATE_ENCRYPTION_KEY`.
+`WRITE_AUDIT_RETENTION_DAYS`. Local-only setups can leave persisted state unencrypted, but any remote private
+deployment must set `PERSISTED_STATE_ENCRYPTION_KEY` so those JSON files stay encrypted at rest.
 
 ### 3. Run
 

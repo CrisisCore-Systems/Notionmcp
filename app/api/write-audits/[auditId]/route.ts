@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
 import { validateApiRequest } from "@/lib/request-security";
 import { isValidWriteAuditId, loadWriteAuditRecord } from "@/lib/write-audit-store";
 
@@ -11,6 +12,7 @@ type RouteContext = {
 };
 
 export async function GET(req: NextRequest, context: RouteContext) {
+  assertDeploymentReadiness();
   const requestError = validateApiRequest(req);
 
   if (requestError) {
