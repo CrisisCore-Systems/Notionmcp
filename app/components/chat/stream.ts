@@ -6,6 +6,7 @@ type StreamSSEOptions = {
   signal: AbortSignal;
   accessToken?: string;
   onUpdate: (message: string) => void;
+  onEvent?: (event: string, data: unknown) => void;
 };
 
 export type SSEParserState = {
@@ -37,7 +38,13 @@ export function consumeSSEChunk(
   state: SSEParserState,
   chunk: string,
   onUpdate: (message: string) => void
-): { state: SSEParserState; complete?: unknown; error?: Error & { details?: StreamErrorPayload } } {
+): {
+  state: SSEParserState;
+  complete?: unknown;
+  continue?: { jobId: string; afterEventId: number };
+  event?: { name: string; data: unknown };
+  error?: Error & { details?: StreamErrorPayload };
+} {
   let buffer = state.buffer + chunk;
   let pendingEvent = state.pendingEvent;
 
@@ -73,6 +80,26 @@ export function consumeSSEChunk(
       continue;
     }
 
+    if (pendingEvent === "job") {
+      return {
+        state: { buffer, pendingEvent: "" },
+        event: {
+          name: "job",
+          data,
+        },
+      };
+    }
+
+    if (pendingEvent === "continue") {
+      return {
+        state: { buffer, pendingEvent: "" },
+        continue: {
+          jobId: (data as { jobId?: string }).jobId ?? "",
+          afterEventId: (data as { afterEventId?: number }).afterEventId ?? 0,
+        },
+      };
+    }
+
     if (pendingEvent === "complete") {
       return {
         state: { buffer, pendingEvent: "" },
@@ -103,53 +130,77 @@ export async function streamSSE({
   signal,
   accessToken,
   onUpdate,
+  onEvent,
 }: StreamSSEOptions): Promise<unknown> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: buildRequestHeaders(accessToken),
-    body: JSON.stringify(body),
-    signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    let message = text || `Request failed with status ${res.status}`;
-
-    try {
-      const parsed = JSON.parse(text) as { error?: string };
-      if (parsed.error) message = parsed.error;
-    } catch {
-      // Fall back to the raw response text when the error body is not valid JSON or cannot be parsed.
-    }
-
-    throw new Error(message);
-  }
-
-  if (!res.body) {
-    throw new Error("Streaming response was empty.");
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let state = createSSEParserState();
-
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: buildRequestHeaders(accessToken),
+      body: JSON.stringify(body),
+      signal,
+    });
 
-    const parsed = consumeSSEChunk(state, decoder.decode(value, { stream: true }), onUpdate);
-    state = parsed.state;
+    if (!res.ok) {
+      const text = await res.text();
+      let message = text || `Request failed with status ${res.status}`;
 
-    if (parsed.complete !== undefined) {
-      return parsed.complete;
+      try {
+        const parsed = JSON.parse(text) as { error?: string };
+        if (parsed.error) message = parsed.error;
+      } catch {
+        // Fall back to the raw response text when the error body is not valid JSON or cannot be parsed.
+      }
+
+      throw new Error(message);
     }
 
-    if (parsed.error) {
-      throw parsed.error;
+    if (!res.body) {
+      throw new Error("Streaming response was empty.");
     }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let state = createSSEParserState();
+
+    let shouldReconnect = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const parsed = consumeSSEChunk(state, decoder.decode(value, { stream: true }), onUpdate);
+      state = parsed.state;
+
+      if (parsed.event) {
+        onEvent?.(parsed.event.name, parsed.event.data);
+        continue;
+      }
+
+      if (parsed.complete !== undefined) {
+        return parsed.complete;
+      }
+
+      if (parsed.continue) {
+        body = {
+          ...(typeof body === "object" && body && !Array.isArray(body) ? body : {}),
+          jobId: parsed.continue.jobId,
+          afterEventId: parsed.continue.afterEventId,
+        };
+        shouldReconnect = true;
+        break;
+      }
+
+      if (parsed.error) {
+        throw parsed.error;
+      }
+    }
+
+    if (shouldReconnect) {
+      continue;
+    }
+
+    throw new Error(
+      "Streaming response ended unexpectedly before completion. Please try again."
+    );
   }
-
-  throw new Error(
-    "Streaming response ended unexpectedly before completion. Please try again."
-  );
 }

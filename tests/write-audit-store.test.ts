@@ -28,6 +28,7 @@ test("persistWriteAuditRecord stores and reloads server-side write audits", asyn
     status: "complete",
     usedExistingDatabase: true,
     resumedFromIndex: 2,
+    providerMode: "direct-api",
     message: "Completed write",
     auditTrail: {
       sourceSet: ["https://example.com/a"],
@@ -52,5 +53,6 @@ test("persistWriteAuditRecord stores and reloads server-side write audits", asyn
   assert.equal(loaded?.id, persisted.id);
   assert.equal(loaded?.databaseId, "db_123");
   assert.equal(loaded?.status, "complete");
+  assert.equal(loaded?.providerMode, "direct-api");
   assert.equal(buildWriteAuditUrl(persisted.id), `/api/write-audits/${persisted.id}`);
 });

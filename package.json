@@ -1,7 +1,7 @@
 {
   "name": "notion-research-agent",
-  "version": "0.1.0",
-  "description": "Private operator tool for human-reviewed web research with Gemini, Playwright, and Notion MCP.",
+  "version": "0.2.0",
+  "description": "Private operator research workstation for durable Gemini web research and audited Notion writes.",
   "keywords": [
     "nextjs",
     "gemini",
@@ -21,7 +21,8 @@
     "postinstall": "playwright install chromium",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

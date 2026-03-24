@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { ResearchResult } from "@/lib/agent";
 import {
+  clearActiveJob,
+  loadActiveJob,
+  saveActiveJob,
+  type ActiveJobState,
+} from "./chat/active-job-storage";
+import {
   buildCsv,
   buildNotionWebUrl,
   getSafeFilename,
@@ -58,9 +64,13 @@ export default function ChatUI() {
   const [replaceText, setReplaceText] = useState("");
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [activeJob, setActiveJob] = useState<ActiveJobState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const historyIndexRef = useRef(-1);
   const timeoutWarningLoggedRef = useRef(false);
+  const autoResumeAttemptedRef = useRef(false);
+  const startResearchRef = useRef<(jobId?: string) => Promise<void>>(async () => undefined);
+  const writeToNotionRef = useRef<(jobId?: string) => Promise<void>>(async () => undefined);
 
   const { savedDraft, clearSavedDraft, draftPersistenceNotice, draftPersistenceNoticeTone } = useDraftPersistence({
     phase,
@@ -88,6 +98,33 @@ export default function ChatUI() {
     setLogs((prev) => [...prev, { type, message }]);
   };
 
+  const clearActiveJobState = () => {
+    clearActiveJob(window.localStorage);
+    setActiveJob(null);
+  };
+
+  const handleJobEvent = (kind: ActiveJobState["kind"], event: string, data: unknown) => {
+    if (event !== "job") {
+      return;
+    }
+
+    const jobId =
+      data &&
+      typeof data === "object" &&
+      !Array.isArray(data) &&
+      typeof (data as { jobId?: unknown }).jobId === "string"
+        ? (data as { jobId: string }).jobId.trim()
+        : "";
+
+    if (!jobId) {
+      return;
+    }
+
+    const nextJob = { kind, jobId };
+    saveActiveJob(window.localStorage, nextJob);
+    setActiveJob(nextJob);
+  };
+
   const initializeHistory = (result: EditableResult) => {
     setHistory([result]);
     setHistoryIndex(0);
@@ -100,6 +137,8 @@ export default function ChatUI() {
     if (persistedPreference === "true") {
       setPersistDrafts(true);
     }
+
+    setActiveJob(loadActiveJob(window.localStorage));
   }, []);
 
   useEffect(() => {
@@ -145,6 +184,22 @@ export default function ChatUI() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [editedResult, phase]);
+
+  useEffect(() => {
+    if (!activeJob || phase !== "idle" || autoResumeAttemptedRef.current) {
+      return;
+    }
+
+    autoResumeAttemptedRef.current = true;
+    addLog(`Reconnecting to the active ${activeJob.kind} job ${activeJob.jobId}...`, "info");
+
+    if (activeJob.kind === "research") {
+      void startResearchRef.current(activeJob.jobId);
+      return;
+    }
+
+    void writeToNotionRef.current(activeJob.jobId);
+  }, [activeJob, phase]);
 
   const updateEditedResult = (
     updater: (previous: EditableResult) => EditableResult
@@ -207,30 +262,35 @@ export default function ChatUI() {
     setEditedResult(history[nextIndex] ?? null);
   };
 
-  const startResearch = async () => {
-    if (!prompt.trim()) return;
+  const startResearch = async (jobId?: string) => {
+    if (!jobId && !prompt.trim()) return;
     startAction("research");
-    setLogs([]);
-    setEditedResult(null);
-    setHistory([]);
-    setHistoryIndex(-1);
-    historyIndexRef.current = -1;
+    if (!jobId) {
+      setLogs([]);
+      setEditedResult(null);
+      setHistory([]);
+      setHistoryIndex(-1);
+      historyIndexRef.current = -1;
+      clearActiveJobState();
+      autoResumeAttemptedRef.current = false;
+    }
     setNotionUrl(null);
     setWriteSummary(null);
     setErrorMessage(null);
     setPendingWriteResume(null);
 
     try {
-      addLog(`Starting research: "${prompt}"`, "info");
+      addLog(jobId ? `Reconnecting to research job ${jobId}...` : `Starting research: "${prompt}"`, "info");
 
       const controller = new AbortController();
       abortRef.current = controller;
       const data = (await streamSSE({
         url: "/api/research",
-        body: { prompt },
+        body: jobId ? { jobId } : { prompt },
         signal: controller.signal,
         accessToken: appAccessToken,
         onUpdate: (msg) => addLog(msg),
+        onEvent: (event, data) => handleJobEvent("research", event, data),
       })) as ResearchResult;
 
       const nextResult = {
@@ -239,16 +299,19 @@ export default function ChatUI() {
       };
       setEditedResult(nextResult);
       initializeHistory(nextResult);
+      clearActiveJobState();
       addLog(`✅ Research complete — found ${data.items.length} items`, "success");
       showApproval();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         addLog("Research cancelled.", "info");
+        clearActiveJobState();
         setPhase("idle");
         return;
       }
 
       const message = err instanceof Error ? err.message : String(err);
+      clearActiveJobState();
       addLog(`Error: ${message}`, "error");
       showError(message);
     } finally {
@@ -256,29 +319,32 @@ export default function ChatUI() {
     }
   };
 
-  const writeToNotion = async () => {
-    if (!editedResult || !canWrite) return;
+  const writeToNotion = async (jobId?: string) => {
+    if (!jobId && (!editedResult || !canWrite)) return;
     startAction("write");
     setWriteSummary(null);
     const resumeTarget = pendingWriteResume;
     const shouldResumeWrite = !!resumeTarget;
+    const editedItemCount = editedResult?.items.length ?? 0;
 
     const payload: WritePayload = shouldResumeWrite
       ? {
-          ...editedResult,
+          ...(editedResult as EditableResult),
           targetDatabaseId: resumeTarget.databaseId,
           resumeFromIndex: resumeTarget.nextRowIndex,
         }
       : useExistingDatabase && targetDatabaseId.trim()
-        ? { ...editedResult, targetDatabaseId: targetDatabaseId.trim() }
-        : editedResult;
+        ? { ...(editedResult as EditableResult), targetDatabaseId: targetDatabaseId.trim() }
+        : (editedResult as EditableResult);
 
     try {
       addLog(
-        shouldResumeWrite
-          ? `Resuming Notion write from row ${resumeTarget.nextRowIndex + 1}...`
+        jobId
+          ? `Reconnecting to write job ${jobId}...`
+          : shouldResumeWrite
+            ? `Resuming Notion write from row ${resumeTarget.nextRowIndex + 1}...`
           : useExistingDatabase
-            ? `Appending ${editedResult.items.length} row${editedResult.items.length === 1 ? "" : "s"} to an existing Notion database...`
+            ? `Appending ${editedItemCount} row${editedItemCount === 1 ? "" : "s"} to an existing Notion database...`
             : "Starting Notion write phase...",
         "info"
       );
@@ -287,20 +353,23 @@ export default function ChatUI() {
       abortRef.current = controller;
       const data = (await streamSSE({
         url: "/api/write",
-        body: payload,
+        body: jobId ? { jobId } : payload,
         signal: controller.signal,
         accessToken: appAccessToken,
         onUpdate: (msg) => addLog(msg),
+        onEvent: (event, data) => handleJobEvent("write", event, data),
       })) as {
         databaseId: string;
         message: string;
         itemsWritten: number;
         propertyCount: number;
         usedExistingDatabase: boolean;
+        providerMode?: string;
         auditId?: string;
         auditUrl?: string;
       };
 
+      clearActiveJobState();
       addLog(data.message, "success");
       if (data.auditUrl) {
         addLog(`🧾 Write audit saved at ${data.auditUrl}`, "info");
@@ -321,6 +390,7 @@ export default function ChatUI() {
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         addLog("Notion write cancelled.", "info");
+        clearActiveJobState();
         showApproval();
         return;
       }
@@ -330,6 +400,7 @@ export default function ChatUI() {
           ? (err as Error & { details?: StreamErrorPayload }).details
           : undefined;
       const message = err instanceof Error ? err.message : String(err);
+      clearActiveJobState();
       if (
         details?.databaseId &&
         typeof details.nextRowIndex === "number" &&
@@ -359,6 +430,9 @@ export default function ChatUI() {
       abortRef.current = null;
     }
   };
+
+  startResearchRef.current = startResearch;
+  writeToNotionRef.current = writeToNotion;
 
   const updateSummary = (summary: string) => {
     updateEditedResult((previous) => ({ ...previous, summary }));
@@ -761,6 +835,43 @@ export default function ChatUI() {
         </div>
       )}
 
+      {activeJob && phase === "idle" && (
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.9rem 1rem",
+            background: "#ecfeff",
+            border: "1px solid #a5f3fc",
+            borderRadius: 8,
+          }}
+        >
+          <div style={{ fontSize: "0.9rem", color: "#155e75", marginBottom: "0.6rem" }}>
+            A {activeJob.kind} job is still running on the server. Reconnect to resume its live output.
+          </div>
+          <button
+            onClick={() => {
+              if (activeJob.kind === "research") {
+                void startResearch(activeJob.jobId);
+                return;
+              }
+
+              void writeToNotion(activeJob.jobId);
+            }}
+            style={{
+              padding: "0.55rem 0.9rem",
+              border: "none",
+              borderRadius: 8,
+              background: "#0f766e",
+              color: "#fff",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            Resume active job
+          </button>
+        </div>
+      )}
+
       {phase === "idle" && (
         <div>
           <textarea
@@ -798,7 +909,9 @@ export default function ChatUI() {
             ))}
           </div>
           <button
-            onClick={startResearch}
+            onClick={() => {
+              void startResearch();
+            }}
             disabled={!prompt.trim()}
             style={{
               marginTop: "1rem",
@@ -1078,7 +1191,9 @@ export default function ChatUI() {
 
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
             <button
-              onClick={writeToNotion}
+              onClick={() => {
+                void writeToNotion();
+              }}
               disabled={!canWrite}
               aria-disabled={!canWrite}
               title={!canWrite ? approvalHint ?? "Complete the review before writing to Notion." : undefined}

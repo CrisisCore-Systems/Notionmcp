@@ -1,9 +1,11 @@
 import { NextRequest } from "next/server";
-import { runResearchAgent } from "@/lib/agent";
+import { createJobEventStreamResponse } from "@/lib/job-sse";
+import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
+import { isValidJobId, loadJobRecord } from "@/lib/job-store";
 import { validateApiRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
-export const maxDuration = 120; // 2 minute timeout for research phase
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   const requestError = validateApiRequest(req);
@@ -12,47 +14,47 @@ export async function POST(req: NextRequest) {
     return requestError;
   }
 
-  const { prompt } = await req.json();
+  const body = (await req.json()) as Record<string, unknown>;
+  const requestedJobId = typeof body.jobId === "string" ? body.jobId.trim() : "";
+  const afterEventId =
+    typeof body.afterEventId === "number" && Number.isInteger(body.afterEventId) && body.afterEventId >= 0
+      ? body.afterEventId
+      : 0;
+  let jobId = requestedJobId;
 
-  if (!prompt?.trim()) {
-    return new Response(JSON.stringify({ error: "Prompt is required" }), {
-      status: 400,
-    });
+  if (jobId) {
+    if (!isValidJobId(jobId)) {
+      return new Response(JSON.stringify({ error: "A valid research job ID is required" }), {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
+    const existingJob = await loadJobRecord(jobId);
+
+    if (!existingJob || existingJob.kind !== "research") {
+      return new Response(JSON.stringify({ error: "Research job was not found" }), {
+        status: 404,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+  } else {
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+
+    if (!prompt) {
+      return new Response(JSON.stringify({ error: "Prompt is required" }), {
+        status: 400,
+      });
+    }
+
+    const job = await createDurableJob("research", { prompt });
+    jobId = job.id;
   }
 
-  const encoder = new TextEncoder();
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (event: string, data: unknown) => {
-        controller.enqueue(
-          encoder.encode(
-            `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
-          )
-        );
-      };
-
-      try {
-        const result = await runResearchAgent(prompt, (message) => {
-          send("update", { message });
-        });
-
-        send("complete", result);
-      } catch (err) {
-        send("error", {
-          message: err instanceof Error ? err.message : String(err),
-        });
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  await ensureJobWorker(jobId);
+  return createJobEventStreamResponse(jobId, { afterEventId });
 }
