@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ResearchResult } from "@/lib/agent";
+import { RESEARCH_RUN_METADATA_KEY } from "@/lib/research-result";
 import {
   clearActiveJob,
   loadActiveJob,
@@ -93,6 +94,9 @@ export default function ChatUI() {
     targetDatabaseId,
     pendingWriteResume,
   });
+  const runMetadata = editedResult?.[RESEARCH_RUN_METADATA_KEY];
+  const searchProvidersUsed = runMetadata?.search?.usedProviders ?? [];
+  const isDegradedSearchMode = runMetadata?.search?.degraded === true;
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
     setLogs((prev) => [...prev, { type, message }]);
@@ -984,6 +988,26 @@ export default function ChatUI() {
           <h2 style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: "0.5rem" }}>
             Review before writing to Notion
           </h2>
+
+          {isDegradedSearchMode && (
+            <div
+              style={{
+                marginBottom: "1rem",
+                padding: "0.75rem 0.9rem",
+                background: "#fff7ed",
+                border: "1px solid #fdba74",
+                borderRadius: 8,
+                color: "#9a3412",
+                fontSize: "0.85rem",
+                lineHeight: 1.45,
+              }}
+            >
+              Search ran in degraded DuckDuckGo HTML fallback mode
+              {searchProvidersUsed.length > 0 ? ` (${searchProvidersUsed.join(", ")})` : ""}. Review the source
+              coverage carefully and configure <code>SERPER_API_KEY</code> or <code>BRAVE_SEARCH_API_KEY</code>{" "}
+              to restore API-backed search.
+            </div>
+          )}
 
           <div style={{ marginBottom: "1rem" }}>
             <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", color: "#333" }}>

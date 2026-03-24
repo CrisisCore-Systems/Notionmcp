@@ -1,0 +1,36 @@
+const DURABLE_JOBS_WARNING_TITLE = "Durable jobs require a long-lived Node host.";
+const DURABLE_JOBS_WARNING_MESSAGE =
+  "Detached job workers and resumable state assume this app stays on a long-lived Node process with persistent local storage. Do not treat the default durable-jobs mode like a stateless hobby deploy.";
+
+let durableJobsWarningEmitted = false;
+
+export function areDurableJobsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NOTIONMCP_RUN_JOBS_INLINE?.trim().toLowerCase() !== "true";
+}
+
+export function getDurableJobsWarning(
+  env: NodeJS.ProcessEnv = process.env
+): { title: string; message: string } | null {
+  if (!areDurableJobsEnabled(env)) {
+    return null;
+  }
+
+  return {
+    title: DURABLE_JOBS_WARNING_TITLE,
+    message: DURABLE_JOBS_WARNING_MESSAGE,
+  };
+}
+
+export function warnIfDurableJobsNeedLongLivedHost(
+  env: NodeJS.ProcessEnv = process.env,
+  log: (message: string) => void = console.warn
+): void {
+  const warning = getDurableJobsWarning(env);
+
+  if (!warning || durableJobsWarningEmitted) {
+    return;
+  }
+
+  durableJobsWarningEmitted = true;
+  log(`[deployment-boundary] ${warning.title} ${warning.message}`);
+}

@@ -20,6 +20,13 @@ export interface SearchResult {
   snippet: string;
 }
 
+export type SearchDiagnostics = {
+  provider: SearchProviderName;
+  degraded: boolean;
+  attemptedProviders: SearchProviderName[];
+  results: SearchResult[];
+};
+
 export interface BrowseResult {
   url: string;
   title: string;
@@ -785,6 +792,10 @@ export function getConfiguredSearchProviders(env: NodeJS.ProcessEnv = process.en
   return Array.from(new Set(providers));
 }
 
+export function isDegradedSearchProvider(provider: SearchProviderName): boolean {
+  return provider === "duckduckgo";
+}
+
 /** Navigate to a URL and extract readable text content */
 export async function browseAndExtract(url: string): Promise<BrowseResult> {
   const { context, page } = await createIsolatedPage();
@@ -976,21 +987,35 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
 export async function searchWeb(
   query: string
 ): Promise<SearchResult[]> {
+  const search = await searchWebWithDiagnostics(query);
+  return search.results;
+}
+
+export async function searchWebWithDiagnostics(
+  query: string
+): Promise<SearchDiagnostics> {
   if (!query.trim()) {
     throw new Error("Search query cannot be empty.");
   }
 
   const configuredProviders = getConfiguredSearchProviders();
-  const attemptedProviders: string[] = [];
+  const attemptedProviders: SearchProviderName[] = [];
+  const attemptedProviderErrors: string[] = [];
   let lastError: unknown = null;
 
   for (const provider of configuredProviders) {
     const adapter = SEARCH_ADAPTER_FACTORIES[provider]();
 
     try {
-      return await adapter.search(query);
+      return {
+        provider: adapter.name,
+        degraded: isDegradedSearchProvider(adapter.name),
+        attemptedProviders,
+        results: await adapter.search(query),
+      };
     } catch (error) {
-      attemptedProviders.push(
+      attemptedProviders.push(adapter.name);
+      attemptedProviderErrors.push(
         `${adapter.name} (${error instanceof Error ? error.message : String(error)})`
       );
       lastError = error;
@@ -999,8 +1024,8 @@ export async function searchWeb(
 
   throw new Error(
     `Search failed. Attempted providers: ${configuredProviders.join(", ")}. Errors: ${
-      attemptedProviders.length > 0
-        ? attemptedProviders.join("; ")
+      attemptedProviderErrors.length > 0
+        ? attemptedProviderErrors.join("; ")
         : lastError instanceof Error
           ? lastError.message
           : String(lastError)

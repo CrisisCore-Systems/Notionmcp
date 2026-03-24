@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 export type JobKind = "research" | "write";
 export type JobStatus = "queued" | "running" | "complete" | "error";
@@ -43,6 +43,7 @@ export type PersistedJobRecord = {
 
 const JOB_ID_PATTERN = /^[0-9a-fA-F-]{36}$/;
 const DEFAULT_WORKER_STALE_MS = 15000;
+const JOB_STATE_RETENTION_ENV_VAR = "JOB_STATE_RETENTION_DAYS";
 
 export function getJobDirectory(): string {
   const configured = process.env.JOB_STATE_DIR?.trim();
@@ -62,8 +63,7 @@ function getJobPath(jobId: string): string {
 }
 
 async function saveJobRecord(record: PersistedJobRecord): Promise<PersistedJobRecord> {
-  await mkdir(getJobDirectory(), { recursive: true });
-  await writeFile(getJobPath(record.id), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writePersistedStateFile(getJobPath(record.id), record, JOB_STATE_RETENTION_ENV_VAR);
   return record;
 }
 
@@ -88,10 +88,16 @@ export async function loadJobRecord(jobId: string): Promise<PersistedJobRecord |
   }
 
   try {
-    const raw = await readFile(getJobPath(trimmedJobId), "utf8");
-    return JSON.parse(raw) as PersistedJobRecord;
-  } catch {
-    return null;
+    return await readPersistedStateFile<PersistedJobRecord>(
+      getJobPath(trimmedJobId),
+      JOB_STATE_RETENTION_ENV_VAR
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
   }
 }
 
