@@ -59,7 +59,7 @@ export function sanitizeEvidenceText(value: string): string {
 
     const reduced =
       fragment.length > MAX_EVIDENCE_FRAGMENT_LENGTH
-        ? `${fragment.slice(0, MAX_EVIDENCE_FRAGMENT_LENGTH).trimEnd()}…`
+        ? `${fragment.slice(0, MAX_EVIDENCE_FRAGMENT_LENGTH).trimEnd()}...`
         : fragment;
     const dedupeKey = reduced.toLowerCase();
 

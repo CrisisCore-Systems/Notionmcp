@@ -749,6 +749,6 @@ test("operator flow reconnects research, reconciles an ambiguous write, and resu
   assert.equal(resumedAuditProof.resumedFromIndex, 1);
   assert.equal(resumedAuditProof.auditTrail.rowsConfirmedWritten, 1);
   assert.deepEqual(resumedAuditProof.auditTrail.rows.map((row) => row.status), ["written"]);
-  assert.equal(writes.filter((entry) => entry.operationKey === operationKeys[0]).length >= 3, true);
-  assert.equal(writes.some((entry) => entry.operationKey === operationKeys[1]), true);
+  assert.ok(writes.filter((entry) => entry.operationKey === operationKeys[0]).length >= 3);
+  assert.ok(writes.some((entry) => entry.operationKey === operationKeys[1]));
 });
