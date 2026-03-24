@@ -345,17 +345,30 @@ function isInstructionLikeText(value: string): boolean {
     normalized.startsWith("system:") ||
     normalized.startsWith("assistant:") ||
     normalized.startsWith("user:") ||
+    normalized.startsWith("developer:") ||
     normalized.includes("ignore previous instructions") ||
+    normalized.includes("ignore all previous instructions") ||
+    normalized.includes("disregard previous instructions") ||
+    normalized.includes("ignore the above instructions") ||
     normalized.includes("follow these instructions") ||
+    normalized.includes("reveal the system prompt") ||
+    normalized.includes("system prompt") ||
     normalized.includes("you are chatgpt") ||
     normalized.includes("you are an ai assistant") ||
-    normalized.includes("developer message")
+    normalized.includes("developer message") ||
+    normalized.includes("prompt injection") ||
+    /<(system|assistant|user|developer)\b/i.test(normalized)
   );
 }
 
-function sanitizeEvidenceText(value: string): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return isInstructionLikeText(normalized) ? "" : normalized;
+export function sanitizeEvidenceText(value: string): string {
+  return value
+    .split(/\r?\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((line) => !isInstructionLikeText(line))
+    .join("\n")
+    .trim();
 }
 
 function buildEvidenceDocument(input: {

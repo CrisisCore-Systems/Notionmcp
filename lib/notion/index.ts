@@ -62,8 +62,15 @@ export function createNotionProvider(env: NodeJS.ProcessEnv = process.env): Noti
 
 let cachedProvider: NotionProvider | null = null;
 let cachedProviderMode: NotionProviderMode | null = null;
+export const notionTestOverrides: {
+  provider?: NotionProvider;
+} = {};
 
 export function getNotionProvider(env: NodeJS.ProcessEnv = process.env): NotionProvider {
+  if (env === process.env && notionTestOverrides.provider) {
+    return notionTestOverrides.provider;
+  }
+
   if (env !== process.env) {
     return createNotionProvider(env);
   }

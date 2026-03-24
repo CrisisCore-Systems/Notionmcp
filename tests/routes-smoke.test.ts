@@ -32,8 +32,10 @@ test("research route publishes the fast and deep lane contract on GET", async ()
       default: string;
       available: Array<{
         mode: string;
+        minPlannedQueries?: number;
         minUniqueDomains?: number;
         minSourceClasses?: number;
+        maxEvidenceDocuments?: number;
       }>;
     };
   };
@@ -46,12 +48,20 @@ test("research route publishes the fast and deep lane contract on GET", async ()
     ["fast", "deep"]
   );
   assert.equal(
+    payload.researchModes.available.find((entry) => entry.mode === "deep")?.minPlannedQueries,
+    5
+  );
+  assert.equal(
     payload.researchModes.available.find((entry) => entry.mode === "deep")?.minUniqueDomains,
-    4
+    5
   );
   assert.equal(
     payload.researchModes.available.find((entry) => entry.mode === "deep")?.minSourceClasses,
-    3
+    4
+  );
+  assert.equal(
+    payload.researchModes.available.find((entry) => entry.mode === "deep")?.maxEvidenceDocuments,
+    16
   );
 });
 

@@ -110,8 +110,8 @@ export default function HomePage() {
       >
         <h2 style={{ fontSize: "1rem", margin: 0 }}>Operator guarantees</h2>
         <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
-          <strong>Research lanes:</strong> fast stays bounded for low-latency reviewed work, while deep research is
-          an explicit wider-source lane with higher browse caps plus domain-diversity and source-class requirements.
+          <strong>Research lanes:</strong> fast stays bounded for low-latency reviewed work, while the deep lane is a
+          higher-budget reviewed path with wider browse caps plus domain-diversity and source-class requirements.
         </div>
         <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
           <strong>Provider lane:</strong> <code>{notionProviderState.mode}</code> ({notionProviderState.description})
