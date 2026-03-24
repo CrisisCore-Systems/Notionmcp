@@ -1,4 +1,4 @@
-import { buildOperationalSchema } from "@/lib/notion-mcp";
+import { buildOperationalSchema } from "@/lib/notion/domain";
 import type { NotionProvider } from "@/lib/notion/provider";
 import { createDirectApiNotionProvider } from "@/lib/notion/providers/direct-api";
 import { createLocalMcpNotionProvider } from "@/lib/notion/providers/local-mcp";
@@ -28,6 +28,16 @@ function normalizeProviderMode(value: string | undefined): NotionProviderMode {
 
 export function getConfiguredNotionProviderMode(env: NodeJS.ProcessEnv = process.env): NotionProviderMode {
   return normalizeProviderMode(env.NOTION_PROVIDER);
+}
+
+export function getCurrentNotionProviderState(env: NodeJS.ProcessEnv = process.env): {
+  mode: NotionProviderMode;
+  health: "configured";
+} {
+  return {
+    mode: getConfiguredNotionProviderMode(env),
+    health: "configured",
+  };
 }
 
 export function createNotionProvider(env: NodeJS.ProcessEnv = process.env): NotionProvider {

@@ -4,9 +4,9 @@ Notionmcp is a **private, single-operator research workstation**. It is optimize
 
 ## Repository profile
 
-- **Description**: Private operator tool for human-reviewed web research with Gemini, Playwright, and Notion MCP.
+- **Description**: Private operator research workstation for durable Gemini web research and audited Notion writes.
 - **Topics**: `nextjs`, `gemini`, `notion`, `mcp`, `playwright`, `web-research`, `human-in-the-loop`, `private-operator-tool`
-- **Release tags**: `v0.1.0` (current app baseline), `v0.1.x` (stability and extraction hardening), `v0.2.0` (production-readiness milestone). Mirror these in GitHub releases/tags so operators can verify what build they are running.
+- **Release tags**: `v0.2.0` (current durable-jobs baseline), `v0.2.x` (stability and evidence hardening). Mirror these in GitHub releases/tags so operators can verify what build they are running.
 
 ## What this repository is
 
@@ -35,17 +35,19 @@ Add `-- --json` if you want the same information as structured JSON.
 ## How it works
 
 1. **You type a research prompt** (e.g. "Find the top 5 competitors to Linear")
-2. **Gemini 2.0 Flash** searches the web and browses pages using Playwright
-3. **The app validates and normalizes** the model payload before the approval UI ever renders it
-4. **You review** the structured data and proposed Notion schema
-5. **One click** writes everything to Notion via the configured provider mode
+2. **A durable job** is created immediately for research or write work and persisted under `.notionmcp-data/jobs`
+3. **Gemini 2.0 Flash** plans the research, Playwright extracts normalized evidence documents, and a verifier synthesizes supported rows
+4. **The app validates and normalizes** the model payload before the approval UI ever renders it
+5. **You review** the structured data and proposed Notion schema
+6. **One click** writes everything to Notion via the configured provider mode, with continuous row checkpoints
 
 The write path clamps Notion `title`, `rich_text`, and `url` values to Notion-safe lengths before page
 creation so oversized model output cannot fail the whole write.
 
 Each Notion write now uses a deterministic per-row operation key, persists row-level provenance metadata
-when the database supports the operator columns, and performs a reconciliation pass after ambiguous partial
-failures before telling the operator where to resume.
+when the database supports the operator columns, performs a reconciliation pass after ambiguous partial
+failures before telling the operator where to resume, and checkpoints the active row pointer continuously
+inside the durable job record so reconnects do not restart the append.
 
 After the write completes, the UI gives you a standard `https://www.notion.so/...` link. That link
 can be opened in a browser or shared into the Notion app on Android.
@@ -65,6 +67,31 @@ can be opened in a browser or shared into the Notion app on Android.
 - **Search + browsing**: Serper, Brave, and DuckDuckGo provider support, plus Playwright for page browsing
 - **Notion integration**: Direct Notion API by default, optional local MCP compatibility mode
 - **Frontend**: Next.js 15 with streaming SSE
+
+### Durable job behavior
+
+Both `/api/research` and `/api/write` now create a persisted job record and stream job events in reconnectable
+windows. Closing the tab no longer discards the run. When the UI reconnects, it resumes from the same job ID and
+replays any missed events from the job log before continuing to stream live output.
+
+### Trust boundary
+
+```text
+Operator prompt
+  ↓ trusted
+Planner model
+  ↓
+Search results + browser extraction
+  ↓ untrusted web content boundary
+EvidenceDocument[]
+  ↓ constrained verifier prompt
+Validated research rows
+  ↓ operator review
+Notion provider
+```
+
+The browser layer now labels extracted fields as untrusted evidence, validates redirect hops, fails closed on
+non-HTML content types, and strips instruction-like text before the verifier sees it.
 
 ### Notion provider modes
 
@@ -106,12 +133,14 @@ Fill in `.env.local`:
 | `SEARCH_PROVIDERS` | Optional. Comma-separated provider order such as `serper,brave,duckduckgo` |
 | `APP_ALLOWED_ORIGIN` | Optional. Exact origin to allow when you intentionally expose the API beyond localhost |
 | `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
+| `APP_RATE_LIMIT_MAX` / `APP_RATE_LIMIT_WINDOW_MS` | Optional remote private-mode rate limiting for API routes |
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 | `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by both provider modes |
 | `NOTION_PROVIDER` | Optional provider mode. `direct-api` is the default; set `local-mcp` for the subprocess compatibility path |
 | `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` | Optional local MCP replacement command and JSON-array args |
 | `WRITE_AUDIT_DIR` | Optional server-side directory for persisted write audit JSON records |
+| `JOB_STATE_DIR` | Optional server-side directory for persisted research/write job state |
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
@@ -130,7 +159,8 @@ mode, or set `NOTION_PROVIDER=local-mcp` if you intentionally want the bundled s
 
 Every write now also persists a server-side JSON audit record outside transient UI state and returns a
 download link from the completion panel. By default those records live under `.notionmcp-data/write-audits`
-in the project root, or you can redirect them with `WRITE_AUDIT_DIR`.
+in the project root, or you can redirect them with `WRITE_AUDIT_DIR`. Durable research/write job state lives
+under `.notionmcp-data/jobs` by default, or you can redirect it with `JOB_STATE_DIR`.
 
 ### 3. Run
 
@@ -149,11 +179,12 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run verify
 ```
 
-The automated tests cover request-security rules, write-payload normalization and boundary validation,
-duplicate fingerprinting, retry helpers, the SSE stream parser, browser URL blocking guards, and
-smoke-level 400-path checks for both API routes.
+The automated tests cover request-security rules, durable job persistence, write-payload normalization and
+boundary validation, duplicate fingerprinting, retry helpers, the reconnectable SSE stream parser, browser
+URL blocking guards, and smoke-level 400-path checks for both API routes.
 
 ## Deployment boundary and risk profile
 
@@ -191,23 +222,67 @@ deployment only after additional hardening**.
 ```
 User prompt
     ↓
-Gemini 2.0 Flash (agent loop)
-    ├── search_web() → Serper, Brave, or DuckDuckGo adapter
-    └── browse_url() → Playwright → JSON-LD / Open Graph / schema signals + readable page text
-    ↓
-Structured JSON (items + schema)
+Durable research job
+    ├── planner → search queries
+    ├── extractor → Search + Playwright → EvidenceDocument[]
+    └── verifier → supported rows + rejected row reasons
     ↓
 Runtime validation + reconciliation
     ↓
 Human approval UI ← YOU REVIEW HERE
     ↓
-    Notion provider layer
-    ├── direct-api (default)
-    └── local-mcp (compatibility mode)
-        (with deterministic operation keys, prefetched duplicate fingerprints, row retries, reconciliation, and resume support)
+Durable write job
+    └── Notion provider layer
+        ├── direct-api (default)
+        └── local-mcp (compatibility mode)
+           with deterministic operation keys, row retries, reconciliation, continuous row checkpoints,
+           and resumable job streaming
     ↓
 Notion database ✅
 ```
+
+## Failure and resume walkthrough
+
+1. Start a research or write run.
+2. The route creates a persisted job ID immediately.
+3. If the browser tab closes or the SSE window rotates, the detached worker keeps running.
+4. Re-open the UI and it reconnects to the active job, replaying missed updates from the persisted event log.
+5. For writes, the job checkpoint stores the last confirmed row index, so the next worker resume starts from the
+   next unresolved row instead of replaying the whole append.
+
+## Example write audit shape
+
+```json
+{
+  "status": "complete",
+  "providerMode": "direct-api",
+  "databaseId": "db_123",
+  "resumedFromIndex": 147,
+  "nextRowIndex": 300,
+  "message": "✅ Added 153 rows to the existing Notion database",
+  "auditTrail": {
+    "rowsAttempted": 153,
+    "rowsConfirmedWritten": 153,
+    "rowsSkippedAsDuplicates": 0,
+    "rowsLeftUnresolved": 0
+  }
+}
+```
+
+## Threat model notes for hostile web content
+
+- redirect hops are revalidated as public `http(s)` destinations
+- non-HTML responses fail closed before extraction
+- evidence is normalized into explicit evidence fields instead of handing semi-raw page blobs to the verifier
+- instruction-like page text is stripped before downstream model use
+- unsupported rows are rejected with explicit reasons instead of being silently repaired into existence
+
+## Known limits
+
+- The job worker is optimized for a private operator deployment and persists state on the local filesystem rather
+  than an external queue or database.
+- Detached job workers assume a long-lived Node host. If you move to an ephemeral/serverless runtime, you should
+  replace the local worker launcher with a platform-native durable execution system.
 
 ## Short roadmap
 

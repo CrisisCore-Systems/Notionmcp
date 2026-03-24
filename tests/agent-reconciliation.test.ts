@@ -7,7 +7,9 @@ test("parseResearchResponseWithReconciliation repairs malformed model JSON once 
   const repairPrompts: string[] = [];
 
   const result = await parseResearchResponseWithReconciliation('```json\n{"suggestedDbTitle":"Broken"\n```', {
-    onUpdate: (message) => updates.push(message),
+    onUpdate: (message) => {
+      updates.push(message);
+    },
     reconcile: async (repairPrompt) => {
       repairPrompts.push(repairPrompt);
       return JSON.stringify({

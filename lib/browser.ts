@@ -27,6 +27,26 @@ export interface BrowseResult {
   sourceUrls: string[];
   evidenceSnippets: string[];
   structuredData?: StructuredPageData;
+  evidenceDocument: EvidenceDocument;
+}
+
+export interface EvidenceField {
+  label: string;
+  value: string;
+  source: "meta" | "text" | "table" | "link" | "schema" | "json-ld";
+  untrusted: true;
+}
+
+export interface EvidenceDocument {
+  finalUrl: string;
+  canonicalUrl?: string;
+  title: string;
+  contentType: string;
+  sourceUrls: string[];
+  redirectChain: string[];
+  evidenceFields: EvidenceField[];
+  evidenceSnippets: string[];
+  untrusted: true;
 }
 
 export type SearchProviderName = "serper" | "brave" | "duckduckgo";
@@ -309,6 +329,89 @@ function collapseLines(lines: string[], maxCharacters: number): string {
   }
 
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function isInstructionLikeText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+
+  return (
+    normalized.startsWith("system:") ||
+    normalized.startsWith("assistant:") ||
+    normalized.startsWith("user:") ||
+    normalized.includes("ignore previous instructions") ||
+    normalized.includes("follow these instructions") ||
+    normalized.includes("you are chatgpt") ||
+    normalized.includes("you are an ai assistant") ||
+    normalized.includes("developer message")
+  );
+}
+
+function sanitizeEvidenceText(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return isInstructionLikeText(normalized) ? "" : normalized;
+}
+
+function buildEvidenceDocument(input: {
+  finalUrl: string;
+  title: string;
+  contentType: string;
+  redirectChain: string[];
+  sourceUrls: string[];
+  textLines: string[];
+  notableLinks: string[];
+  tableRows: string[];
+  structuredData?: StructuredPageData;
+}): EvidenceDocument {
+  const evidenceFields: EvidenceField[] = [];
+  const push = (label: string, value: string | undefined, source: EvidenceField["source"]) => {
+    const sanitized = sanitizeEvidenceText(value ?? "");
+
+    if (!sanitized) {
+      return;
+    }
+
+    evidenceFields.push({
+      label,
+      value: sanitized,
+      source,
+      untrusted: true,
+    });
+  };
+
+  push("Page title", input.title, "meta");
+
+  for (const line of input.textLines.slice(0, 24)) {
+    push("Page text", line, "text");
+  }
+
+  for (const row of input.tableRows.slice(0, 12)) {
+    push("Table row", row, "table");
+  }
+
+  for (const link of input.notableLinks.slice(0, 8)) {
+    push("Notable link", link, "link");
+  }
+
+  for (const line of buildStructuredDataLines(input.structuredData)) {
+    push("Structured evidence", line, line.startsWith("JSON-LD") ? "json-ld" : "schema");
+  }
+
+  const evidenceSnippets = Array.from(new Set(evidenceFields.map((field) => `${field.label}: ${field.value}`))).slice(
+    0,
+    MAX_EVIDENCE_SNIPPETS
+  );
+
+  return {
+    finalUrl: input.finalUrl,
+    canonicalUrl: input.structuredData?.canonicalUrl,
+    title: input.title,
+    contentType: input.contentType,
+    redirectChain: input.redirectChain,
+    sourceUrls: input.sourceUrls,
+    evidenceFields,
+    evidenceSnippets,
+    untrusted: true,
+  };
 }
 
 async function getBrowser(): Promise<Browser> {
@@ -688,8 +791,28 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
 
   try {
     await validatePublicHttpUrl(url);
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
     await waitForSettledPage(page);
+
+    const redirectChain: string[] = [];
+    let redirectedRequest = response?.request() ?? null;
+
+    while (redirectedRequest) {
+      redirectChain.unshift(redirectedRequest.url());
+      redirectedRequest = redirectedRequest.redirectedFrom();
+    }
+
+    for (const hop of redirectChain) {
+      await validatePublicHttpUrl(hop);
+    }
+
+    await validatePublicHttpUrl(page.url());
+
+    const contentType = response?.headers()["content-type"]?.split(";")[0]?.trim().toLowerCase() ?? "";
+
+    if (!contentType || !["text/html", "application/xhtml+xml"].includes(contentType)) {
+      throw new Error(`Unsupported content type "${contentType || "unknown"}".`);
+    }
 
     const content = await page.evaluate(({ maxEvidenceSnippets }) => {
       const root =
@@ -725,9 +848,9 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         .map((value) => value.trim())
         .filter(Boolean);
 
-      for (const value of textNodes) {
-        pushLine(value);
-      }
+        for (const value of textNodes) {
+          pushLine(value);
+        }
 
       const tableRows = Array.from(container.querySelectorAll("table"))
         .slice(0, 3)
@@ -741,9 +864,9 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         )
         .filter(Boolean);
 
-      for (const row of tableRows) {
-        pushLine(row);
-      }
+        for (const row of tableRows) {
+          pushLine(row);
+        }
 
       const notableLinks = Array.from(container.querySelectorAll("a[href]"))
         .slice(0, 8)
@@ -764,9 +887,9 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         })
         .filter(Boolean);
 
-      for (const link of notableLinks) {
-        pushLine(link);
-      }
+        for (const link of notableLinks) {
+          pushLine(link);
+        }
 
       const openGraph = Object.fromEntries(
         Array.from(document.querySelectorAll("meta[property]"))
@@ -795,14 +918,16 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         .filter(Boolean)
         .slice(0, 6);
 
-      return {
-        title: document.title.trim(),
-        textLines: lines,
-        sourceUrls: Array.from(new Set([document.location.href, ...notableLinks
-          .map((entry) => entry.split(": ").slice(1).join(": ").trim())
-          .filter(Boolean)])),
-        evidenceSnippets: lines.slice(0, maxEvidenceSnippets),
-        structured: {
+        return {
+          title: document.title.trim(),
+          textLines: lines,
+          notableLinks,
+          tableRows,
+          sourceUrls: Array.from(new Set([document.location.href, ...notableLinks
+            .map((entry) => entry.split(": ").slice(1).join(": ").trim())
+            .filter(Boolean)])),
+          evidenceSnippets: lines.slice(0, maxEvidenceSnippets),
+          structured: {
           canonicalUrl: document.querySelector("link[rel='canonical']")?.getAttribute("href") ?? "",
           openGraph,
           schemaFields,
@@ -812,25 +937,34 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
     }, { maxEvidenceSnippets: MAX_EVIDENCE_SNIPPETS });
 
     const structuredData = normalizeStructuredPageData(content.structured);
-    const structuredLines = buildStructuredDataLines(structuredData);
     const mergedSourceUrls = Array.from(
       new Set([
         ...content.sourceUrls,
         ...collectStructuredSourceUrls(structuredData),
       ])
     ).slice(0, MAX_SEARCH_RESULTS + 2);
-    const evidenceSnippets = Array.from(
-      new Set([...structuredLines, ...content.evidenceSnippets])
-    ).slice(0, MAX_EVIDENCE_SNIPPETS);
+    const evidenceDocument = buildEvidenceDocument({
+      finalUrl: page.url(),
+      title: content.title,
+      contentType,
+      redirectChain,
+      sourceUrls: mergedSourceUrls,
+      textLines: content.textLines,
+      notableLinks: content.notableLinks,
+      tableRows: content.tableRows,
+      structuredData,
+    });
 
     return {
       url: page.url(),
       title: content.title,
-      content:
-        collapseLines([...structuredLines, ...content.textLines], MAX_EXTRACTED_CHARACTERS) ||
-        "No content extracted.",
+      content: collapseLines(
+        evidenceDocument.evidenceFields.map((field) => `${field.label}: ${field.value}`),
+        MAX_EXTRACTED_CHARACTERS
+      ) || "No content extracted.",
       sourceUrls: mergedSourceUrls,
-      evidenceSnippets,
+      evidenceSnippets: evidenceDocument.evidenceSnippets,
+      evidenceDocument,
       ...(structuredData ? { structuredData } : {}),
     };
   } finally {

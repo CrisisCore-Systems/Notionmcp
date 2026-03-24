@@ -19,6 +19,8 @@ const ORIGINAL_ENV = { ...process.env };
 test.afterEach(() => {
   process.env.APP_ALLOWED_ORIGIN = ORIGINAL_ENV.APP_ALLOWED_ORIGIN;
   process.env.APP_ACCESS_TOKEN = ORIGINAL_ENV.APP_ACCESS_TOKEN;
+  process.env.APP_RATE_LIMIT_MAX = ORIGINAL_ENV.APP_RATE_LIMIT_MAX;
+  process.env.APP_RATE_LIMIT_WINDOW_MS = ORIGINAL_ENV.APP_RATE_LIMIT_WINDOW_MS;
 });
 
 test("allows localhost requests without a token", () => {
@@ -65,4 +67,31 @@ test("accepts a matching remote token header", () => {
   );
 
   assert.equal(response, null);
+});
+
+test("rate limits repeated remote requests even with a valid token", async () => {
+  process.env.APP_ALLOWED_ORIGIN = "https://app.example.com";
+  process.env.APP_ACCESS_TOKEN = "secret-token";
+  process.env.APP_RATE_LIMIT_MAX = "1";
+  process.env.APP_RATE_LIMIT_WINDOW_MS = "60000";
+
+  const first = validateApiRequest(
+    createRequest("https://app.example.com/api/research", {
+      origin: "https://app.example.com",
+      "x-app-access-token": "secret-token",
+      "x-forwarded-for": "203.0.113.10",
+    })
+  );
+  const second = validateApiRequest(
+    createRequest("https://app.example.com/api/research", {
+      origin: "https://app.example.com",
+      "x-app-access-token": "secret-token",
+      "x-forwarded-for": "203.0.113.10",
+    })
+  );
+
+  assert.equal(first, null);
+  assert.ok(second);
+  assert.equal(second?.status, 429);
+  assert.match(await second!.text(), /rate limit exceeded/i);
 });

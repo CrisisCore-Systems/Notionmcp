@@ -3,7 +3,7 @@ import {
   buildNotionPageProperties,
   DEFAULT_NOTION_API_VERSION,
   NOTION_ROW_METADATA_PROPERTIES,
-} from "@/lib/notion-mcp";
+} from "@/lib/notion/domain";
 import type {
   DuplicateTracker,
   NotionProvider,

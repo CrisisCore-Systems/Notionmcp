@@ -9,10 +9,11 @@ export type PersistedWriteAuditRecord = {
   id: string;
   createdAt: string;
   databaseId?: string;
-  status: "complete" | "error";
+  status: "running" | "complete" | "error";
   usedExistingDatabase: boolean;
   resumedFromIndex: number;
   nextRowIndex?: number;
+  providerMode?: string;
   message: string;
   auditTrail: WriteAuditTrail;
 };
