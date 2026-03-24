@@ -10,6 +10,9 @@ const MODEL_NAME = "gemini-2.0-flash";
 const MAX_RECONCILIATION_ATTEMPTS = 1;
 const DEFAULT_RESEARCH_MODE = "fast";
 
+const FAST_RESEARCH_ALIASES = new Set(["fast", "fast-lane", "bounded", "default"]);
+const DEEP_RESEARCH_ALIASES = new Set(["deep", "deep-research", "reviewed", "reviewed-deep"]);
+
 export type ResearchMode = "fast" | "deep";
 
 type ResearchProfile = {
@@ -81,23 +84,26 @@ type RunResearchUpdateCheckpoint = {
   pagesBrowsed?: number;
 };
 
-function normalizeResearchMode(value: string | undefined): ResearchMode {
+export function parseResearchMode(value: string | undefined): ResearchMode | null {
   const normalized = value?.trim().toLowerCase();
 
-  if (
-    normalized === "deep" ||
-    normalized === "deep-research" ||
-    normalized === "reviewed" ||
-    normalized === "reviewed-deep"
-  ) {
+  if (!normalized) {
+    return DEFAULT_RESEARCH_MODE;
+  }
+
+  if (FAST_RESEARCH_ALIASES.has(normalized)) {
+    return "fast";
+  }
+
+  if (DEEP_RESEARCH_ALIASES.has(normalized)) {
     return "deep";
   }
 
-  return DEFAULT_RESEARCH_MODE;
+  return null;
 }
 
 export function getResearchProfile(mode: string | undefined = DEFAULT_RESEARCH_MODE): ResearchProfile {
-  return RESEARCH_PROFILES[normalizeResearchMode(mode)];
+  return RESEARCH_PROFILES[parseResearchMode(mode) ?? DEFAULT_RESEARCH_MODE];
 }
 
 function getFallbackPlannerQueries(prompt: string, profile: ResearchProfile): string[] {

@@ -46,6 +46,9 @@ The UI now exposes two reviewed research lanes:
 - **Fast lane** — the current default path with the existing low-latency evidence budget
 - **Deep research** — a reviewed mode with higher evidence caps, domain-diversity minimums, and source-class balancing before approval
 
+`/api/research` now also publishes a machine-readable route contract on `GET` so the repo surface and runtime
+surface both spell out that fast is the bounded default lane while deep is the explicit wider-source lane.
+
 The write path clamps Notion `title`, `rich_text`, and `url` values to Notion-safe lengths before page
 creation so oversized model output cannot fail the whole write.
 
@@ -113,6 +116,10 @@ The direct API path is the default because this repo is optimized for a private 
 single reviewed write lane. The local MCP transport stays available, but it is no longer the architectural spine
 and should be treated as quarantined compatibility plumbing rather than the canonical path.
 
+Both `/api/research` and `/api/write` now expose `GET` contracts that mirror this architecture story, while
+`/api/jobs/{jobId}` and `/api/write-audits/{auditId}` return persisted proof artifacts plus the contract metadata
+that explains what those records prove.
+
 ## Setup
 
 ### 1. Clone and install
@@ -140,7 +147,7 @@ Fill in `.env.local`:
 | `SERPER_API_KEY` | Optional. [serper.dev](https://serper.dev) — enables one stable API-backed search provider |
 | `BRAVE_SEARCH_API_KEY` | Optional. [search.brave.com](https://search.brave.com/) — enables a second API-backed search provider path |
 | `SEARCH_PROVIDERS` | Optional. Comma-separated provider order such as `serper,brave,duckduckgo` |
-| `NOTIONMCP_DEPLOYMENT_MODE` | Optional explicit deployment mode. `localhost-operator` is the default; set `remote-private-host` for intentional remote private hosting |
+| `NOTIONMCP_DEPLOYMENT_MODE` | Explicit deployment mode. Leave it at `localhost-operator` for workstation use; set `remote-private-host` only for intentional remote private hosting |
 | `APP_ALLOWED_ORIGIN` | Optional. Exact origin to allow when you intentionally expose the API beyond localhost |
 | `APP_ACCESS_TOKEN` | Optional. Shared secret required for any non-local API access |
 | `APP_RATE_LIMIT_MAX` / `APP_RATE_LIMIT_WINDOW_MS` | Optional remote private-mode rate limiting for API routes |
@@ -161,7 +168,8 @@ Fill in `.env.local`:
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
 
 By default, `/api/research` and `/api/write` run in **`localhost-operator`** mode and only accept local
-requests. If you intentionally deploy the app for tightly controlled private use, set
+requests. Remote API settings are no longer inferred into a deployment mode: if you intentionally deploy the app
+for tightly controlled private use, you must set
 `NOTIONMCP_DEPLOYMENT_MODE=remote-private-host` together with **all three** of `APP_ALLOWED_ORIGIN`,
 `APP_ACCESS_TOKEN`, and `PERSISTED_STATE_ENCRYPTION_KEY`, then send the matching token in either the
 `x-app-access-token` header or a `Bearer` token. Cross-origin requests are rejected either way, and the app
@@ -186,6 +194,8 @@ job JSON so operators can inspect checkpoints, replayable event history, and the
 a first-class proof surface. By default those records live under `.notionmcp-data/write-audits` and
 `.notionmcp-data/jobs` in the project root, or you can redirect them with `WRITE_AUDIT_DIR` and
 `JOB_STATE_DIR`. The matching API proof endpoints are `/api/write-audits/{auditId}` and `/api/jobs/{jobId}`.
+Those proof endpoints now return their own proof contracts in the JSON payload and response headers so audit
+artifacts remain inspectable even outside the UI.
 Old persisted job and audit JSON files are cleaned up automatically after 30 days by default via
 `JOB_STATE_RETENTION_DAYS` and `WRITE_AUDIT_RETENTION_DAYS`. Local-only setups can leave persisted state
 unencrypted, but any remote private deployment must set `PERSISTED_STATE_ENCRYPTION_KEY` so those JSON files

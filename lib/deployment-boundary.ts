@@ -1,10 +1,7 @@
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getJobDirectory } from "@/lib/job-store";
-import {
-  getPersistedStateEncryptionRequirementError,
-  isRemotePrivateMode,
-} from "@/lib/persisted-state";
+import { getPersistedStateEncryptionRequirementError } from "@/lib/persisted-state";
 import { getWriteAuditDirectory } from "@/lib/write-audit-store";
 
 export type DeploymentMode = "localhost-operator" | "remote-private-host";
@@ -43,7 +40,7 @@ export function getDeploymentMode(env: NodeJS.ProcessEnv = process.env): Deploym
     return normalizeDeploymentMode(env.NOTIONMCP_DEPLOYMENT_MODE);
   }
 
-  return isRemotePrivateMode(env) ? "remote-private-host" : "localhost-operator";
+  return "localhost-operator";
 }
 
 function normalizeHostDurabilityMode(value: string | undefined): HostDurabilityMode {
@@ -99,6 +96,15 @@ export function getDurableJobsWarning(
 
 export function getDeploymentReadinessError(env: NodeJS.ProcessEnv = process.env): string | null {
   const deploymentMode = getDeploymentMode(env);
+  const remoteAccessConfigured =
+    hasConfiguredValue(env.APP_ALLOWED_ORIGIN) || hasConfiguredValue(env.APP_ACCESS_TOKEN);
+
+  if (remoteAccessConfigured && deploymentMode !== "remote-private-host") {
+    return (
+      "Remote API settings require NOTIONMCP_DEPLOYMENT_MODE=remote-private-host so workstation and deployment " +
+      "guarantees stay explicit. Unset APP_ALLOWED_ORIGIN and APP_ACCESS_TOKEN to remain in localhost-operator mode."
+    );
+  }
 
   if (deploymentMode === "remote-private-host") {
     if (!hasConfiguredValue(env.APP_ALLOWED_ORIGIN) || !hasConfiguredValue(env.APP_ACCESS_TOKEN)) {

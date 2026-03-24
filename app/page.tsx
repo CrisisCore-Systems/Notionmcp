@@ -1,9 +1,11 @@
 import ChatUI from "./components/ChatUI";
 import {
   getDeploymentMode,
+  getDeploymentReadinessError,
   getDurableJobsWarning,
   warnIfDurableJobsNeedLongLivedHost,
 } from "@/lib/deployment-boundary";
+import { getCurrentNotionProviderState } from "@/lib/notion";
 
 const ENVIRONMENT_VARIABLES = [
   "GEMINI_API_KEY",
@@ -15,9 +17,31 @@ export default function HomePage() {
   warnIfDurableJobsNeedLongLivedHost();
   const durableJobsWarning = getDurableJobsWarning();
   const deploymentMode = getDeploymentMode();
+  const deploymentReadinessError = getDeploymentReadinessError();
+  const notionProviderState = getCurrentNotionProviderState();
 
   return (
     <main style={{ minHeight: "100vh", padding: "2rem 1rem 3rem" }}>
+      {deploymentReadinessError && (
+        <div
+          style={{
+            maxWidth: 800,
+            margin: "0 auto 1rem",
+            background: "#fef2f2",
+            border: "1px solid #fca5a5",
+            borderRadius: 12,
+            padding: "1rem 1.25rem",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+          }}
+        >
+          <h2 style={{ fontSize: "1rem", margin: "0 0 0.5rem", color: "#991b1b" }}>
+            Deployment boundary mismatch
+          </h2>
+          <p style={{ margin: 0, color: "#991b1b", lineHeight: 1.6, fontSize: "0.92rem" }}>
+            {deploymentReadinessError}
+          </p>
+        </div>
+      )}
       {durableJobsWarning && (
         <div
           style={{
@@ -70,6 +94,32 @@ export default function HomePage() {
           <code>APP_ACCESS_TOKEN</code>. Remote private-host mode also requires durable detached jobs plus{" "}
           <code>PERSISTED_STATE_ENCRYPTION_KEY</code>, then enter that access token in the UI before starting a run.
         </p>
+      </div>
+      <div
+        style={{
+          maxWidth: 800,
+          margin: "0 auto 1.5rem",
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          padding: "1rem 1.25rem",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+          display: "grid",
+          gap: "0.75rem",
+        }}
+      >
+        <h2 style={{ fontSize: "1rem", margin: 0 }}>Operator guarantees</h2>
+        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
+          <strong>Research lanes:</strong> fast stays bounded for low-latency reviewed work, while deep research is
+          an explicit wider-source lane with higher browse caps plus domain-diversity and source-class requirements.
+        </div>
+        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
+          <strong>Provider lane:</strong> <code>{notionProviderState.mode}</code> ({notionProviderState.description})
+        </div>
+        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
+          <strong>Proof artifacts:</strong> every durable run can be inspected via <code>/api/jobs/{"{jobId}"}</code>,
+          and completed writes also persist row-level audit evidence at <code>/api/write-audits/{"{auditId}"}</code>.
+        </div>
       </div>
       <ChatUI />
     </main>
