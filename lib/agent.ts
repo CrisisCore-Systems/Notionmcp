@@ -359,17 +359,12 @@ function normalizePlannerOutput(text: string, prompt: string, profile: ResearchP
       )
     );
 
-    const supplementedSearchQueries = Array.from(new Set([...searchQueries, ...fallbackQueries])).slice(
-      0,
-      profile.maxPlannedQueries
-    );
+    const supplementedSearchQueries = Array.from(new Set([...searchQueries, ...fallbackQueries]));
 
-    if (supplementedSearchQueries.length >= profile.minPlannedQueries) {
-      return { searchQueries: supplementedSearchQueries };
-    }
-
-    if (searchQueries.length > 0) {
-      return { searchQueries: searchQueries.slice(0, profile.maxPlannedQueries) };
+    if (supplementedSearchQueries.length > 0) {
+      return {
+        searchQueries: supplementedSearchQueries.slice(0, profile.maxPlannedQueries),
+      };
     }
   } catch {
     // Fall through to the deterministic fallback below.

@@ -153,7 +153,7 @@ async function assertWritablePersistenceDirectory(directory: string, label: stri
     await mkdir(directory, { recursive: true });
     const probePath = path.join(directory, `.notionmcp-readiness-${process.pid}-${Date.now()}.tmp`);
     await writeFile(probePath, `${label} readiness probe\n`, "utf8");
-    await unlink(probePath).catch(() => undefined);
+    await unlink(probePath);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Persisted ${label} directory is not writable at "${directory}": ${reason}`);
