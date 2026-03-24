@@ -398,7 +398,7 @@ test("operator flow persists a durable research job, supports reconnect, and wri
   assert.deepEqual(auditProof.auditTrail.rows.map((row) => row.status), ["written"]);
 });
 
-test("operator flow reconnects research, reconciles an ambiguous write, and resumes from persisted proof artifacts", async () => {
+test("operator flow proves reconnect, reconciliation, proof artifacts, resume, and final write completion as one continuous claim", async () => {
   const researchPrompt = "Find Acme alternatives with public pricing pages";
   const searchQueries = [
     "Acme alternatives pricing",
@@ -628,6 +628,10 @@ test("operator flow reconnects research, reconciles an ambiguous write, and resu
   );
   const researchProof = (await researchProofResponse.json()) as {
     status: string;
+    proofContract: {
+      kind: string;
+      proofArtifact: string;
+    };
     checkpoint?: {
       phase?: string;
       searchQueries?: string[];
@@ -637,7 +641,10 @@ test("operator flow reconnects research, reconciles an ambiguous write, and resu
   };
 
   assert.equal(researchProofResponse.status, 200);
+  assert.equal(researchProofResponse.headers.get("x-notionmcp-surface"), "durable-job-proof");
   assert.equal(researchProof.status, "complete");
+  assert.equal(researchProof.proofContract.kind, "durable-job-proof");
+  assert.equal(researchProof.proofContract.proofArtifact, "durable job state");
   assert.equal(researchProof.checkpoint?.phase, "complete");
   assert.deepEqual(researchProof.checkpoint?.searchQueries, searchQueries);
   assert.equal(researchProof.checkpoint?.evidenceDocumentCount, 4);
@@ -666,6 +673,10 @@ test("operator flow reconnects research, reconciles an ambiguous write, and resu
   );
   const failedWriteProof = (await failedWriteProofResponse.json()) as {
     status: string;
+    proofContract: {
+      kind: string;
+      proofArtifact: string;
+    };
     checkpoint?: {
       phase?: string;
       databaseId?: string;
@@ -682,7 +693,10 @@ test("operator flow reconnects research, reconciles an ambiguous write, and resu
   };
 
   assert.equal(failedWriteProofResponse.status, 200);
+  assert.equal(failedWriteProofResponse.headers.get("x-notionmcp-surface"), "durable-job-proof");
   assert.equal(failedWriteProof.status, "error");
+  assert.equal(failedWriteProof.proofContract.kind, "durable-job-proof");
+  assert.equal(failedWriteProof.proofContract.proofArtifact, "durable job state");
   assert.equal(failedWriteProof.checkpoint?.phase, "error");
   assert.equal(failedWriteProof.checkpoint?.databaseId, "11111111-1111-1111-1111-111111111111");
   assert.equal(failedWriteProof.checkpoint?.nextRowIndex, 1);
@@ -699,17 +713,37 @@ test("operator flow reconnects research, reconciles an ambiguous write, and resu
   );
   const failedAuditProof = (await failedAuditProofResponse.json()) as {
     status: string;
+    proofContract: {
+      kind: string;
+      proofArtifact: string;
+    };
     nextRowIndex?: number;
     auditTrail: {
+      sourceSet: string[];
+      extractionCounts: {
+        searchQueries: number;
+      };
       rowsConfirmedWritten: number;
+      rowsConfirmedAfterReconciliation: number;
+      rowsLeftUnresolved: number;
       rows: Array<{ status: string }>;
     };
   };
 
   assert.equal(failedAuditProofResponse.status, 200);
+  assert.equal(failedAuditProofResponse.headers.get("x-notionmcp-surface"), "write-audit-proof");
   assert.equal(failedAuditProof.status, "error");
+  assert.equal(failedAuditProof.proofContract.kind, "write-audit-proof");
+  assert.equal(failedAuditProof.proofContract.proofArtifact, "write audit trail");
   assert.equal(failedAuditProof.nextRowIndex, 1);
+  assert.deepEqual(failedAuditProof.auditTrail.sourceSet, researchResult[RESEARCH_RUN_METADATA_KEY]?.sourceSet);
+  assert.equal(
+    failedAuditProof.auditTrail.extractionCounts.searchQueries,
+    researchResult[RESEARCH_RUN_METADATA_KEY]?.extractionCounts.searchQueries
+  );
   assert.equal(failedAuditProof.auditTrail.rowsConfirmedWritten, 1);
+  assert.equal(failedAuditProof.auditTrail.rowsConfirmedAfterReconciliation, 1);
+  assert.equal(failedAuditProof.auditTrail.rowsLeftUnresolved, 1);
   assert.deepEqual(failedAuditProof.auditTrail.rows.map((row) => row.status), [
     "written-after-reconciliation",
     "unresolved",
@@ -737,17 +771,39 @@ test("operator flow reconnects research, reconciles an ambiguous write, and resu
   );
   const resumedAuditProof = (await resumedAuditProofResponse.json()) as {
     status: string;
+    proofContract: {
+      kind: string;
+      proofArtifact: string;
+    };
     resumedFromIndex: number;
     auditTrail: {
+      sourceSet: string[];
+      extractionCounts: {
+        searchQueries: number;
+      };
+      rowsAttempted: number;
       rowsConfirmedWritten: number;
+      rowsConfirmedAfterReconciliation: number;
+      rowsLeftUnresolved: number;
       rows: Array<{ status: string }>;
     };
   };
 
   assert.equal(resumedAuditProofResponse.status, 200);
+  assert.equal(resumedAuditProofResponse.headers.get("x-notionmcp-surface"), "write-audit-proof");
   assert.equal(resumedAuditProof.status, "complete");
+  assert.equal(resumedAuditProof.proofContract.kind, "write-audit-proof");
+  assert.equal(resumedAuditProof.proofContract.proofArtifact, "write audit trail");
   assert.equal(resumedAuditProof.resumedFromIndex, 1);
+  assert.deepEqual(resumedAuditProof.auditTrail.sourceSet, researchResult[RESEARCH_RUN_METADATA_KEY]?.sourceSet);
+  assert.equal(
+    resumedAuditProof.auditTrail.extractionCounts.searchQueries,
+    researchResult[RESEARCH_RUN_METADATA_KEY]?.extractionCounts.searchQueries
+  );
+  assert.equal(resumedAuditProof.auditTrail.rowsAttempted, 1);
   assert.equal(resumedAuditProof.auditTrail.rowsConfirmedWritten, 1);
+  assert.equal(resumedAuditProof.auditTrail.rowsConfirmedAfterReconciliation, 0);
+  assert.equal(resumedAuditProof.auditTrail.rowsLeftUnresolved, 0);
   assert.deepEqual(resumedAuditProof.auditTrail.rows.map((row) => row.status), ["written"]);
   assert.ok(writes.filter((entry) => entry.operationKey === operationKeys[0]).length >= 3);
   assert.ok(writes.some((entry) => entry.operationKey === operationKeys[1]));
