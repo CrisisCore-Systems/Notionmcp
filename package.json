@@ -1,6 +1,6 @@
 {
   "name": "notion-research-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Private operator research workstation for durable Gemini web research and audited Notion writes.",
   "keywords": [
     "nextjs",
@@ -31,7 +31,8 @@
     "next": "^15.1.0",
     "playwright": "^1.49.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
@@ -40,7 +41,6 @@
     "@types/react-dom": "^18.3.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^15.5.14",
-    "tsx": "^4.21.0",
     "typescript": "^5.0.0"
   }
 }

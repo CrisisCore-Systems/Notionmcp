@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { access } from "node:fs/promises";
 import { mkdtemp, readFile, rm, utimes } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { getDetachedJobWorkerCommand } from "@/lib/job-runner";
 import {
   appendJobEvent,
   createJob,
@@ -19,6 +21,8 @@ test.afterEach(async () => {
   process.env.JOB_STATE_DIR = ORIGINAL_ENV.JOB_STATE_DIR;
   process.env.JOB_STATE_RETENTION_DAYS = ORIGINAL_ENV.JOB_STATE_RETENTION_DAYS;
   process.env.PERSISTED_STATE_ENCRYPTION_KEY = ORIGINAL_ENV.PERSISTED_STATE_ENCRYPTION_KEY;
+  process.env.APP_ALLOWED_ORIGIN = ORIGINAL_ENV.APP_ALLOWED_ORIGIN;
+  process.env.APP_ACCESS_TOKEN = ORIGINAL_ENV.APP_ACCESS_TOKEN;
 
   if (jobDir?.startsWith(path.join(os.tmpdir(), "notionmcp-jobs-"))) {
     await rm(jobDir, { recursive: true, force: true });
@@ -78,4 +82,27 @@ test("job store encrypts persisted state when configured", async () => {
   assert.match(rawFile, /notionmcp-encrypted-state\/v1/);
   assert.doesNotMatch(rawFile, /Encrypted durable jobs/);
   assert.equal((loaded?.payload as { prompt?: string }).prompt, "Encrypted durable jobs");
+});
+
+test("detached job workers resolve the shipped TS entrypoint through the runtime tsx CLI", async () => {
+  const jobId = "11111111-1111-1111-1111-111111111111";
+  const workerCommand = getDetachedJobWorkerCommand(jobId);
+
+  assert.equal(workerCommand.command, process.execPath);
+  assert.match(workerCommand.args[0] ?? "", /tsx[\\/]dist[\\/]cli\.mjs$/);
+  assert.equal(workerCommand.args[1], path.join(process.cwd(), "scripts", "run-job.ts"));
+  assert.equal(workerCommand.args[2], jobId);
+  await access(workerCommand.args[1]);
+});
+
+test("job store requires persisted state encryption in remote private mode", async () => {
+  process.env.JOB_STATE_DIR = await mkdtemp(path.join(os.tmpdir(), "notionmcp-jobs-"));
+  process.env.APP_ALLOWED_ORIGIN = "https://app.example.com";
+  process.env.APP_ACCESS_TOKEN = "secret-token";
+  process.env.PERSISTED_STATE_ENCRYPTION_KEY = "";
+
+  await assert.rejects(
+    createJob("research", { prompt: "Remote job" }),
+    /PERSISTED_STATE_ENCRYPTION_KEY/
+  );
 });

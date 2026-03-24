@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
 import {
   appendJobEvent,
@@ -17,8 +18,22 @@ import {
 import { runResearchAgent } from "@/lib/agent";
 import { executeWriteJob, WriteExecutionError, type WriteExecutionInput } from "@/lib/write-execution";
 
+const require = createRequire(import.meta.url);
+
 export async function createDurableJob(kind: JobKind, payload: unknown): Promise<PersistedJobRecord> {
   return await createJob(kind, payload);
+}
+
+export function getDetachedJobWorkerCommand(jobId: string, cwd = process.cwd()): {
+  command: string;
+  args: string[];
+} {
+  const tsxPackageRoot = path.dirname(require.resolve("tsx/package.json"));
+
+  return {
+    command: process.execPath,
+    args: [path.join(tsxPackageRoot, "dist", "cli.mjs"), path.join(cwd, "scripts", "run-job.ts"), jobId],
+  };
 }
 
 export async function processJob(jobId: string): Promise<void> {
@@ -106,9 +121,8 @@ export async function ensureJobWorker(jobId: string): Promise<void> {
     return;
   }
 
-  const tsxCli = path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
-  const workerScript = path.join(process.cwd(), "scripts", "run-job.ts");
-  const child = spawn(process.execPath, [tsxCli, workerScript, jobId], {
+  const workerCommand = getDetachedJobWorkerCommand(jobId);
+  const child = spawn(workerCommand.command, workerCommand.args, {
     cwd: process.cwd(),
     detached: true,
     stdio: "ignore",

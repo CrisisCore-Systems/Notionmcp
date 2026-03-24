@@ -1,3 +1,8 @@
+import {
+  getPersistedStateEncryptionRequirementError,
+  isRemotePrivateMode,
+} from "@/lib/persisted-state";
+
 const DURABLE_JOBS_WARNING_TITLE = "Durable jobs require a long-lived Node host.";
 const DURABLE_JOBS_WARNING_MESSAGE =
   "Detached job workers and resumable state assume this app stays on a long-lived Node process with persistent local storage. Do not treat the default durable-jobs mode like a stateless hobby deploy.";
@@ -21,6 +26,18 @@ export function getDurableJobsWarning(
   };
 }
 
+export function getDeploymentReadinessError(env: NodeJS.ProcessEnv = process.env): string | null {
+  return getPersistedStateEncryptionRequirementError(env);
+}
+
+export function assertDeploymentReadiness(env: NodeJS.ProcessEnv = process.env): void {
+  const error = getDeploymentReadinessError(env);
+
+  if (error) {
+    throw new Error(error);
+  }
+}
+
 export function warnIfDurableJobsNeedLongLivedHost(
   env: NodeJS.ProcessEnv = process.env,
   log: (message: string) => void = console.warn
@@ -32,5 +49,8 @@ export function warnIfDurableJobsNeedLongLivedHost(
   }
 
   durableJobsWarningEmitted = true;
-  log(`[deployment-boundary] ${warning.title} ${warning.message}`);
+  const remoteModeSuffix = isRemotePrivateMode(env)
+    ? " Remote private mode also requires PERSISTED_STATE_ENCRYPTION_KEY."
+    : "";
+  log(`[deployment-boundary] ${warning.title} ${warning.message}${remoteModeSuffix}`);
 }

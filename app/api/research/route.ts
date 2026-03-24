@@ -2,13 +2,14 @@ import { NextRequest } from "next/server";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
-import { warnIfDurableJobsNeedLongLivedHost } from "@/lib/deployment-boundary";
+import { assertDeploymentReadiness, warnIfDurableJobsNeedLongLivedHost } from "@/lib/deployment-boundary";
 import { validateApiRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
+  assertDeploymentReadiness();
   warnIfDurableJobsNeedLongLivedHost();
   const requestError = validateApiRequest(req);
 
