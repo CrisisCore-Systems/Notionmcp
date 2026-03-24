@@ -14,7 +14,6 @@ export type SharedValidationIssue = {
   message: string;
 };
 
-export const MIN_EVIDENCE_DENSITY = 0.5;
 export const NOTION_FIELD_LIMITS = {
   title: 2000,
   rich_text: 2000,
@@ -144,6 +143,9 @@ export function getResearchItemValidationIssues(
   const evidenceCoveredFields = populatedColumns.filter(
     (columnName) => (evidenceByField[columnName] ?? []).filter(Boolean).length > 0
   );
+  const missingEvidenceFields = populatedColumns.filter(
+    (columnName) => !evidenceCoveredFields.includes(columnName)
+  );
   const issueColumn = titleColumn ?? populatedColumns[0];
 
   if (!provenance?.sourceUrls?.length) {
@@ -163,21 +165,11 @@ export function getResearchItemValidationIssues(
     return issues;
   }
 
-  if (titleColumn && populatedColumns.includes(titleColumn) && !(evidenceByField[titleColumn] ?? []).length) {
+  if (missingEvidenceFields.length > 0) {
     issues.push({
       rowIndex,
-      columnName: titleColumn,
-      message: `Row ${rowIndex + 1} must include evidence for "${titleColumn}".`,
-    });
-  }
-
-  const minimumEvidenceFields = Math.max(1, Math.ceil(populatedColumns.length * MIN_EVIDENCE_DENSITY));
-
-  if (evidenceCoveredFields.length < minimumEvidenceFields) {
-    issues.push({
-      rowIndex,
-      columnName: issueColumn,
-      message: `Row ${rowIndex + 1} needs denser evidence coverage before approval.`,
+      columnName: missingEvidenceFields[0] ?? issueColumn,
+      message: `Row ${rowIndex + 1} must include evidence for every populated field. Missing: ${missingEvidenceFields.join(", ")}.`,
     });
   }
 

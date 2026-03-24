@@ -14,7 +14,7 @@ type RouteContext = {
 
 export async function GET(req: NextRequest, context: RouteContext) {
   assertDeploymentReadiness();
-  const requestError = validateApiRequest(req);
+  const requestError = await validateApiRequest(req);
 
   if (requestError) {
     return requestError;

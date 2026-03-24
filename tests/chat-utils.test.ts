@@ -27,7 +27,7 @@ test("getValidationIssues blocks approval for weak provenance coverage", () => {
   });
 
   assert.equal(issues.length >= 1, true);
-  assert.match(issues.map((issue) => issue.message).join("\n"), /evidence for "Name"|denser evidence coverage/);
+  assert.match(issues.map((issue) => issue.message).join("\n"), /evidence for every populated field/);
 });
 
 test("getValidationIssues accepts rows with complete provenance coverage", () => {

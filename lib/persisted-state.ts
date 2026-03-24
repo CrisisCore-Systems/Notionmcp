@@ -36,7 +36,7 @@ export function getPersistedStateEncryptionRequirementError(
 
   return (
     "Remote private deployments must set PERSISTED_STATE_ENCRYPTION_KEY so persisted durable-job " +
-    "and write-audit state is encrypted at rest."
+    "state, write-audit state, and remote request-coordination state are encrypted at rest."
   );
 }
 
