@@ -1002,7 +1002,7 @@ export default function ChatUI() {
                 lineHeight: 1.45,
               }}
             >
-              Search ran in degraded DuckDuckGo HTML fallback mode
+              This research run used degraded DuckDuckGo HTML fallback mode
               {searchProvidersUsed.length > 0 ? ` (${searchProvidersUsed.join(", ")})` : ""}. Review the source
               coverage carefully and configure <code>SERPER_API_KEY</code> or <code>BRAVE_SEARCH_API_KEY</code>{" "}
               to restore API-backed search.

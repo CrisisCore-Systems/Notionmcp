@@ -145,7 +145,9 @@ export async function readPersistedStateFile<T>(
   const secret = getPersistenceSecret(env);
 
   if (!secret) {
-    throw new Error("PERSISTED_STATE_ENCRYPTION_KEY is required to read encrypted persisted state.");
+    throw new Error(
+      "Found encrypted persisted state but PERSISTED_STATE_ENCRYPTION_KEY is not configured. Set this environment variable to decrypt the state."
+    );
   }
 
   return decryptState(parsed, secret) as T;

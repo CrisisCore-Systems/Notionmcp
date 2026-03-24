@@ -1005,18 +1005,19 @@ export async function searchWebWithDiagnostics(
 
   for (const provider of configuredProviders) {
     const adapter = SEARCH_ADAPTER_FACTORIES[provider]();
+    const providerName = adapter.name;
 
     try {
       return {
-        provider: adapter.name,
-        degraded: isDegradedSearchProvider(adapter.name),
+        provider: providerName,
+        degraded: isDegradedSearchProvider(providerName),
         attemptedProviders,
         results: await adapter.search(query),
       };
     } catch (error) {
-      attemptedProviders.push(adapter.name);
+      attemptedProviders.push(providerName);
       attemptedProviderErrors.push(
-        `${adapter.name} (${error instanceof Error ? error.message : String(error)})`
+        `${providerName} (${error instanceof Error ? error.message : String(error)})`
       );
       lastError = error;
     }
