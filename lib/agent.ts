@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { browseAndExtract, searchWeb, type EvidenceDocument } from "./browser";
+import { browseAndExtract, getConfiguredSearchProviders, searchWebWithDiagnostics, type EvidenceDocument } from "./browser";
 import { mapWithConcurrencyLimit } from "./concurrency";
 import { RESEARCH_RUN_METADATA_KEY, type ResearchResult } from "./research-result";
 import { parseResearchResult } from "./write-payload";
@@ -176,10 +176,14 @@ async function collectEvidenceDocuments(
   candidateSourceSet: Set<string>;
   pagesBrowsedSet: Set<string>;
   rejectedUrlSet: Set<string>;
+  searchProvidersUsed: Set<string>;
+  configuredSearchProviders: string[];
 }> {
   const candidateSourceSet = new Set<string>();
   const pagesBrowsedSet = new Set<string>();
   const rejectedUrlSet = new Set<string>();
+  const searchProvidersUsed = new Set<string>();
+  const configuredSearchProviders = getConfiguredSearchProviders();
   const candidateUrls: string[] = [];
 
   for (const query of plan.searchQueries) {
@@ -187,7 +191,23 @@ async function collectEvidenceDocuments(
       phase: "extracting",
       searchQueries: plan.searchQueries,
     });
-    const results = await searchWeb(query);
+    const search = await searchWebWithDiagnostics(query);
+    const providerLabel = search.provider === "duckduckgo" ? "DuckDuckGo HTML fallback" : search.provider;
+
+    if (!searchProvidersUsed.has(search.provider)) {
+      searchProvidersUsed.add(search.provider);
+      await onUpdate(
+        search.degraded
+          ? `⚠️ Search provider: ${providerLabel} (degraded mode). Configure Serper or Brave for reviewed API-backed search results.`
+          : `🔎 Search provider: ${providerLabel}.`,
+        {
+          phase: "extracting",
+          searchQueries: plan.searchQueries,
+        }
+      );
+    }
+
+    const results = search.results;
 
     for (const result of results) {
       if (!candidateSourceSet.has(result.url)) {
@@ -244,6 +264,8 @@ async function collectEvidenceDocuments(
     candidateSourceSet,
     pagesBrowsedSet,
     rejectedUrlSet,
+    searchProvidersUsed,
+    configuredSearchProviders,
   };
 }
 
@@ -344,7 +366,7 @@ export async function runResearchAgent(
 ): Promise<ResearchResult> {
   const startedAtMs = Date.now();
   const plan = await planResearchQueries(prompt, onUpdate);
-  const { evidenceDocuments, candidateSourceSet, pagesBrowsedSet, rejectedUrlSet } =
+  const { evidenceDocuments, candidateSourceSet, pagesBrowsedSet, rejectedUrlSet, searchProvidersUsed, configuredSearchProviders } =
     await collectEvidenceDocuments(plan, onUpdate);
 
   if (evidenceDocuments.length === 0) {
@@ -457,6 +479,11 @@ ${serializeEvidenceDocuments(evidenceDocuments)}`;
         rowsExtracted: result.items.length,
       },
       rejectedUrls: Array.from(rejectedUrlSet).sort((left, right) => left.localeCompare(right)),
+      search: {
+        configuredProviders: configuredSearchProviders,
+        usedProviders: Array.from(searchProvidersUsed),
+        degraded: searchProvidersUsed.has("duckduckgo"),
+      },
     },
   };
 }

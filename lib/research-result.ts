@@ -15,10 +15,17 @@ export interface ResearchExtractionCounts {
   rowsExtracted: number;
 }
 
+export interface ResearchSearchMetadata {
+  configuredProviders: string[];
+  usedProviders: string[];
+  degraded: boolean;
+}
+
 export interface ResearchRunMetadata {
   sourceSet: string[];
   extractionCounts: ResearchExtractionCounts;
   rejectedUrls: string[];
+  search?: ResearchSearchMetadata;
 }
 
 export interface ResearchItem extends Record<string, unknown> {

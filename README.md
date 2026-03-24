@@ -68,6 +68,9 @@ can be opened in a browser or shared into the Notion app on Android.
 - **Notion integration**: Direct Notion API by default, optional local MCP compatibility mode
 - **Frontend**: Next.js 15 with streaming SSE
 
+When the app falls back to DuckDuckGo HTML search, the UI now labels that run as degraded mode instead of
+silently pretending it still has API-backed search quality.
+
 ### Durable job behavior
 
 Both `/api/research` and `/api/write` now create a persisted job record and stream job events in reconnectable
@@ -140,7 +143,11 @@ Fill in `.env.local`:
 | `NOTION_PROVIDER` | Optional provider mode. `direct-api` is the default; set `local-mcp` for the subprocess compatibility path |
 | `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` | Optional local MCP replacement command and JSON-array args |
 | `WRITE_AUDIT_DIR` | Optional server-side directory for persisted write audit JSON records |
+| `WRITE_AUDIT_RETENTION_DAYS` | Optional retention window before old write-audit JSON files are removed. Defaults to 30 |
 | `JOB_STATE_DIR` | Optional server-side directory for persisted research/write job state |
+| `JOB_STATE_RETENTION_DAYS` | Optional retention window before old durable-job JSON files are removed. Defaults to 30 |
+| `PERSISTED_STATE_ENCRYPTION_KEY` | Optional secret that enables AES-256-GCM encryption for persisted job/audit state at rest |
+| `NOTIONMCP_RUN_JOBS_INLINE` | Optional escape hatch for inline debugging. Leave unset for the default detached durable-job mode |
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
@@ -160,7 +167,10 @@ mode, or set `NOTION_PROVIDER=local-mcp` if you intentionally want the bundled s
 Every write now also persists a server-side JSON audit record outside transient UI state and returns a
 download link from the completion panel. By default those records live under `.notionmcp-data/write-audits`
 in the project root, or you can redirect them with `WRITE_AUDIT_DIR`. Durable research/write job state lives
-under `.notionmcp-data/jobs` by default, or you can redirect it with `JOB_STATE_DIR`.
+under `.notionmcp-data/jobs` by default, or you can redirect it with `JOB_STATE_DIR`. Old persisted job and
+audit JSON files are cleaned up automatically after 30 days by default via `JOB_STATE_RETENTION_DAYS` and
+`WRITE_AUDIT_RETENTION_DAYS`, and you can opt into AES-256-GCM state-at-rest encryption by setting
+`PERSISTED_STATE_ENCRYPTION_KEY`.
 
 ### 3. Run
 
@@ -196,6 +206,7 @@ substitute for production-grade containment.
 If you choose to deploy it beyond localhost, treat that as a private environment with additional
 hardening requirements:
 
+- run it on a long-lived Node host with persistent local storage whenever detached durable jobs are enabled
 - keep `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN` configured together
 - add your own rate limiting, request logging, and operational monitoring
 - isolate browser automation so arbitrary page ingestion cannot reach sensitive internal systems
@@ -203,6 +214,9 @@ hardening requirements:
 
 Until those controls exist, the recommended stance is: **local/private tool first, public
 deployment only after additional hardening**.
+
+The app now also renders a runtime banner when detached durable jobs are enabled so operators do not mistake
+the default deployment posture for a stateless hobby deploy.
 
 ## Example prompts
 

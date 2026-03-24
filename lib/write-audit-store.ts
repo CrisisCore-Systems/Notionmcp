@@ -1,9 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { WriteAuditTrail } from "@/lib/write-audit";
+import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 const WRITE_AUDIT_ID_PATTERN = /^[0-9a-fA-F-]{36}$/;
+const WRITE_AUDIT_RETENTION_ENV_VAR = "WRITE_AUDIT_RETENTION_DAYS";
 
 export type PersistedWriteAuditRecord = {
   id: string;
@@ -66,8 +67,11 @@ export async function persistWriteAuditRecord(
     ...record,
   };
 
-  await mkdir(getWriteAuditDirectory(), { recursive: true });
-  await writeFile(getWriteAuditPath(persistedRecord.id), `${JSON.stringify(persistedRecord, null, 2)}\n`, "utf8");
+  await writePersistedStateFile(
+    getWriteAuditPath(persistedRecord.id),
+    persistedRecord,
+    WRITE_AUDIT_RETENTION_ENV_VAR
+  );
   return persistedRecord;
 }
 
@@ -79,10 +83,16 @@ export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWr
   }
 
   try {
-    const rawRecord = await readFile(getWriteAuditPath(trimmedAuditId), "utf8");
-    const parsed = JSON.parse(rawRecord) as unknown;
+    const parsed = await readPersistedStateFile<unknown>(
+      getWriteAuditPath(trimmedAuditId),
+      WRITE_AUDIT_RETENTION_ENV_VAR
+    );
     return isPersistedWriteAuditRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
   }
 }
