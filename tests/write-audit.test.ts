@@ -90,7 +90,7 @@ test("buildWriteAuditTrail reports confirmed, duplicate, and unresolved rows", (
       },
     },
     [
-      { rowIndex: 0, operationKey: "k1", status: "written" },
+      { rowIndex: 0, operationKey: "k1", status: "written-after-reconciliation" },
       { rowIndex: 1, operationKey: "k2", status: "duplicate" },
       { rowIndex: 2, operationKey: "k3", status: "unresolved" },
     ],
@@ -105,8 +105,10 @@ test("buildWriteAuditTrail reports confirmed, duplicate, and unresolved rows", (
     pagesBrowsed: 3,
     rowsExtracted: 3,
   });
+  assert.equal(auditTrail.rowsReviewed, 3);
   assert.equal(auditTrail.rowsAttempted, 2);
   assert.equal(auditTrail.rowsConfirmedWritten, 1);
+  assert.equal(auditTrail.rowsConfirmedAfterReconciliation, 1);
   assert.equal(auditTrail.rowsSkippedAsDuplicates, 1);
   assert.equal(auditTrail.rowsLeftUnresolved, 1);
 });

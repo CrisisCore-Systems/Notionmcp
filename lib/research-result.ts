@@ -20,6 +20,12 @@ export interface ResearchSearchMetadata {
   usedProviders: string[];
   degraded: boolean;
   mode?: "fast" | "deep";
+  profile?: {
+    maxPlannedQueries: number;
+    maxEvidenceDocuments: number;
+    minUniqueDomains: number;
+    minSourceClasses: number;
+  };
   uniqueDomains?: string[];
   sourceClasses?: string[];
 }

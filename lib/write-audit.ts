@@ -15,7 +15,7 @@ export interface RowWriteMetadata {
   evidenceSummary: string;
 }
 
-export type RowWriteStatus = "written" | "duplicate" | "unresolved";
+export type RowWriteStatus = "written" | "written-after-reconciliation" | "duplicate" | "unresolved";
 
 export interface RowWriteAuditEntry {
   rowIndex: number;
@@ -27,8 +27,10 @@ export interface WriteAuditTrail {
   sourceSet: string[];
   extractionCounts: ResearchExtractionCounts;
   rejectedUrls: string[];
+  rowsReviewed: number;
   rowsAttempted: number;
   rowsConfirmedWritten: number;
+  rowsConfirmedAfterReconciliation: number;
   rowsSkippedAsDuplicates: number;
   rowsLeftUnresolved: number;
   rows: RowWriteAuditEntry[];
@@ -144,8 +146,14 @@ export function buildWriteAuditTrail(
     sourceSet,
     extractionCounts,
     rejectedUrls,
+    rowsReviewed: result.items.length,
     rowsAttempted,
-    rowsConfirmedWritten: rowStatuses.filter((row) => row.status === "written").length,
+    rowsConfirmedWritten: rowStatuses.filter(
+      (row) => row.status === "written" || row.status === "written-after-reconciliation"
+    ).length,
+    rowsConfirmedAfterReconciliation: rowStatuses.filter(
+      (row) => row.status === "written-after-reconciliation"
+    ).length,
     rowsSkippedAsDuplicates: rowStatuses.filter((row) => row.status === "duplicate").length,
     rowsLeftUnresolved: rowStatuses.filter((row) => row.status === "unresolved").length,
     rows: rowStatuses,

@@ -7,8 +7,10 @@ test("getResearchProfile keeps the fast lane as default and exposes higher deep 
   const deep = getResearchProfile("deep");
 
   assert.equal(fast.mode, "fast");
+  assert.equal(fast.minPlannedQueries, 1);
   assert.equal(fast.maxEvidenceDocuments, 8);
   assert.equal(deep.mode, "deep");
+  assert.equal(deep.minPlannedQueries, 4);
   assert.equal(deep.maxPlannedQueries, 6);
   assert.equal(deep.maxEvidenceDocuments, 12);
   assert.equal(deep.minUniqueDomains, 4);

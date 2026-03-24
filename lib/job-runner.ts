@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { getDurableExecutionMode } from "@/lib/deployment-boundary";
 import {
   appendJobEvent,
   createJob,
@@ -120,7 +121,7 @@ export async function ensureJobWorker(jobId: string): Promise<void> {
     return;
   }
 
-  if (process.env.NOTIONMCP_RUN_JOBS_INLINE === "true") {
+  if (getDurableExecutionMode() === "inline") {
     void processJob(jobId);
     return;
   }

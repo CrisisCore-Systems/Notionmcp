@@ -54,6 +54,17 @@ function getWriteAuditPath(auditId: string): string {
   return path.join(getWriteAuditDirectory(), `${auditId.trim()}.json`);
 }
 
+export async function saveWriteAuditRecord(
+  record: PersistedWriteAuditRecord
+): Promise<PersistedWriteAuditRecord> {
+  await writePersistedStateFile(
+    getWriteAuditPath(record.id),
+    record,
+    WRITE_AUDIT_RETENTION_ENV_VAR
+  );
+  return record;
+}
+
 export function buildWriteAuditUrl(auditId: string): string {
   return `/api/write-audits/${encodeURIComponent(auditId)}`;
 }
@@ -61,18 +72,11 @@ export function buildWriteAuditUrl(auditId: string): string {
 export async function persistWriteAuditRecord(
   record: Omit<PersistedWriteAuditRecord, "id" | "createdAt">
 ): Promise<PersistedWriteAuditRecord> {
-  const persistedRecord: PersistedWriteAuditRecord = {
+  return await saveWriteAuditRecord({
     id: randomUUID(),
     createdAt: new Date().toISOString(),
     ...record,
-  };
-
-  await writePersistedStateFile(
-    getWriteAuditPath(persistedRecord.id),
-    persistedRecord,
-    WRITE_AUDIT_RETENTION_ENV_VAR
-  );
-  return persistedRecord;
+  });
 }
 
 export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWriteAuditRecord | null> {

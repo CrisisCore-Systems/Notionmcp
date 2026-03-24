@@ -35,7 +35,9 @@ export default function HomePage() {
           </h2>
           <p style={{ margin: 0, color: "#9a3412", lineHeight: 1.6, fontSize: "0.92rem" }}>
             {durableJobsWarning.message} If you only want short-lived debugging behavior, explicitly set{" "}
-            <code>NOTIONMCP_RUN_JOBS_INLINE=true</code> and accept that detached recovery guarantees are reduced.
+            <code>NOTIONMCP_RUN_JOBS_INLINE=true</code> and accept that detached recovery guarantees are reduced. If
+            your host is intentionally inline-only, set <code>NOTIONMCP_HOST_DURABILITY=inline-only</code> so the app
+            degrades honestly instead of pretending detached workers are durable.
           </p>
         </div>
       )}

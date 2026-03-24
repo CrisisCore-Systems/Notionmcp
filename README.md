@@ -155,6 +155,7 @@ Fill in `.env.local`:
 | `JOB_STATE_RETENTION_DAYS` | Optional retention window before old durable-job JSON files are removed. Defaults to 30 |
 | `PERSISTED_STATE_ENCRYPTION_KEY` | Optional for localhost, required for any remote private deployment so persisted job/audit state is encrypted at rest |
 | `NOTIONMCP_RUN_JOBS_INLINE` | Optional escape hatch for inline debugging. Leave unset for the default detached durable-job mode |
+| `NOTIONMCP_HOST_DURABILITY` | Optional host declaration. Set `inline-only` on ephemeral/stateless hosts so localhost mode degrades intentionally and remote private-host mode refuses to boot |
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
@@ -168,6 +169,11 @@ now refuses to boot remote private-host mode unless detached durable jobs remain
 includes an optional access-token field for that private remote mode; leave it blank for normal localhost
 use. Review drafts can be enabled per browser session from the UI, stay off by default for privacy, and
 expire automatically after 7 days when enabled.
+
+If your host cannot actually keep detached workers alive with writable persisted local state, set
+`NOTIONMCP_HOST_DURABILITY=inline-only`. In localhost mode the app will intentionally fall back to inline
+execution instead of pretending durable workers exist; in `remote-private-host` mode it will refuse to
+start because that deployment boundary depends on detached resumable workers plus persisted job/audit state.
 
 The Notion provider layer pins the `Notion-Version` header to `2025-09-03` by default so the app does not
 silently drift with ambient API defaults. If you intentionally test a newer Notion API release, set
@@ -297,8 +303,10 @@ what evidence was used, what rows were attempted, and where the resumable worker
   "nextRowIndex": 300,
   "message": "✅ Added 153 rows to the existing Notion database",
   "auditTrail": {
+    "rowsReviewed": 300,
     "rowsAttempted": 153,
     "rowsConfirmedWritten": 153,
+    "rowsConfirmedAfterReconciliation": 2,
     "rowsSkippedAsDuplicates": 0,
     "rowsLeftUnresolved": 0
   }
@@ -310,6 +318,7 @@ what evidence was used, what rows were attempted, and where the resumable worker
 The durable write lane now leaves behind two operator-facing proof artifacts:
 
 1. **Write audit JSON** — source set, extraction counts, row outcomes, operation keys, duplicate skips, and unresolved rows
+   plus reviewed-row counts and reconciliation markers for ambiguous partial failures
 2. **Durable job JSON** — queued/running/complete status, replayable event log, checkpoints, worker heartbeat, final result, and resumable state
 
 That proof surface is visible from the completion panel and persists independently of the browser tab, which is
