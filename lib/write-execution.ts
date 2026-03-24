@@ -3,6 +3,7 @@ import {
   buildOperationalSchema,
   createDatabase,
   createDuplicateTracker,
+  getCurrentNotionProviderState,
   getConfiguredNotionProviderMode,
   getDatabaseMetadataSupport,
   type DuplicateTracker,
@@ -151,6 +152,7 @@ export async function executeWriteJob(
 ): Promise<WriteExecutionSuccess> {
   const startedAtMs = Date.now();
   const providerMode = getConfiguredNotionProviderMode();
+  const providerState = getCurrentNotionProviderState();
   const targetDatabaseId = payload.targetDatabaseId?.trim() || "";
   const resumeFromIndex = payload.resumeFromIndex ?? 0;
   const suggestedDbTitle = payload.suggestedDbTitle;
@@ -171,9 +173,12 @@ export async function executeWriteJob(
   const confirmedWrittenRows = new Set<number>();
   const duplicateRows = new Set<number>();
 
-  await callbacks.onUpdate(`Using Notion provider mode: ${providerMode}.`, {
+  await callbacks.onUpdate(
+    `Using Notion provider lane: ${providerMode} (${providerState.posture === "canonical" ? "canonical direct API" : "legacy compatibility fallback"}).`,
+    {
     nextRowIndex: resumeFromIndex,
-  });
+    }
+  );
 
   try {
     if (databaseId) {

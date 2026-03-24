@@ -34,6 +34,8 @@ import type {
 import { useDraftPersistence } from "./chat/useDraftPersistence";
 import { usePhaseState } from "./chat/usePhaseState";
 
+type ResearchMode = "fast" | "deep";
+
 const EXAMPLE_PROMPTS = [
   "Find the top 5 competitors to Notion in the productivity space",
   "Research the best free open-source React component libraries",
@@ -45,8 +47,13 @@ const PROPERTY_TYPES: PropertyType[] = ["title", "rich_text", "url", "number", "
 const BLOB_URL_CLEANUP_DELAY_MS = 5000;
 const ACTION_TIMEOUT_WARNING_THRESHOLD_SECONDS = 100;
 
+function buildJobStateUrl(jobId: string): string {
+  return `/api/jobs/${encodeURIComponent(jobId)}`;
+}
+
 export default function ChatUI() {
   const [prompt, setPrompt] = useState("");
+  const [researchMode, setResearchMode] = useState<ResearchMode>("fast");
   const { phase, setPhase, errorMessage, setErrorMessage, lastActionRef, startAction, showApproval, showDone, showError } =
     usePhaseState();
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -67,6 +74,7 @@ export default function ChatUI() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [activeJob, setActiveJob] = useState<ActiveJobState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const currentWriteJobIdRef = useRef<string | null>(null);
   const historyIndexRef = useRef(-1);
   const timeoutWarningLoggedRef = useRef(false);
   const autoResumeAttemptedRef = useRef(false);
@@ -97,6 +105,9 @@ export default function ChatUI() {
   const runMetadata = editedResult?.[RESEARCH_RUN_METADATA_KEY];
   const searchProvidersUsed = runMetadata?.search?.usedProviders ?? [];
   const isDegradedSearchMode = runMetadata?.search?.degraded === true;
+  const reviewedResearchMode = runMetadata?.search?.mode ?? researchMode;
+  const reviewedUniqueDomainCount = runMetadata?.search?.uniqueDomains?.length ?? 0;
+  const reviewedSourceClassCount = runMetadata?.search?.sourceClasses?.length ?? 0;
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
     setLogs((prev) => [...prev, { type, message }]);
@@ -127,6 +138,10 @@ export default function ChatUI() {
     const nextJob = { kind, jobId };
     saveActiveJob(window.localStorage, nextJob);
     setActiveJob(nextJob);
+
+    if (kind === "write") {
+      currentWriteJobIdRef.current = jobId;
+    }
   };
 
   const initializeHistory = (result: EditableResult) => {
@@ -277,6 +292,7 @@ export default function ChatUI() {
       historyIndexRef.current = -1;
       clearActiveJobState();
       autoResumeAttemptedRef.current = false;
+      currentWriteJobIdRef.current = null;
     }
     setNotionUrl(null);
     setWriteSummary(null);
@@ -290,7 +306,7 @@ export default function ChatUI() {
       abortRef.current = controller;
       const data = (await streamSSE({
         url: "/api/research",
-        body: jobId ? { jobId } : { prompt },
+        body: jobId ? { jobId } : { prompt, researchMode },
         signal: controller.signal,
         accessToken: appAccessToken,
         onUpdate: (msg) => addLog(msg),
@@ -371,6 +387,7 @@ export default function ChatUI() {
         providerMode?: string;
         auditId?: string;
         auditUrl?: string;
+        auditTrail?: WriteSummary["auditTrail"];
       };
 
       clearActiveJobState();
@@ -382,12 +399,16 @@ export default function ChatUI() {
       setLinkActionMessage(null);
       setPendingWriteResume(null);
       setWriteSummary({
+        jobId: currentWriteJobIdRef.current ?? undefined,
+        jobUrl: currentWriteJobIdRef.current ? buildJobStateUrl(currentWriteJobIdRef.current) : undefined,
         databaseId: data.databaseId,
         itemsWritten: data.itemsWritten,
         propertyCount: data.propertyCount,
         usedExistingDatabase: data.usedExistingDatabase,
+        providerMode: data.providerMode,
         auditId: data.auditId,
         auditUrl: data.auditUrl,
+        auditTrail: data.auditTrail,
       });
       clearSavedDraft();
       showDone();
@@ -693,6 +714,7 @@ export default function ChatUI() {
     setReplaceText("");
     setShowFindReplace(false);
     setPrompt("");
+    currentWriteJobIdRef.current = null;
     clearSavedDraft();
   };
 
@@ -893,6 +915,38 @@ export default function ChatUI() {
               boxSizing: "border-box",
             }}
           />
+          <div
+            style={{
+              marginTop: "0.75rem",
+              display: "grid",
+              gap: "0.35rem",
+              padding: "0.75rem 0.9rem",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              background: "#fafafa",
+            }}
+          >
+            <label style={{ fontSize: "0.85rem", color: "#111827", fontWeight: 600 }}>Research mode</label>
+            <select
+              value={researchMode}
+              onChange={(e) => setResearchMode(e.target.value === "deep" ? "deep" : "fast")}
+              style={{
+                width: "100%",
+                padding: "0.55rem 0.7rem",
+                border: "1px solid #d1d5db",
+                borderRadius: 8,
+                fontSize: "0.9rem",
+                background: "#fff",
+              }}
+            >
+              <option value="fast">Fast lane — default reviewed coverage</option>
+              <option value="deep">Deep research — higher evidence caps and diversity balancing</option>
+            </select>
+            <div style={{ fontSize: "0.8rem", color: "#4b5563", lineHeight: 1.45 }}>
+              Deep research keeps the same reviewed write flow, but spends extra browse budget on domain diversity
+              and source-class balancing before it concludes.
+            </div>
+          </div>
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
             {EXAMPLE_PROMPTS.map((examplePrompt) => (
               <button
@@ -1008,6 +1062,29 @@ export default function ChatUI() {
               to restore API-backed search.
             </div>
           )}
+
+          <div
+            style={{
+              marginBottom: "1rem",
+              padding: "0.75rem 0.9rem",
+              background: reviewedResearchMode === "deep" ? "#eff6ff" : "#f8fafc",
+              border: `1px solid ${reviewedResearchMode === "deep" ? "#bfdbfe" : "#e2e8f0"}`,
+              borderRadius: 8,
+              color: reviewedResearchMode === "deep" ? "#1d4ed8" : "#334155",
+              fontSize: "0.85rem",
+              lineHeight: 1.45,
+            }}
+          >
+            <strong>{reviewedResearchMode === "deep" ? "Deep research mode" : "Fast research mode"}</strong>
+            {reviewedResearchMode === "deep"
+              ? " increased the evidence cap and balanced reviewed pages across domains and source classes before approval."
+              : " kept the default fast reviewed lane so you can move quickly to operator review."}{" "}
+            {reviewedUniqueDomainCount > 0 && reviewedSourceClassCount > 0
+              ? `This run covered ${reviewedUniqueDomainCount} domain${reviewedUniqueDomainCount === 1 ? "" : "s"} and ${reviewedSourceClassCount} source class${reviewedSourceClassCount === 1 ? "" : "es"}.`
+              : reviewedUniqueDomainCount > 0
+                ? `This run covered ${reviewedUniqueDomainCount} distinct domain${reviewedUniqueDomainCount === 1 ? "" : "s"}.`
+                : ""}
+          </div>
 
           <div style={{ marginBottom: "1rem" }}>
             <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", color: "#333" }}>

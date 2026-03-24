@@ -50,13 +50,55 @@ export function CompletionPanel({
           </div>
           <div>Rows written: {writeSummary.itemsWritten}</div>
           <div>Properties written: {writeSummary.propertyCount}</div>
+          {writeSummary.providerMode && <div>Provider lane: {writeSummary.providerMode}</div>}
           <div style={{ wordBreak: "break-all" }}>Database ID: {writeSummary.databaseId}</div>
-          {writeSummary.auditUrl && (
-            <div>
-              Write audit:{" "}
-              <a href={writeSummary.auditUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#166534" }}>
-                download JSON
-              </a>
+          {(writeSummary.auditUrl || writeSummary.jobUrl) && (
+            <div
+              style={{
+                marginTop: "0.75rem",
+                paddingTop: "0.75rem",
+                borderTop: "1px solid rgba(22, 101, 52, 0.18)",
+                display: "grid",
+                gap: "0.25rem",
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>Trust artifacts</div>
+              {writeSummary.auditId && <div>Write audit ID: {writeSummary.auditId}</div>}
+              {writeSummary.jobId && <div>Durable job ID: {writeSummary.jobId}</div>}
+              {writeSummary.auditTrail && (
+                <>
+                  <div>
+                    Evidence set: {writeSummary.auditTrail.sourceSet.length} source
+                    {writeSummary.auditTrail.sourceSet.length === 1 ? "" : "s"} from{" "}
+                    {writeSummary.auditTrail.extractionCounts.pagesBrowsed} page
+                    {writeSummary.auditTrail.extractionCounts.pagesBrowsed === 1 ? "" : "s"} across{" "}
+                    {writeSummary.auditTrail.extractionCounts.searchQueries} search quer
+                    {writeSummary.auditTrail.extractionCounts.searchQueries === 1 ? "y" : "ies"}
+                  </div>
+                  <div>
+                    Row audit: {writeSummary.auditTrail.rowsAttempted} attempted,{" "}
+                    {writeSummary.auditTrail.rowsConfirmedWritten} written,{" "}
+                    {writeSummary.auditTrail.rowsSkippedAsDuplicates} duplicates,{" "}
+                    {writeSummary.auditTrail.rowsLeftUnresolved} unresolved
+                  </div>
+                </>
+              )}
+              {writeSummary.auditUrl && (
+                <div>
+                  Write audit JSON:{" "}
+                  <a href={writeSummary.auditUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#166534" }}>
+                    download
+                  </a>
+                </div>
+              )}
+              {writeSummary.jobUrl && (
+                <div>
+                  Durable job JSON:{" "}
+                  <a href={writeSummary.jobUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#166534" }}>
+                    inspect checkpoint log
+                  </a>
+                </div>
+              )}
             </div>
           )}
         </div>

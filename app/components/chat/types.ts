@@ -1,4 +1,5 @@
 import type { ResearchResult } from "@/lib/agent";
+import type { WriteAuditTrail } from "@/lib/write-audit";
 
 export type Phase = "idle" | "researching" | "approving" | "writing" | "done" | "error";
 export type PropertyType = "title" | "rich_text" | "url" | "number" | "select";
@@ -32,12 +33,16 @@ export type ValidationIssue = {
 };
 
 export type WriteSummary = {
+  jobId?: string;
+  jobUrl?: string;
   databaseId: string;
   itemsWritten: number;
   propertyCount: number;
   usedExistingDatabase: boolean;
+  providerMode?: string;
   auditId?: string;
   auditUrl?: string;
+  auditTrail?: WriteAuditTrail;
 };
 
 export type StreamErrorPayload = {

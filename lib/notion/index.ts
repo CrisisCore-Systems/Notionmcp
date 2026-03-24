@@ -19,7 +19,12 @@ export type NotionProviderMode = "direct-api" | "local-mcp";
 function normalizeProviderMode(value: string | undefined): NotionProviderMode {
   const normalized = value?.trim().toLowerCase();
 
-  if (normalized === "local" || normalized === "local-mcp" || normalized === "mcp") {
+  if (
+    normalized === "local" ||
+    normalized === "local-mcp" ||
+    normalized === "legacy-local-mcp" ||
+    normalized === "mcp"
+  ) {
     return "local-mcp";
   }
 
@@ -33,10 +38,19 @@ export function getConfiguredNotionProviderMode(env: NodeJS.ProcessEnv = process
 export function getCurrentNotionProviderState(env: NodeJS.ProcessEnv = process.env): {
   mode: NotionProviderMode;
   health: "configured";
+  posture: "canonical" | "legacy-fallback";
+  description: string;
 } {
+  const mode = getConfiguredNotionProviderMode(env);
+
   return {
-    mode: getConfiguredNotionProviderMode(env),
+    mode,
     health: "configured",
+    posture: mode === "direct-api" ? "canonical" : "legacy-fallback",
+    description:
+      mode === "direct-api"
+        ? "Direct Notion API is the canonical provider path."
+        : "Local MCP remains available only as a legacy compatibility fallback.",
   };
 }
 
