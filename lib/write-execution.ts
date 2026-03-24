@@ -18,7 +18,12 @@ import {
   type RowWriteAuditEntry,
   type RowWriteMetadata,
 } from "@/lib/write-audit";
-import { buildWriteAuditUrl, persistWriteAuditRecord } from "@/lib/write-audit-store";
+import {
+  buildWriteAuditUrl,
+  persistWriteAuditRecord,
+  saveWriteAuditRecord,
+  type PersistedWriteAuditRecord,
+} from "@/lib/write-audit-store";
 
 const ROW_WRITE_MAX_ATTEMPTS = 3;
 const ROW_WRITE_RETRY_DELAY_MS = 750;
@@ -113,7 +118,8 @@ function buildRowAuditEntries(
   startIndex: number,
   totalRows: number,
   confirmedWrittenRows: Set<number>,
-  duplicateRows: Set<number>
+  duplicateRows: Set<number>,
+  reconciledRows: Set<number>
 ): RowWriteAuditEntry[] {
   const entries: RowWriteAuditEntry[] = [];
 
@@ -122,7 +128,9 @@ function buildRowAuditEntries(
       rowIndex: index,
       operationKey: operationKeys[index] ?? "",
       status: confirmedWrittenRows.has(index)
-        ? "written"
+        ? reconciledRows.has(index)
+          ? "written-after-reconciliation"
+          : "written"
         : duplicateRows.has(index)
           ? "duplicate"
           : "unresolved",
@@ -172,6 +180,31 @@ export async function executeWriteJob(
   let rowsAttempted = 0;
   const confirmedWrittenRows = new Set<number>();
   const duplicateRows = new Set<number>();
+  const reconciledRows = new Set<number>();
+  let persistedAudit: PersistedWriteAuditRecord = await persistWriteAuditRecord({
+    databaseId: databaseId || undefined,
+    status: "running",
+    usedExistingDatabase: !!targetDatabaseId,
+    resumedFromIndex: resumeFromIndex,
+    nextRowIndex,
+    providerMode,
+    message:
+      resumeFromIndex > 0
+        ? `Running resumed reviewed write from row ${resumeFromIndex + 1}.`
+        : "Running reviewed write with persisted audit trail.",
+    auditTrail: buildWriteAuditTrail(
+      payload,
+      buildRowAuditEntries(
+        operationKeys,
+        resumeFromIndex,
+        items.length,
+        confirmedWrittenRows,
+        duplicateRows,
+        reconciledRows
+      ),
+      rowsAttempted
+    ),
+  });
 
   await callbacks.onUpdate(
     `Using Notion provider lane: ${providerMode} (${providerState.posture === "canonical" ? "canonical direct API" : "legacy compatibility fallback"}).`,
@@ -257,7 +290,14 @@ export async function executeWriteJob(
 
     const auditTrail = buildWriteAuditTrail(
       payload,
-      buildRowAuditEntries(operationKeys, resumeFromIndex, items.length, confirmedWrittenRows, duplicateRows),
+      buildRowAuditEntries(
+        operationKeys,
+        resumeFromIndex,
+        items.length,
+        confirmedWrittenRows,
+        duplicateRows,
+        reconciledRows
+      ),
       rowsAttempted
     );
     const message = formatWriteCompleteMessage(
@@ -265,7 +305,8 @@ export async function executeWriteJob(
       confirmedWrittenRows.size,
       duplicateRows.size
     );
-    const persistedAudit = await persistWriteAuditRecord({
+    persistedAudit = await saveWriteAuditRecord({
+      ...persistedAudit,
       databaseId,
       status: "complete",
       usedExistingDatabase: !!targetDatabaseId,
@@ -315,6 +356,7 @@ export async function executeWriteJob(
 
         if (reconciliationTracker.has(items[nextRowIndex] as ResearchItem, operationKeys[nextRowIndex])) {
           confirmedWrittenRows.add(nextRowIndex);
+          reconciledRows.add(nextRowIndex);
           nextRowIndex += 1;
           reconciled = true;
           await callbacks.onUpdate(
@@ -342,13 +384,21 @@ export async function executeWriteJob(
 
     const auditTrail = buildWriteAuditTrail(
       payload,
-      buildRowAuditEntries(operationKeys, resumeFromIndex, items.length, confirmedWrittenRows, duplicateRows),
+      buildRowAuditEntries(
+        operationKeys,
+        resumeFromIndex,
+        items.length,
+        confirmedWrittenRows,
+        duplicateRows,
+        reconciledRows
+      ),
       rowsAttempted
     );
     const errorMessage = reconciled
       ? `${message} Reconciliation verified the last ambiguous row before pausing.`
       : message;
-    const persistedAudit = await persistWriteAuditRecord({
+    persistedAudit = await saveWriteAuditRecord({
+      ...persistedAudit,
       databaseId: databaseId || undefined,
       status: databaseId && nextRowIndex >= items.length ? "complete" : "error",
       usedExistingDatabase: !!targetDatabaseId,

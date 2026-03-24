@@ -7,6 +7,7 @@ import {
   buildWriteAuditUrl,
   loadWriteAuditRecord,
   persistWriteAuditRecord,
+  saveWriteAuditRecord,
 } from "@/lib/write-audit-store";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -41,8 +42,10 @@ test("persistWriteAuditRecord stores and reloads server-side write audits", asyn
         rowsExtracted: 1,
       },
       rejectedUrls: [],
+      rowsReviewed: 1,
       rowsAttempted: 1,
       rowsConfirmedWritten: 1,
+      rowsConfirmedAfterReconciliation: 0,
       rowsSkippedAsDuplicates: 0,
       rowsLeftUnresolved: 0,
       rows: [{ rowIndex: 0, operationKey: "op_1", status: "written" }],
@@ -76,13 +79,15 @@ test("persistWriteAuditRecord expires files beyond the retention window", async 
         candidateSources: 0,
         pagesBrowsed: 0,
         rowsExtracted: 0,
-      },
-      rejectedUrls: [],
-      rowsAttempted: 0,
-      rowsConfirmedWritten: 0,
-      rowsSkippedAsDuplicates: 0,
-      rowsLeftUnresolved: 0,
-      rows: [],
+        },
+        rejectedUrls: [],
+        rowsReviewed: 0,
+        rowsAttempted: 0,
+        rowsConfirmedWritten: 0,
+        rowsConfirmedAfterReconciliation: 0,
+        rowsSkippedAsDuplicates: 0,
+        rowsLeftUnresolved: 0,
+        rows: [],
     },
   });
 
@@ -103,13 +108,15 @@ test("persistWriteAuditRecord expires files beyond the retention window", async 
         candidateSources: 0,
         pagesBrowsed: 0,
         rowsExtracted: 0,
-      },
-      rejectedUrls: [],
-      rowsAttempted: 0,
-      rowsConfirmedWritten: 0,
-      rowsSkippedAsDuplicates: 0,
-      rowsLeftUnresolved: 0,
-      rows: [],
+        },
+        rejectedUrls: [],
+        rowsReviewed: 0,
+        rowsAttempted: 0,
+        rowsConfirmedWritten: 0,
+        rowsConfirmedAfterReconciliation: 0,
+        rowsSkippedAsDuplicates: 0,
+        rowsLeftUnresolved: 0,
+        rows: [],
     },
   });
 
@@ -134,13 +141,15 @@ test("persistWriteAuditRecord encrypts persisted state when configured", async (
         candidateSources: 1,
         pagesBrowsed: 1,
         rowsExtracted: 1,
-      },
-      rejectedUrls: [],
-      rowsAttempted: 1,
-      rowsConfirmedWritten: 1,
-      rowsSkippedAsDuplicates: 0,
-      rowsLeftUnresolved: 0,
-      rows: [{ rowIndex: 0, operationKey: "op_1", status: "written" }],
+        },
+        rejectedUrls: [],
+        rowsReviewed: 1,
+        rowsAttempted: 1,
+        rowsConfirmedWritten: 1,
+        rowsConfirmedAfterReconciliation: 0,
+        rowsSkippedAsDuplicates: 0,
+        rowsLeftUnresolved: 0,
+        rows: [{ rowIndex: 0, operationKey: "op_1", status: "written" }],
     },
   });
 
@@ -150,4 +159,56 @@ test("persistWriteAuditRecord encrypts persisted state when configured", async (
   assert.match(rawFile, /notionmcp-encrypted-state\/v1/);
   assert.doesNotMatch(rawFile, /Completed encrypted write/);
   assert.equal(loaded?.message, "Completed encrypted write");
+});
+
+test("saveWriteAuditRecord updates an existing persisted audit artifact", async () => {
+  process.env.WRITE_AUDIT_DIR = await mkdtemp(path.join(os.tmpdir(), "notionmcp-audits-"));
+
+  const persisted = await persistWriteAuditRecord({
+    databaseId: "db_123",
+    status: "running",
+    usedExistingDatabase: false,
+    resumedFromIndex: 0,
+    nextRowIndex: 0,
+    message: "Running write audit",
+    auditTrail: {
+      sourceSet: [],
+      extractionCounts: {
+        searchQueries: 0,
+        candidateSources: 0,
+        pagesBrowsed: 0,
+        rowsExtracted: 1,
+      },
+      rejectedUrls: [],
+      rowsReviewed: 1,
+      rowsAttempted: 0,
+      rowsConfirmedWritten: 0,
+      rowsConfirmedAfterReconciliation: 0,
+      rowsSkippedAsDuplicates: 0,
+      rowsLeftUnresolved: 1,
+      rows: [{ rowIndex: 0, operationKey: "op_1", status: "unresolved" }],
+    },
+  });
+
+  await saveWriteAuditRecord({
+    ...persisted,
+    status: "complete",
+    nextRowIndex: 1,
+    message: "Completed write audit",
+    auditTrail: {
+      ...persisted.auditTrail,
+      rowsAttempted: 1,
+      rowsConfirmedWritten: 1,
+      rowsLeftUnresolved: 0,
+      rows: [{ rowIndex: 0, operationKey: "op_1", status: "written" }],
+    },
+  });
+
+  const loaded = await loadWriteAuditRecord(persisted.id);
+
+  assert.ok(loaded);
+  assert.equal(loaded?.id, persisted.id);
+  assert.equal(loaded?.status, "complete");
+  assert.equal(loaded?.nextRowIndex, 1);
+  assert.equal(loaded?.message, "Completed write audit");
 });

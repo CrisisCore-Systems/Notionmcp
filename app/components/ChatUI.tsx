@@ -106,6 +106,7 @@ export default function ChatUI() {
   const searchProvidersUsed = runMetadata?.search?.usedProviders ?? [];
   const isDegradedSearchMode = runMetadata?.search?.degraded === true;
   const reviewedResearchMode = runMetadata?.search?.mode ?? researchMode;
+  const reviewedProfile = runMetadata?.search?.profile;
   const reviewedUniqueDomainCount = runMetadata?.search?.uniqueDomains?.length ?? 0;
   const reviewedSourceClassCount = runMetadata?.search?.sourceClasses?.length ?? 0;
 
@@ -1077,8 +1078,12 @@ export default function ChatUI() {
           >
             <strong>{reviewedResearchMode === "deep" ? "Deep research mode" : "Fast research mode"}</strong>
             {reviewedResearchMode === "deep"
-              ? " increased the evidence cap and balanced reviewed pages across domains and source classes before approval."
-              : " kept the default fast reviewed lane so you can move quickly to operator review."}{" "}
+              ? reviewedProfile
+                ? ` planned up to ${reviewedProfile.maxPlannedQueries} search queries, queued up to ${reviewedProfile.maxEvidenceDocuments} evidence documents, and required ${reviewedProfile.minSourceClasses} source classes before approval.`
+                : " increased the evidence cap and balanced reviewed pages across domains and source classes before approval."
+              : reviewedProfile
+                ? ` kept the bounded reviewed lane at up to ${reviewedProfile.maxPlannedQueries} search queries and ${reviewedProfile.maxEvidenceDocuments} evidence documents so you can move quickly to operator review.`
+                : " kept the default fast reviewed lane so you can move quickly to operator review."}{" "}
             {reviewedUniqueDomainCount > 0 && reviewedSourceClassCount > 0
               ? `This run covered ${reviewedUniqueDomainCount} domain${reviewedUniqueDomainCount === 1 ? "" : "s"} and ${reviewedSourceClassCount} source class${reviewedSourceClassCount === 1 ? "" : "es"}.`
               : reviewedUniqueDomainCount > 0

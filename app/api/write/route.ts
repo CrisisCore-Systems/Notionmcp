@@ -2,7 +2,11 @@ import { NextRequest } from "next/server";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
-import { assertDeploymentReadiness, warnIfDurableJobsNeedLongLivedHost } from "@/lib/deployment-boundary";
+import {
+  assertDeploymentReadiness,
+  assertDurabilityExecutionReadiness,
+  warnIfDurableJobsNeedLongLivedHost,
+} from "@/lib/deployment-boundary";
 import { validateApiRequest } from "@/lib/request-security";
 import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
 
@@ -112,6 +116,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    await assertDurabilityExecutionReadiness({ requireWriteAudit: true });
     const job = await createDurableJob("write", {
       ...normalizedBody,
       ...(targetDatabaseId ? { targetDatabaseId } : {}),

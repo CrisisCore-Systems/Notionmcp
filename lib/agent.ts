@@ -15,6 +15,7 @@ export type ResearchMode = "fast" | "deep";
 type ResearchProfile = {
   mode: ResearchMode;
   maxParallelExtractions: number;
+  minPlannedQueries: number;
   maxPlannedQueries: number;
   maxBrowsePerQuery: number;
   maxEvidenceDocuments: number;
@@ -27,6 +28,7 @@ const RESEARCH_PROFILES: Record<ResearchMode, ResearchProfile> = {
   fast: {
     mode: "fast",
     maxParallelExtractions: 2,
+    minPlannedQueries: 1,
     maxPlannedQueries: 4,
     maxBrowsePerQuery: 2,
     maxEvidenceDocuments: 8,
@@ -37,6 +39,7 @@ const RESEARCH_PROFILES: Record<ResearchMode, ResearchProfile> = {
   deep: {
     mode: "deep",
     maxParallelExtractions: 2,
+    minPlannedQueries: 4,
     maxPlannedQueries: 6,
     maxBrowsePerQuery: 3,
     maxEvidenceDocuments: 12,
@@ -343,6 +346,8 @@ async function generateText(systemInstruction: string, prompt: string): Promise<
 }
 
 function normalizePlannerOutput(text: string, prompt: string, profile: ResearchProfile): PlannerOutput {
+  const fallbackQueries = getFallbackPlannerQueries(prompt, profile);
+
   try {
     const parsed = JSON.parse(normalizeModelResponseText(text)) as Partial<PlannerOutput>;
     const searchQueries = Array.from(
@@ -352,10 +357,14 @@ function normalizePlannerOutput(text: string, prompt: string, profile: ResearchP
           .map((entry) => entry.trim())
           .filter(Boolean)
       )
-    ).slice(0, profile.maxPlannedQueries);
+    );
 
-    if (searchQueries.length > 0) {
-      return { searchQueries };
+    const supplementedSearchQueries = Array.from(new Set([...searchQueries, ...fallbackQueries]));
+
+    if (supplementedSearchQueries.length > 0) {
+      return {
+        searchQueries: supplementedSearchQueries.slice(0, profile.maxPlannedQueries),
+      };
     }
   } catch {
     // Fall through to the deterministic fallback below.
@@ -775,6 +784,12 @@ ${serializeEvidenceDocuments(evidenceDocuments)}`;
         usedProviders: Array.from(searchProvidersUsed),
         degraded: searchProvidersUsed.has("duckduckgo"),
         mode: profile.mode,
+        profile: {
+          maxPlannedQueries: profile.maxPlannedQueries,
+          maxEvidenceDocuments: profile.maxEvidenceDocuments,
+          minUniqueDomains: profile.minUniqueDomains,
+          minSourceClasses: profile.minSourceClasses,
+        },
         uniqueDomains: Array.from(selectedDomains).sort((left, right) => left.localeCompare(right)),
         sourceClasses: Array.from(selectedSourceClasses).sort((left, right) => left.localeCompare(right)),
       },

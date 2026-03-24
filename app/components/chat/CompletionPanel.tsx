@@ -68,6 +68,10 @@ export function CompletionPanel({
               {writeSummary.auditTrail && (
                 <>
                   <div>
+                    Reviewed rows: {writeSummary.auditTrail.rowsReviewed}. Deterministic operation keys:{" "}
+                    {writeSummary.auditTrail.rows.length}.
+                  </div>
+                  <div>
                     Evidence set: {writeSummary.auditTrail.sourceSet.length} source
                     {writeSummary.auditTrail.sourceSet.length === 1 ? "" : "s"} from{" "}
                     {writeSummary.auditTrail.extractionCounts.pagesBrowsed} page
@@ -78,6 +82,7 @@ export function CompletionPanel({
                   <div>
                     Row audit: {writeSummary.auditTrail.rowsAttempted} attempted,{" "}
                     {writeSummary.auditTrail.rowsConfirmedWritten} written,{" "}
+                    {writeSummary.auditTrail.rowsConfirmedAfterReconciliation} reconciled after ambiguity,{" "}
                     {writeSummary.auditTrail.rowsSkippedAsDuplicates} duplicates,{" "}
                     {writeSummary.auditTrail.rowsLeftUnresolved} unresolved
                   </div>
