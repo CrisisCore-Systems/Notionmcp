@@ -61,6 +61,7 @@ test("inline-only host durability intentionally degrades localhost jobs to inlin
 test("remote private mode requires persisted state encryption before boot", () => {
   const env = {
     NODE_ENV: "test",
+    NOTIONMCP_DEPLOYMENT_MODE: "remote-private-host",
     APP_ALLOWED_ORIGIN: "https://app.example.com",
     APP_ACCESS_TOKEN: "secret-token",
   } as NodeJS.ProcessEnv;
@@ -69,7 +70,7 @@ test("remote private mode requires persisted state encryption before boot", () =
   assert.throws(() => assertDeploymentReadiness(env), /PERSISTED_STATE_ENCRYPTION_KEY/);
 });
 
-test("deployment mode infers remote private host when remote access settings are present", () => {
+test("remote access settings require an explicit remote-private-host deployment mode", () => {
   const env = {
     NODE_ENV: "test",
     APP_ALLOWED_ORIGIN: "https://app.example.com",
@@ -77,8 +78,9 @@ test("deployment mode infers remote private host when remote access settings are
     PERSISTED_STATE_ENCRYPTION_KEY: "operator-secret",
   } as NodeJS.ProcessEnv;
 
-  assert.equal(getDeploymentMode(env), "remote-private-host");
-  assert.doesNotThrow(() => assertDeploymentReadiness(env));
+  assert.equal(getDeploymentMode(env), "localhost-operator");
+  assert.match(getDeploymentReadinessError(env) ?? "", /NOTIONMCP_DEPLOYMENT_MODE=remote-private-host/);
+  assert.throws(() => assertDeploymentReadiness(env), /NOTIONMCP_DEPLOYMENT_MODE=remote-private-host/);
 });
 
 test("explicit remote private host mode requires remote access settings and detached jobs", () => {

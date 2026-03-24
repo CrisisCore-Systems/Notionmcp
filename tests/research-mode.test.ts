@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDeepResearchBrowseQueue, classifySourceClass, getResearchProfile } from "@/lib/agent";
+import { buildDeepResearchBrowseQueue, classifySourceClass, getResearchProfile, parseResearchMode } from "@/lib/agent";
 
 test("getResearchProfile keeps the fast lane as default and exposes higher deep caps", () => {
   const fast = getResearchProfile();
@@ -15,6 +15,13 @@ test("getResearchProfile keeps the fast lane as default and exposes higher deep 
   assert.equal(deep.maxEvidenceDocuments, 12);
   assert.equal(deep.minUniqueDomains, 4);
   assert.equal(deep.minSourceClasses, 3);
+});
+
+test("parseResearchMode keeps deliberate aliases explicit and rejects unknown lanes", () => {
+  assert.equal(parseResearchMode(undefined), "fast");
+  assert.equal(parseResearchMode("fast-lane"), "fast");
+  assert.equal(parseResearchMode("deep-research"), "deep");
+  assert.equal(parseResearchMode("max-depth"), null);
 });
 
 test("classifySourceClass groups urls into reviewed evidence buckets", () => {

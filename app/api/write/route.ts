@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { buildApiSurfaceHeaders, getWriteRouteContract } from "@/lib/api-surface";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
@@ -12,6 +13,19 @@ import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
+
+export async function GET(req: NextRequest) {
+  assertDeploymentReadiness();
+  const requestError = validateApiRequest(req);
+
+  if (requestError) {
+    return requestError;
+  }
+
+  return Response.json(getWriteRouteContract(), {
+    headers: buildApiSurfaceHeaders("write-control"),
+  });
+}
 
 export async function POST(req: NextRequest) {
   assertDeploymentReadiness();

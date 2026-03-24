@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { NextRequest } from "next/server";
-import { POST as postResearch } from "@/app/api/research/route";
-import { POST as postWrite } from "@/app/api/write/route";
+import { GET as getResearch, POST as postResearch } from "@/app/api/research/route";
+import { GET as getWrite, POST as postWrite } from "@/app/api/write/route";
 import { runWithRetry } from "@/lib/retry";
 
 function createRequest(url: string, body: unknown) {
@@ -25,11 +25,71 @@ test("research route rejects an empty prompt before calling the agent", async ()
   assert.match(await response.text(), /Prompt is required/);
 });
 
+test("research route publishes the fast and deep lane contract on GET", async () => {
+  const response = await getResearch(createRequest("http://localhost:3000/api/research", {}));
+  const payload = (await response.json()) as {
+    researchModes: {
+      default: string;
+      available: Array<{
+        mode: string;
+        minUniqueDomains?: number;
+        minSourceClasses?: number;
+      }>;
+    };
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-notionmcp-surface"), "research-control");
+  assert.equal(payload.researchModes.default, "fast");
+  assert.deepEqual(
+    payload.researchModes.available.map((entry) => entry.mode),
+    ["fast", "deep"]
+  );
+  assert.equal(
+    payload.researchModes.available.find((entry) => entry.mode === "deep")?.minUniqueDomains,
+    4
+  );
+  assert.equal(
+    payload.researchModes.available.find((entry) => entry.mode === "deep")?.minSourceClasses,
+    3
+  );
+});
+
+test("research route rejects unknown research lanes instead of silently falling back", async () => {
+  const response = await postResearch(
+    createRequest("http://localhost:3000/api/research", {
+      prompt: "Find competitors to Notion",
+      researchMode: "max-depth",
+    })
+  );
+
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /Supported values are: \\"fast\\", \\"deep\\"/);
+});
+
 test("write route rejects an incomplete payload before touching Notion", async () => {
   const response = await postWrite(createRequest("http://localhost:3000/api/write", { foo: "bar" }));
 
   assert.equal(response.status, 400);
   assert.match(await response.text(), /A complete research result is required/);
+});
+
+test("write route publishes the provider and proof-artifact contract on GET", async () => {
+  const response = await getWrite(createRequest("http://localhost:3000/api/write", {}));
+  const payload = (await response.json()) as {
+    providerArchitecture: {
+      mode: string;
+      posture: string;
+    };
+    proofArtifacts: string[];
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-notionmcp-surface"), "write-control");
+  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
+  assert.equal(payload.providerArchitecture.mode, "direct-api");
+  assert.equal(payload.providerArchitecture.posture, "canonical");
+  assert.deepEqual(payload.proofArtifacts, ["/api/jobs/{jobId}", "/api/write-audits/{auditId}"]);
 });
 
 test("write route rejects resume requests without a target database", async () => {

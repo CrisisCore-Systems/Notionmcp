@@ -1,0 +1,109 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { NextRequest } from "next/server";
+import { GET as getJobProof } from "@/app/api/jobs/[jobId]/route";
+import { GET as getWriteAuditProof } from "@/app/api/write-audits/[auditId]/route";
+import { createJob } from "@/lib/job-store";
+import { persistWriteAuditRecord } from "@/lib/write-audit-store";
+
+const ORIGINAL_ENV = { ...process.env };
+
+function createGetRequest(url: string) {
+  const headers = new Headers({
+    host: new URL(url).host,
+  });
+
+  return new NextRequest(url, {
+    method: "GET",
+    headers,
+  });
+}
+
+test.beforeEach(async () => {
+  process.env = {
+    ...ORIGINAL_ENV,
+    JOB_STATE_DIR: await mkdtemp(path.join(os.tmpdir(), "notionmcp-proof-jobs-")),
+    WRITE_AUDIT_DIR: await mkdtemp(path.join(os.tmpdir(), "notionmcp-proof-audits-")),
+  };
+});
+
+test.afterEach(async () => {
+  const directories = [process.env.JOB_STATE_DIR, process.env.WRITE_AUDIT_DIR].filter(Boolean) as string[];
+  process.env = { ...ORIGINAL_ENV };
+
+  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+test("durable job proof route returns persisted job state plus proof contract metadata", async () => {
+  const job = await createJob("research", { prompt: "Find CRM competitors" });
+  const response = await getJobProof(createGetRequest(`http://localhost:3000/api/jobs/${job.id}`), {
+    params: Promise.resolve({ jobId: job.id }),
+  });
+  const payload = (await response.json()) as {
+    id: string;
+    proofContract: {
+      kind: string;
+      proofArtifact: string;
+    };
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-notionmcp-surface"), "durable-job-proof");
+  assert.equal(payload.id, job.id);
+  assert.equal(payload.proofContract.kind, "durable-job-proof");
+  assert.equal(payload.proofContract.proofArtifact, "durable job state");
+});
+
+test("write audit proof route returns persisted audit state plus proof contract metadata", async () => {
+  const audit = await persistWriteAuditRecord({
+    status: "complete",
+    usedExistingDatabase: false,
+    resumedFromIndex: 0,
+    message: "Audit ready",
+    providerMode: "direct-api",
+    auditTrail: {
+      sourceSet: ["https://example.com"],
+      extractionCounts: {
+        searchQueries: 1,
+        candidateSources: 1,
+        pagesBrowsed: 1,
+        rowsExtracted: 1,
+      },
+      rejectedUrls: [],
+      rowsReviewed: 1,
+      rowsAttempted: 1,
+      rowsConfirmedWritten: 1,
+      rowsConfirmedAfterReconciliation: 0,
+      rowsSkippedAsDuplicates: 0,
+      rowsLeftUnresolved: 0,
+      rows: [{ rowIndex: 0, operationKey: "op-1", status: "written" }],
+    },
+  });
+  const response = await getWriteAuditProof(
+    createGetRequest(`http://localhost:3000/api/write-audits/${audit.id}`),
+    {
+      params: Promise.resolve({ auditId: audit.id }),
+    }
+  );
+  const payload = (await response.json()) as {
+    id: string;
+    proofContract: {
+      kind: string;
+      proofArtifact: string;
+      providerArchitecture: {
+        mode: string;
+      };
+    };
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-notionmcp-surface"), "write-audit-proof");
+  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
+  assert.equal(payload.id, audit.id);
+  assert.equal(payload.proofContract.kind, "write-audit-proof");
+  assert.equal(payload.proofContract.proofArtifact, "write audit trail");
+  assert.equal(payload.proofContract.providerArchitecture.mode, "direct-api");
+});

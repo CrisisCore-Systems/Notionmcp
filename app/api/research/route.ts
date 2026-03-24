@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server";
+import { getResearchRouteContract, buildApiSurfaceHeaders } from "@/lib/api-surface";
+import { parseResearchMode } from "@/lib/agent";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
@@ -11,6 +13,19 @@ import { validateApiRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
+
+export async function GET(req: NextRequest) {
+  assertDeploymentReadiness();
+  const requestError = validateApiRequest(req);
+
+  if (requestError) {
+    return requestError;
+  }
+
+  return Response.json(getResearchRouteContract(), {
+    headers: buildApiSurfaceHeaders("research-control"),
+  });
+}
 
 export async function POST(req: NextRequest) {
   assertDeploymentReadiness();
@@ -51,12 +66,27 @@ export async function POST(req: NextRequest) {
     }
   } else {
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-    const researchMode = typeof body.researchMode === "string" ? body.researchMode.trim() : undefined;
+    const requestedResearchMode = typeof body.researchMode === "string" ? body.researchMode.trim() : undefined;
+    const researchMode = parseResearchMode(requestedResearchMode);
 
     if (!prompt) {
       return new Response(JSON.stringify({ error: "Prompt is required" }), {
         status: 400,
       });
+    }
+
+    if (requestedResearchMode && !researchMode) {
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid researchMode. Supported values are: "fast", "deep".',
+        }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
     }
 
     await assertDurabilityExecutionReadiness();

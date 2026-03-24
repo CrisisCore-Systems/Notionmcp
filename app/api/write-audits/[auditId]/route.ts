@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { buildApiSurfaceHeaders, getWriteAuditProofContract } from "@/lib/api-surface";
 import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
 import { validateApiRequest } from "@/lib/request-security";
 import { isValidWriteAuditId, loadWriteAuditRecord } from "@/lib/write-audit-store";
@@ -41,5 +42,13 @@ export async function GET(req: NextRequest, context: RouteContext) {
     });
   }
 
-  return Response.json(record);
+  return Response.json(
+    {
+      ...record,
+      proofContract: getWriteAuditProofContract(),
+    },
+    {
+      headers: buildApiSurfaceHeaders("write-audit-proof"),
+    }
+  );
 }
