@@ -7,6 +7,7 @@ import {
   type ResearchItem,
   type ResearchResult,
 } from "@/lib/research-result";
+import { assertWriteAuditTrailInvariants } from "@/lib/write-invariants";
 
 export interface RowWriteMetadata {
   operationKey: string;
@@ -21,6 +22,7 @@ export interface RowWriteAuditEntry {
   rowIndex: number;
   operationKey: string;
   status: RowWriteStatus;
+  evidenceSummary?: string;
 }
 
 export interface WriteAuditTrail {
@@ -142,7 +144,7 @@ export function buildWriteAuditTrail(
   const extractionCounts = metadata?.extractionCounts ?? deriveExtractionCounts(result);
   const rejectedUrls = metadata?.rejectedUrls ?? [];
 
-  return {
+  return assertWriteAuditTrailInvariants({
     sourceSet,
     extractionCounts,
     rejectedUrls,
@@ -157,5 +159,5 @@ export function buildWriteAuditTrail(
     rowsSkippedAsDuplicates: rowStatuses.filter((row) => row.status === "duplicate").length,
     rowsLeftUnresolved: rowStatuses.filter((row) => row.status === "unresolved").length,
     rows: rowStatuses,
-  };
+  });
 }
