@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { incrementMetric, infoLog } from "@/lib/observability";
 
 const DEFAULT_RETENTION_DAYS = 30;
 const ENCRYPTED_STATE_FORMAT = "notionmcp-encrypted-state/v1";
@@ -124,6 +125,7 @@ export async function cleanupExpiredPersistedStateFiles(
 
   try {
     const entries = await readdir(directory, { withFileTypes: true });
+    let deletedFiles = 0;
 
     await Promise.all(
       entries
@@ -134,9 +136,20 @@ export async function cleanupExpiredPersistedStateFiles(
 
           if (details.mtimeMs < cutoffMs) {
             await unlink(filePath);
+            deletedFiles += 1;
           }
         })
     );
+    incrementMetric("backgroundCleanupRuns");
+    incrementMetric("backgroundCleanupFilesDeleted", deletedFiles);
+
+    if (deletedFiles > 0) {
+      infoLog("persisted-state", "Removed expired persisted-state files.", {
+        directory,
+        deletedFiles,
+        retentionDays,
+      });
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;

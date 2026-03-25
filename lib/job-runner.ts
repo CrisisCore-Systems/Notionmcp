@@ -16,6 +16,7 @@ import {
   type JobKind,
   type PersistedJobRecord,
 } from "@/lib/job-store";
+import { errorLog, incrementMetric, infoLog, warnLog } from "@/lib/observability";
 import { runResearchAgent } from "@/lib/agent";
 import { executeWriteJob, WriteExecutionError, type WriteExecutionInput } from "@/lib/write-execution";
 
@@ -27,7 +28,13 @@ export const jobRunnerTestOverrides: {
 } = {};
 
 export async function createDurableJob(kind: JobKind, payload: unknown): Promise<PersistedJobRecord> {
-  return await createJob(kind, payload);
+  const record = await createJob(kind, payload);
+  incrementMetric("jobsCreated");
+  infoLog("job-runner", "Created durable job.", {
+    jobId: record.id,
+    jobKind: record.kind,
+  });
+  return record;
 }
 
 export function getDetachedJobWorkerCommand(jobId: string, cwd = process.cwd()): {
@@ -49,6 +56,11 @@ export async function processJob(jobId: string): Promise<void> {
     return;
   }
 
+  infoLog("job-runner", "Starting job processing.", {
+    jobId,
+    jobKind: record.kind,
+    durableExecutionMode: getDurableExecutionMode(),
+  });
   await markJobRunning(jobId, { pid: process.pid }, record.checkpoint);
 
   try {
@@ -71,6 +83,10 @@ export async function processJob(jobId: string): Promise<void> {
 
       await markJobComplete(jobId, result, {
         phase: "complete",
+      });
+      infoLog("job-runner", "Completed research job.", {
+        jobId,
+        jobKind: record.kind,
       });
       return;
     }
@@ -102,10 +118,24 @@ export async function processJob(jobId: string): Promise<void> {
       resumedFromIndex: result.resumedFromIndex,
       providerMode: result.providerMode,
     });
+    infoLog("job-runner", "Completed write job.", {
+      jobId,
+      jobKind: record.kind,
+      databaseId: result.databaseId,
+      nextRowIndex: result.auditTrail.rows.length + (result.resumedFromIndex ?? 0),
+    });
   } catch (error) {
     if (error instanceof WriteExecutionError) {
+      incrementMetric("jobFailures");
       await markJobError(jobId, error.details, {
         phase: "error",
+        databaseId: error.details.databaseId,
+        nextRowIndex: error.details.nextRowIndex,
+        providerMode: error.details.providerMode,
+      });
+      errorLog("job-runner", "Write job failed with a resumable execution error.", {
+        jobId,
+        jobKind: record.kind,
         databaseId: error.details.databaseId,
         nextRowIndex: error.details.nextRowIndex,
         providerMode: error.details.providerMode,
@@ -113,8 +143,14 @@ export async function processJob(jobId: string): Promise<void> {
       return;
     }
 
+    incrementMetric("jobFailures");
     await markJobError(jobId, {
       message: error instanceof Error ? error.message : String(error),
+    });
+    errorLog("job-runner", "Job failed with an unexpected error.", {
+      jobId,
+      jobKind: record.kind,
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 }
@@ -127,11 +163,25 @@ export async function ensureJobWorker(jobId: string): Promise<void> {
   }
 
   if (getDurableExecutionMode() === "inline") {
+    if (record.status === "running") {
+      incrementMetric("jobsResumed");
+      warnLog("job-runner", "Restarting stale job inline.", {
+        jobId,
+        jobKind: record.kind,
+      });
+    }
     void processJob(jobId);
     return;
   }
 
   const workerCommand = getDetachedJobWorkerCommand(jobId);
+  if (record.status === "running") {
+    incrementMetric("jobsResumed");
+    warnLog("job-runner", "Respawning stale detached job worker.", {
+      jobId,
+      jobKind: record.kind,
+    });
+  }
   const child = spawn(workerCommand.command, workerCommand.args, {
     cwd: process.cwd(),
     detached: true,

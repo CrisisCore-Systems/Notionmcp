@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { NextRequest } from "next/server";
-import { GET as getJobProof } from "@/app/api/jobs/[jobId]/route";
-import { GET as getWriteAuditProof } from "@/app/api/write-audits/[auditId]/route";
+import { GET as getJobVerification } from "@/app/api/jobs/[jobId]/route";
+import { GET as getWriteAuditVerification } from "@/app/api/write-audits/[auditId]/route";
 import { createJob } from "@/lib/job-store";
 import { persistWriteAuditRecord } from "@/lib/write-audit-store";
 
@@ -37,27 +37,37 @@ test.afterEach(async () => {
   await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-test("durable job proof route returns persisted job state plus proof contract metadata", async () => {
+test("durable job verification route returns persisted job state plus verification contract metadata", async () => {
   const job = await createJob("research", { prompt: "Find CRM competitors" });
-  const response = await getJobProof(createGetRequest(`http://localhost:3000/api/jobs/${job.id}`), {
+  const response = await getJobVerification(createGetRequest(`http://localhost:3000/api/jobs/${job.id}`), {
     params: Promise.resolve({ jobId: job.id }),
   });
   const payload = (await response.json()) as {
     id: string;
-    proofContract: {
+    integrity: {
+      recordHash: string;
+      mac: string;
+      keyId: string;
+      signedAt: string;
+    };
+    verificationContract: {
       kind: string;
-      proofArtifact: string;
+      verificationArtifact: string;
     };
   };
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-notionmcp-surface"), "durable-job-proof");
+  assert.equal(response.headers.get("x-notionmcp-surface"), "durable-job-verification");
   assert.equal(payload.id, job.id);
-  assert.equal(payload.proofContract.kind, "durable-job-proof");
-  assert.equal(payload.proofContract.proofArtifact, "durable job state");
+  assert.ok(payload.integrity.recordHash);
+  assert.ok(payload.integrity.mac);
+  assert.ok(payload.integrity.keyId);
+  assert.ok(payload.integrity.signedAt);
+  assert.equal(payload.verificationContract.kind, "durable-job-verification");
+  assert.equal(payload.verificationContract.verificationArtifact, "durable job state");
 });
 
-test("write audit proof route returns persisted audit state plus proof contract metadata", async () => {
+test("write audit verification route returns persisted audit state plus verification contract metadata", async () => {
   const audit = await persistWriteAuditRecord({
     status: "complete",
     usedExistingDatabase: false,
@@ -82,7 +92,7 @@ test("write audit proof route returns persisted audit state plus proof contract 
       rows: [{ rowIndex: 0, operationKey: "op-1", status: "written" }],
     },
   });
-  const response = await getWriteAuditProof(
+  const response = await getWriteAuditVerification(
     createGetRequest(`http://localhost:3000/api/write-audits/${audit.id}`),
     {
       params: Promise.resolve({ auditId: audit.id }),
@@ -90,9 +100,18 @@ test("write audit proof route returns persisted audit state plus proof contract 
   );
   const payload = (await response.json()) as {
     id: string;
-    proofContract: {
+    integrity: {
+      recordHash: string;
+      mac: string;
+      keyId: string;
+      signedAt: string;
+      sourceSetHash: string;
+      rowOutcomesHash: string;
+      auditPayloadHash: string;
+    };
+    verificationContract: {
       kind: string;
-      proofArtifact: string;
+      verificationArtifact: string;
       providerArchitecture: {
         mode: string;
       };
@@ -100,10 +119,17 @@ test("write audit proof route returns persisted audit state plus proof contract 
   };
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-notionmcp-surface"), "write-audit-proof");
+  assert.equal(response.headers.get("x-notionmcp-surface"), "write-audit-verification");
   assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
   assert.equal(payload.id, audit.id);
-  assert.equal(payload.proofContract.kind, "write-audit-proof");
-  assert.equal(payload.proofContract.proofArtifact, "write audit trail");
-  assert.equal(payload.proofContract.providerArchitecture.mode, "direct-api");
+  assert.ok(payload.integrity.recordHash);
+  assert.ok(payload.integrity.mac);
+  assert.ok(payload.integrity.keyId);
+  assert.ok(payload.integrity.signedAt);
+  assert.ok(payload.integrity.sourceSetHash);
+  assert.ok(payload.integrity.rowOutcomesHash);
+  assert.ok(payload.integrity.auditPayloadHash);
+  assert.equal(payload.verificationContract.kind, "write-audit-verification");
+  assert.equal(payload.verificationContract.verificationArtifact, "write audit trail");
+  assert.equal(payload.verificationContract.providerArchitecture.mode, "direct-api");
 });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { NextRequest } from "next/server";
 import { getDeploymentMode } from "@/lib/deployment-boundary";
+import { buildRequestLogContext, getRequestId, incrementMetric, warnLog } from "@/lib/observability";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 type RateLimitEntry = {
@@ -187,15 +188,17 @@ async function isRemoteRequestRateLimited(req: NextRequest, requestOrigin: strin
 
 function logFailedAccessAttempt(req: NextRequest, message: string) {
   const requestOrigin = getRequestOrigin(req) ?? "unknown";
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "unknown";
   const forwardedFor = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const requestId = getRequestId(req);
 
-  console.warn(`[request-security] ${message}`, {
-    origin: requestOrigin,
-    host,
-    forwardedFor,
-    pathname: req.nextUrl.pathname,
-  });
+  warnLog(
+    "request-security",
+    message,
+    buildRequestLogContext(req, requestId, {
+      origin: requestOrigin,
+      forwardedFor,
+    })
+  );
 }
 
 function reject(req: NextRequest, message: string, status: number): Response {
@@ -237,6 +240,7 @@ export async function validateApiRequest(req: NextRequest): Promise<Response | n
 
   try {
     if (await isRemoteRequestRateLimited(req, requestOrigin)) {
+      incrementMetric("rateLimitRejects");
       return reject(req, "Remote API rate limit exceeded. Please slow down and retry shortly.", 429);
     }
   } catch (error) {

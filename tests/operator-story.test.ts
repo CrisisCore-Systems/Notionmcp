@@ -6,9 +6,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { NextRequest } from "next/server";
 import { consumeSSEChunk, createSSEParserState, type SSEParserState } from "@/app/components/chat/stream";
-import { GET as getJobProof } from "@/app/api/jobs/[jobId]/route";
+import { GET as getJobVerification } from "@/app/api/jobs/[jobId]/route";
 import { POST as postResearch } from "@/app/api/research/route";
-import { GET as getWriteAuditProof } from "@/app/api/write-audits/[auditId]/route";
+import { GET as getWriteAuditVerification } from "@/app/api/write-audits/[auditId]/route";
 import { POST as postWrite } from "@/app/api/write/route";
 import { jobRunnerTestOverrides } from "@/lib/job-runner";
 import { notionTestOverrides, type NotionProvider } from "@/lib/notion";
@@ -332,7 +332,7 @@ test("operator flow persists a durable research job, supports reconnect, and wri
   ]);
   assert.equal(completedResearchPayload?.suggestedDbTitle, researchResult.suggestedDbTitle);
 
-  const researchProofResponse = await getJobProof(
+  const researchProofResponse = await getJobVerification(
     createGetRequest(`http://localhost:3000/api/jobs/${researchJobId}`),
     {
       params: Promise.resolve({ jobId: researchJobId }),
@@ -367,14 +367,14 @@ test("operator flow persists a durable research job, supports reconnect, and wri
   assert.equal(writeComplete?.databaseId, "11111111-1111-1111-1111-111111111111");
   assert.equal(writes.length, 1);
 
-  const auditProofResponse = await getWriteAuditProof(
+  const auditProofResponse = await getWriteAuditVerification(
     createGetRequest(`http://localhost:3000/api/write-audits/${writeComplete.auditId}`),
     {
       params: Promise.resolve({ auditId: writeComplete.auditId ?? "" }),
     }
   );
   const auditProof = (await auditProofResponse.json()) as {
-    proofContract: {
+    verificationContract: {
       kind: string;
     };
     auditTrail: {
@@ -388,7 +388,7 @@ test("operator flow persists a durable research job, supports reconnect, and wri
   };
 
   assert.equal(auditProofResponse.status, 200);
-  assert.equal(auditProof.proofContract.kind, "write-audit-proof");
+  assert.equal(auditProof.verificationContract.kind, "write-audit-verification");
   assert.deepEqual(auditProof.auditTrail.sourceSet, researchResult[RESEARCH_RUN_METADATA_KEY]?.sourceSet);
   assert.equal(
     auditProof.auditTrail.extractionCounts.searchQueries,
@@ -398,7 +398,7 @@ test("operator flow persists a durable research job, supports reconnect, and wri
   assert.deepEqual(auditProof.auditTrail.rows.map((row) => row.status), ["written"]);
 });
 
-test("operator flow proves reconnect, reconciliation, proof artifacts, resume, and final write completion as one continuous claim", async () => {
+test("operator flow proves reconnect, reconciliation, verification artifacts, resume, and final write completion as one continuous claim", async () => {
   const researchPrompt = "Find Acme alternatives with public pricing pages";
   const searchQueries = [
     "Acme alternatives pricing",
@@ -620,7 +620,7 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
     "🧪 Verifying candidate rows against normalized evidence...",
   ]);
 
-  const researchProofResponse = await getJobProof(
+  const researchProofResponse = await getJobVerification(
     createGetRequest(`http://localhost:3000/api/jobs/${researchJobId}`),
     {
       params: Promise.resolve({ jobId: researchJobId }),
@@ -628,9 +628,9 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   );
   const researchProof = (await researchProofResponse.json()) as {
     status: string;
-    proofContract: {
+    verificationContract: {
       kind: string;
-      proofArtifact: string;
+      verificationArtifact: string;
     };
     checkpoint?: {
       phase?: string;
@@ -641,10 +641,10 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   };
 
   assert.equal(researchProofResponse.status, 200);
-  assert.equal(researchProofResponse.headers.get("x-notionmcp-surface"), "durable-job-proof");
+  assert.equal(researchProofResponse.headers.get("x-notionmcp-surface"), "durable-job-verification");
   assert.equal(researchProof.status, "complete");
-  assert.equal(researchProof.proofContract.kind, "durable-job-proof");
-  assert.equal(researchProof.proofContract.proofArtifact, "durable job state");
+  assert.equal(researchProof.verificationContract.kind, "durable-job-verification");
+  assert.equal(researchProof.verificationContract.verificationArtifact, "durable job state");
   assert.equal(researchProof.checkpoint?.phase, "complete");
   assert.deepEqual(researchProof.checkpoint?.searchQueries, searchQueries);
   assert.equal(researchProof.checkpoint?.evidenceDocumentCount, 4);
@@ -665,7 +665,7 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
     /Reconciliation verified the last ambiguous row before pausing/
   );
 
-  const failedWriteProofResponse = await getJobProof(
+  const failedWriteProofResponse = await getJobVerification(
     createGetRequest(`http://localhost:3000/api/jobs/${failedWriteJobId}`),
     {
       params: Promise.resolve({ jobId: failedWriteJobId }),
@@ -673,9 +673,9 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   );
   const failedWriteProof = (await failedWriteProofResponse.json()) as {
     status: string;
-    proofContract: {
+    verificationContract: {
       kind: string;
-      proofArtifact: string;
+      verificationArtifact: string;
     };
     checkpoint?: {
       phase?: string;
@@ -693,10 +693,10 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   };
 
   assert.equal(failedWriteProofResponse.status, 200);
-  assert.equal(failedWriteProofResponse.headers.get("x-notionmcp-surface"), "durable-job-proof");
+  assert.equal(failedWriteProofResponse.headers.get("x-notionmcp-surface"), "durable-job-verification");
   assert.equal(failedWriteProof.status, "error");
-  assert.equal(failedWriteProof.proofContract.kind, "durable-job-proof");
-  assert.equal(failedWriteProof.proofContract.proofArtifact, "durable job state");
+  assert.equal(failedWriteProof.verificationContract.kind, "durable-job-verification");
+  assert.equal(failedWriteProof.verificationContract.verificationArtifact, "durable job state");
   assert.equal(failedWriteProof.checkpoint?.phase, "error");
   assert.equal(failedWriteProof.checkpoint?.databaseId, "11111111-1111-1111-1111-111111111111");
   assert.equal(failedWriteProof.checkpoint?.nextRowIndex, 1);
@@ -705,7 +705,7 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
     "unresolved",
   ]);
 
-  const failedAuditProofResponse = await getWriteAuditProof(
+  const failedAuditProofResponse = await getWriteAuditVerification(
     createGetRequest(`http://localhost:3000/api/write-audits/${failedWriteProof.error?.auditId ?? ""}`),
     {
       params: Promise.resolve({ auditId: failedWriteProof.error?.auditId ?? "" }),
@@ -713,9 +713,9 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   );
   const failedAuditProof = (await failedAuditProofResponse.json()) as {
     status: string;
-    proofContract: {
+    verificationContract: {
       kind: string;
-      proofArtifact: string;
+      verificationArtifact: string;
     };
     nextRowIndex?: number;
     auditTrail: {
@@ -731,10 +731,10 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   };
 
   assert.equal(failedAuditProofResponse.status, 200);
-  assert.equal(failedAuditProofResponse.headers.get("x-notionmcp-surface"), "write-audit-proof");
+  assert.equal(failedAuditProofResponse.headers.get("x-notionmcp-surface"), "write-audit-verification");
   assert.equal(failedAuditProof.status, "error");
-  assert.equal(failedAuditProof.proofContract.kind, "write-audit-proof");
-  assert.equal(failedAuditProof.proofContract.proofArtifact, "write audit trail");
+  assert.equal(failedAuditProof.verificationContract.kind, "write-audit-verification");
+  assert.equal(failedAuditProof.verificationContract.verificationArtifact, "write audit trail");
   assert.equal(failedAuditProof.nextRowIndex, 1);
   assert.deepEqual(failedAuditProof.auditTrail.sourceSet, researchResult[RESEARCH_RUN_METADATA_KEY]?.sourceSet);
   assert.equal(
@@ -763,7 +763,7 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   assert.ok(resumedWriteComplete?.auditId);
   assert.equal(resumedWriteComplete?.databaseId, "11111111-1111-1111-1111-111111111111");
 
-  const resumedAuditProofResponse = await getWriteAuditProof(
+  const resumedAuditProofResponse = await getWriteAuditVerification(
     createGetRequest(`http://localhost:3000/api/write-audits/${resumedWriteComplete?.auditId ?? ""}`),
     {
       params: Promise.resolve({ auditId: resumedWriteComplete?.auditId ?? "" }),
@@ -771,9 +771,9 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   );
   const resumedAuditProof = (await resumedAuditProofResponse.json()) as {
     status: string;
-    proofContract: {
+    verificationContract: {
       kind: string;
-      proofArtifact: string;
+      verificationArtifact: string;
     };
     resumedFromIndex: number;
     auditTrail: {
@@ -790,10 +790,10 @@ test("operator flow proves reconnect, reconciliation, proof artifacts, resume, a
   };
 
   assert.equal(resumedAuditProofResponse.status, 200);
-  assert.equal(resumedAuditProofResponse.headers.get("x-notionmcp-surface"), "write-audit-proof");
+  assert.equal(resumedAuditProofResponse.headers.get("x-notionmcp-surface"), "write-audit-verification");
   assert.equal(resumedAuditProof.status, "complete");
-  assert.equal(resumedAuditProof.proofContract.kind, "write-audit-proof");
-  assert.equal(resumedAuditProof.proofContract.proofArtifact, "write audit trail");
+  assert.equal(resumedAuditProof.verificationContract.kind, "write-audit-verification");
+  assert.equal(resumedAuditProof.verificationContract.verificationArtifact, "write audit trail");
   assert.equal(resumedAuditProof.resumedFromIndex, 1);
   assert.deepEqual(resumedAuditProof.auditTrail.sourceSet, researchResult[RESEARCH_RUN_METADATA_KEY]?.sourceSet);
   assert.equal(

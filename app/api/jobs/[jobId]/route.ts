@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { buildApiSurfaceHeaders, getJobProofContract } from "@/lib/api-surface";
+import { buildApiSurfaceHeaders, getJobVerificationContract } from "@/lib/api-surface";
 import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
 import { validateApiRequest } from "@/lib/request-security";
@@ -45,10 +45,10 @@ export async function GET(req: NextRequest, context: RouteContext) {
   return Response.json(
     {
       ...record,
-      proofContract: getJobProofContract(),
+      verificationContract: getJobVerificationContract(),
     },
     {
-      headers: buildApiSurfaceHeaders("durable-job-proof"),
+      headers: buildApiSurfaceHeaders("durable-job-verification"),
     }
   );
 }

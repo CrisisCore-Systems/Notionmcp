@@ -1,6 +1,7 @@
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getJobDirectory } from "@/lib/job-store";
+import { warnLog } from "@/lib/observability";
 import { getPersistedStateEncryptionRequirementError } from "@/lib/persisted-state";
 import { getWriteAuditDirectory } from "@/lib/write-audit-store";
 
@@ -139,7 +140,7 @@ export function assertDeploymentReadiness(env: NodeJS.ProcessEnv = process.env):
 
 export function warnIfDurableJobsNeedLongLivedHost(
   env: NodeJS.ProcessEnv = process.env,
-  log: (message: string) => void = console.warn
+  log: (message: string) => void = (message) => warnLog("deployment-boundary", message)
 ): void {
   const warning = getDurableJobsWarning(env);
 

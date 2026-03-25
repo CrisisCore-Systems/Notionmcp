@@ -5,9 +5,15 @@ import {
   type Page,
   type Route,
 } from "playwright";
+import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { sanitizeEvidenceText } from "@/lib/evidence-reduction";
+import {
+  reduceEvidenceFieldCandidates,
+  type EvidenceFieldCandidate,
+  type EvidenceFieldCertainty,
+  type EvidenceFieldKind,
+} from "@/lib/evidence-reduction";
 
 let browser: Browser | null = null;
 const MAX_SEARCH_RESULTS = 6;
@@ -39,9 +45,13 @@ export interface BrowseResult {
 }
 
 export interface EvidenceField {
+  id: string;
   label: string;
   value: string;
   source: "meta" | "text" | "table" | "link" | "schema" | "json-ld";
+  kind: EvidenceFieldKind;
+  certainty: EvidenceFieldCertainty;
+  sourceUrl: string;
   untrusted: true;
 }
 
@@ -52,6 +62,9 @@ export interface EvidenceDocument {
   contentType: string;
   sourceUrls: string[];
   redirectChain: string[];
+  redirectRiskReasons?: string[];
+  structuredDataRiskReasons?: string[];
+  renderedShellRiskReasons?: string[];
   evidenceFields: EvidenceField[];
   evidenceSnippets: string[];
   untrusted: true;
@@ -144,6 +157,99 @@ function normalizeHttpUrlCandidate(value: string | undefined): string | undefine
   } catch {
     return undefined;
   }
+}
+
+function getDomainForUrl(value: string): string {
+  try {
+    return new URL(value).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function getBaseDomain(value: string): string {
+  const domain = getDomainForUrl(value);
+  const labels = domain.split(".").filter(Boolean);
+
+  return labels.length >= 2 ? labels.slice(-2).join(".") : domain;
+}
+
+export function analyzeRedirectChain(redirectChain: string[], finalUrl: string): string[] {
+  const hops = Array.from(new Set([...redirectChain, finalUrl].filter(Boolean)));
+
+  if (hops.length <= 1) {
+    return [];
+  }
+
+  const firstBaseDomain = getBaseDomain(hops[0] ?? "");
+  const finalBaseDomain = getBaseDomain(finalUrl);
+  const uniqueBaseDomains = new Set(hops.map((hop) => getBaseDomain(hop)).filter(Boolean));
+  const reasons: string[] = [];
+
+  if (firstBaseDomain && finalBaseDomain && firstBaseDomain !== finalBaseDomain) {
+    reasons.push("cross-domain-redirect");
+  }
+
+  if (uniqueBaseDomains.size > 2) {
+    reasons.push("multi-domain-redirect-chain");
+  }
+
+  if (hops.length > 3) {
+    reasons.push("excessive-redirect-hops");
+  }
+
+  return reasons;
+}
+
+export function analyzeStructuredDataConsistency(
+  finalUrl: string,
+  structuredData: StructuredPageData | undefined
+): string[] {
+  if (!structuredData) {
+    return [];
+  }
+
+  const finalBaseDomain = getBaseDomain(finalUrl);
+  const referencedBaseDomains = new Set(
+    collectStructuredSourceUrls(structuredData)
+      .map((url) => getBaseDomain(url))
+      .filter(Boolean)
+  );
+  const reasons: string[] = [];
+
+  if (structuredData.canonicalUrl) {
+    const canonicalBaseDomain = getBaseDomain(structuredData.canonicalUrl);
+
+    if (canonicalBaseDomain && finalBaseDomain && canonicalBaseDomain !== finalBaseDomain) {
+      reasons.push("canonical-domain-mismatch");
+    }
+  }
+
+  if (referencedBaseDomains.size > 0 && finalBaseDomain && !referencedBaseDomains.has(finalBaseDomain)) {
+    reasons.push("structured-data-domain-conflict");
+  }
+
+  return reasons;
+}
+
+export function analyzeRenderedShellRisk(initialVisibleText: string, finalVisibleText: string, title: string): string[] {
+  const initialLength = normalizeStructuredText(initialVisibleText).length;
+  const finalLength = normalizeStructuredText(finalVisibleText).length;
+  const reasons: string[] = [];
+
+  if (/^(loading|please wait|just a moment|enable javascript|javascript required)$/i.test(title.trim())) {
+    reasons.push("loading-shell-title");
+  }
+
+  if (initialLength > 0 && initialLength <= 80 && finalLength >= Math.max(initialLength * 4, 240)) {
+    reasons.push("js-rendered-content-expansion");
+  }
+
+  if (initialLength === 0 && finalLength >= 240) {
+    reasons.push("js-rendered-empty-shell");
+  }
+
+  return reasons;
 }
 
 function collectJsonLdNodes(value: unknown): Record<string, unknown>[] {
@@ -342,52 +448,80 @@ function collapseLines(lines: string[], maxCharacters: number): string {
 function buildEvidenceDocument(input: {
   finalUrl: string;
   title: string;
+  metaDescription?: string;
   contentType: string;
   redirectChain: string[];
+  redirectRiskReasons?: string[];
+  structuredDataRiskReasons?: string[];
+  renderedShellRiskReasons?: string[];
   sourceUrls: string[];
-  textLines: string[];
-  notableLinks: string[];
+  headings: string[];
+  textBlocks: string[];
+  notableLinks: Array<{ label: string; url: string }>;
   tableRows: string[];
   structuredData?: StructuredPageData;
 }): EvidenceDocument {
-  const evidenceFields: EvidenceField[] = [];
-  const push = (label: string, value: string | undefined, source: EvidenceField["source"]) => {
-    const sanitized = sanitizeEvidenceText(value ?? "");
-
-    if (!sanitized) {
+  const candidates: EvidenceFieldCandidate[] = [];
+  const push = (
+    label: string,
+    value: string | undefined,
+    source: EvidenceField["source"],
+    kind: EvidenceFieldKind,
+    certainty: EvidenceFieldCertainty,
+    sourceUrl = input.finalUrl
+  ) => {
+    if (!value?.trim()) {
       return;
     }
 
-    evidenceFields.push({
+    candidates.push({
       label,
-      value: sanitized,
+      value,
       source,
-      untrusted: true,
+      kind,
+      certainty,
+      sourceUrl,
     });
   };
 
-  push("Page title", input.title, "meta");
+  push("Page title", input.title, "meta", "title", "high");
+  push("Meta description", input.metaDescription, "meta", "meta-description", "high");
 
-  for (const line of input.textLines.slice(0, 24)) {
-    push("Page text", line, "text");
+  for (const heading of input.headings) {
+    push("Heading", heading, "text", "heading", "medium");
   }
 
-  for (const row of input.tableRows.slice(0, 12)) {
-    push("Table row", row, "table");
+  for (const block of input.textBlocks) {
+    push("Text block", block, "text", "text-block", "low");
   }
 
-  for (const link of input.notableLinks.slice(0, 8)) {
-    push("Notable link", link, "link");
+  for (const row of input.tableRows) {
+    push("Table row", row, "table", "table-row", "medium");
+  }
+
+  for (const link of input.notableLinks) {
+    push("Notable link", `${link.label}: ${link.url}`, "link", "notable-link", "medium", link.url);
   }
 
   for (const line of buildStructuredDataLines(input.structuredData)) {
-    push("Structured evidence", line, line.startsWith("JSON-LD") ? "json-ld" : "schema");
+    push(
+      "Structured evidence",
+      line,
+      line.startsWith("JSON-LD") ? "json-ld" : "schema",
+      "structured",
+      "high"
+    );
   }
 
-  const evidenceSnippets = Array.from(new Set(evidenceFields.map((field) => `${field.label}: ${field.value}`))).slice(
-    0,
-    MAX_EVIDENCE_SNIPPETS
-  );
+  const evidenceDocumentHashPrefix = createHash("sha256").update(input.finalUrl).digest("hex").slice(0, 8);
+  const evidenceFields: EvidenceField[] = reduceEvidenceFieldCandidates(candidates).map((field, index) => ({
+    id: `${evidenceDocumentHashPrefix}-f${index + 1}`,
+    ...field,
+    untrusted: true,
+  }));
+  const evidenceSnippets = evidenceFields
+    .map((field) => `[${field.id}] ${field.label}: ${field.value}`)
+    .slice(0, MAX_EVIDENCE_SNIPPETS);
 
   return {
     finalUrl: input.finalUrl,
@@ -395,6 +529,13 @@ function buildEvidenceDocument(input: {
     title: input.title,
     contentType: input.contentType,
     redirectChain: input.redirectChain,
+    ...(input.redirectRiskReasons?.length ? { redirectRiskReasons: input.redirectRiskReasons } : {}),
+    ...(input.structuredDataRiskReasons?.length
+      ? { structuredDataRiskReasons: input.structuredDataRiskReasons }
+      : {}),
+    ...(input.renderedShellRiskReasons?.length
+      ? { renderedShellRiskReasons: input.renderedShellRiskReasons }
+      : {}),
     sourceUrls: input.sourceUrls,
     evidenceFields,
     evidenceSnippets,
@@ -784,6 +925,7 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
   try {
     await validatePublicHttpUrl(url);
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    const initialVisibleText = await page.evaluate(() => (document.body?.innerText ?? "").replace(/\s+/g, " ").trim());
     await waitForSettledPage(page);
 
     const redirectChain: string[] = [];
@@ -811,6 +953,29 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         document.querySelector("main, article, [role='main'], .main, #main") ??
         document.body;
       const container = root.cloneNode(true) as HTMLElement;
+      const visibilityCache = new WeakMap<Element, boolean>();
+      const isVisible = (element: Element | null) => {
+        if (!element) {
+          return false;
+        }
+
+        const cached = visibilityCache.get(element);
+
+        if (typeof cached === "boolean") {
+          return cached;
+        }
+
+        if (element.closest("[hidden], [aria-hidden='true']")) {
+          visibilityCache.set(element, false);
+          return false;
+        }
+
+        const style = window.getComputedStyle(element);
+        const visible =
+          style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+        visibilityCache.set(element, visible);
+        return visible;
+      };
 
       container
         .querySelectorAll(
@@ -818,70 +983,76 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         )
         .forEach((el) => el.remove());
 
-      const lines: string[] = [];
-      const pushLine = (value?: string | null) => {
+      const pushUnique = (bucket: string[], value?: string | null) => {
         const nextValue = value?.replace(/\s+/g, " ").trim();
 
-        if (!nextValue || lines.includes(nextValue)) {
+        if (!nextValue || bucket.includes(nextValue)) {
           return;
         }
 
-        lines.push(nextValue);
+        bucket.push(nextValue);
       };
 
-      pushLine(document.title);
-      pushLine(document.querySelector("meta[name='description']")?.getAttribute("content"));
+      const headings: string[] = [];
+      const textBlocks: string[] = [];
+      const tableRows: string[] = [];
+      const notableLinks: Array<{ label: string; url: string }> = [];
+      const metaDescription = document.querySelector("meta[name='description']")?.getAttribute("content") ?? "";
 
-      const textNodes = Array.from(
-        container.querySelectorAll("h1, h2, h3, p, li, blockquote, pre")
-      )
+      Array.from(container.querySelectorAll("h1, h2, h3"))
+        .filter((element) => isVisible(element))
         .map((element) => element.textContent)
         .filter((value): value is string => Boolean(value))
         .map((value) => value.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .forEach((value) => pushUnique(headings, value));
 
-        for (const value of textNodes) {
-          pushLine(value);
+      Array.from(container.querySelectorAll("p, li, blockquote, pre"))
+        .filter((element) => isVisible(element))
+        .map((element) => element.textContent)
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .forEach((value) => pushUnique(textBlocks, value));
+
+      for (const row of Array.from(container.querySelectorAll("table")).slice(0, 3)) {
+        if (!isVisible(row)) {
+          continue;
         }
 
-      const tableRows = Array.from(container.querySelectorAll("table"))
-        .slice(0, 3)
-        .flatMap((table) =>
-          Array.from(table.querySelectorAll("tr")).map((row) =>
-            Array.from(row.querySelectorAll("th, td"))
+        for (const tableRow of Array.from(row.querySelectorAll("tr"))) {
+          if (!isVisible(tableRow)) {
+            continue;
+          }
+
+          pushUnique(
+            tableRows,
+            Array.from(tableRow.querySelectorAll("th, td"))
               .map((cell) => cell.textContent?.replace(/\s+/g, " ").trim() ?? "")
               .filter(Boolean)
               .join(" | ")
-          )
-        )
-        .filter(Boolean);
-
-        for (const row of tableRows) {
-          pushLine(row);
+          );
         }
+      }
 
-      const notableLinks = Array.from(container.querySelectorAll("a[href]"))
+      Array.from(container.querySelectorAll("a[href]"))
+        .filter((link) => isVisible(link))
         .slice(0, 8)
-        .map((link) => {
+        .forEach((link) => {
           const label = link.textContent?.replace(/\s+/g, " ").trim() ?? "";
           const href = link.getAttribute("href") ?? "";
 
           if (!label || !href) {
-            return "";
+            return;
           }
 
           try {
             const absoluteUrl = new URL(href, document.baseURI).toString();
-            return `${label}: ${absoluteUrl}`;
+            notableLinks.push({ label, url: absoluteUrl });
           } catch {
-            return "";
+            return;
           }
-        })
-        .filter(Boolean);
-
-        for (const link of notableLinks) {
-          pushLine(link);
-        }
+        });
 
       const openGraph = Object.fromEntries(
         Array.from(document.querySelectorAll("meta[property]"))
@@ -912,13 +1083,13 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
 
         return {
           title: document.title.trim(),
-          textLines: lines,
+          metaDescription,
+          headings,
+          textBlocks,
           notableLinks,
           tableRows,
-          sourceUrls: Array.from(new Set([document.location.href, ...notableLinks
-            .map((entry) => entry.split(": ").slice(1).join(": ").trim())
-            .filter(Boolean)])),
-          evidenceSnippets: lines.slice(0, maxEvidenceSnippets),
+          sourceUrls: Array.from(new Set([document.location.href, ...notableLinks.map((entry) => entry.url)])),
+          evidenceSnippets: [...headings, ...textBlocks].slice(0, maxEvidenceSnippets),
           structured: {
           canonicalUrl: document.querySelector("link[rel='canonical']")?.getAttribute("href") ?? "",
           openGraph,
@@ -929,6 +1100,13 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
     }, { maxEvidenceSnippets: MAX_EVIDENCE_SNIPPETS });
 
     const structuredData = normalizeStructuredPageData(content.structured);
+    const redirectRiskReasons = analyzeRedirectChain(redirectChain, page.url());
+    const structuredDataRiskReasons = analyzeStructuredDataConsistency(page.url(), structuredData);
+    const renderedShellRiskReasons = analyzeRenderedShellRisk(
+      initialVisibleText,
+      [...content.headings, ...content.textBlocks, ...content.tableRows].join("\n"),
+      content.title
+    );
     const mergedSourceUrls = Array.from(
       new Set([
         ...content.sourceUrls,
@@ -938,10 +1116,15 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
     const evidenceDocument = buildEvidenceDocument({
       finalUrl: page.url(),
       title: content.title,
+      metaDescription: content.metaDescription,
       contentType,
       redirectChain,
+      redirectRiskReasons,
+      structuredDataRiskReasons,
+      renderedShellRiskReasons,
       sourceUrls: mergedSourceUrls,
-      textLines: content.textLines,
+      headings: content.headings,
+      textBlocks: content.textBlocks,
       notableLinks: content.notableLinks,
       tableRows: content.tableRows,
       structuredData,

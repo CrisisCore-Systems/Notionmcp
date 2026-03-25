@@ -14,7 +14,7 @@ Operational flow:
 3. The approval UI lets the operator review schema, row values, and provenance before any write happens.
 4. The write route creates or reuses a Notion database, writes rows with deterministic operation keys, preserves provenance metadata, and reconciles ambiguous partial failures before suggesting a resume point.
 5. Each write run returns a structured operator audit trail with the source set, extraction counts, rejected URLs, attempted rows, confirmed writes, duplicate skips, and unresolved rows.
-6. The completion panel now exposes both persisted proof artifacts: `/api/write-audits/{auditId}` for the write audit JSON and `/api/jobs/{jobId}` for the durable job checkpoint/event log JSON.
+6. The completion panel now exposes both persisted verification artifacts: `/api/write-audits/{auditId}` for the write audit JSON and `/api/jobs/{jobId}` for the durable job checkpoint/event log JSON.
 
 Research posture:
 

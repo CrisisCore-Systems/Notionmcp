@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, utimes } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -59,6 +59,13 @@ test("persistWriteAuditRecord stores and reloads server-side write audits", asyn
   assert.equal(loaded?.databaseId, "db_123");
   assert.equal(loaded?.status, "complete");
   assert.equal(loaded?.providerMode, "direct-api");
+  assert.ok(loaded?.integrity?.recordHash);
+  assert.ok(loaded?.integrity?.mac);
+  assert.ok(loaded?.integrity?.keyId);
+  assert.ok(loaded?.integrity?.signedAt);
+  assert.ok(loaded?.integrity?.sourceSetHash);
+  assert.ok(loaded?.integrity?.rowOutcomesHash);
+  assert.ok(loaded?.integrity?.auditPayloadHash);
   assert.equal(buildWriteAuditUrl(persisted.id), `/api/write-audits/${persisted.id}`);
 });
 
@@ -161,6 +168,57 @@ test("persistWriteAuditRecord encrypts persisted state when configured", async (
   assert.equal(loaded?.message, "Completed encrypted write");
 });
 
+test("persistWriteAuditRecord detects tampering with persisted audit artifacts", async () => {
+  process.env.WRITE_AUDIT_DIR = await mkdtemp(path.join(os.tmpdir(), "notionmcp-audits-"));
+
+  const persisted = await persistWriteAuditRecord({
+    databaseId: "db_123",
+    status: "complete",
+    usedExistingDatabase: true,
+    resumedFromIndex: 0,
+    providerMode: "direct-api",
+    message: "Integrity-sensitive audit",
+    auditTrail: {
+      sourceSet: ["https://example.com/a"],
+      extractionCounts: {
+        searchQueries: 1,
+        candidateSources: 1,
+        pagesBrowsed: 1,
+        rowsExtracted: 1,
+      },
+      rejectedUrls: [],
+      rowsReviewed: 1,
+      rowsAttempted: 1,
+      rowsConfirmedWritten: 1,
+      rowsConfirmedAfterReconciliation: 0,
+      rowsSkippedAsDuplicates: 0,
+      rowsLeftUnresolved: 0,
+      rows: [{ rowIndex: 0, operationKey: "op_1", status: "written" }],
+    },
+  });
+  const auditPath = path.join(process.env.WRITE_AUDIT_DIR, `${persisted.id}.json`);
+  const parsed = JSON.parse(await readFile(auditPath, "utf8")) as
+    | {
+        format: string;
+        ciphertext: string;
+      }
+    | {
+        integrity: {
+          mac: string;
+        };
+      };
+
+  if ("format" in parsed) {
+    parsed.ciphertext = `A${parsed.ciphertext.slice(1)}`;
+  } else {
+    // HMAC-SHA256 digests are 64 hex chars; replacing one character keeps the shape but breaks validation.
+    parsed.integrity.mac = `${"0".repeat(63)}1`;
+  }
+
+  await writeFile(auditPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  await assert.rejects(async () => await loadWriteAuditRecord(persisted.id));
+});
+
 test("saveWriteAuditRecord updates an existing persisted audit artifact", async () => {
   process.env.WRITE_AUDIT_DIR = await mkdtemp(path.join(os.tmpdir(), "notionmcp-audits-"));
 
@@ -211,4 +269,5 @@ test("saveWriteAuditRecord updates an existing persisted audit artifact", async 
   assert.equal(loaded?.status, "complete");
   assert.equal(loaded?.nextRowIndex, 1);
   assert.equal(loaded?.message, "Completed write audit");
+  assert.equal(loaded?.integrity?.previousHash, persisted.integrity?.recordHash);
 });

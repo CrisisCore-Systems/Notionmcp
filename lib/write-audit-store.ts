@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
+import {
+  signArtifactIntegrity,
+  sha256Hex,
+  type ArtifactIntegrityMetadata,
+  verifyArtifactIntegrity,
+} from "@/lib/artifact-integrity";
 import type { WriteAuditTrail } from "@/lib/write-audit";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
@@ -17,6 +24,11 @@ export type PersistedWriteAuditRecord = {
   providerMode?: string;
   message: string;
   auditTrail: WriteAuditTrail;
+  integrity?: ArtifactIntegrityMetadata & {
+    sourceSetHash: string;
+    rowOutcomesHash: string;
+    auditPayloadHash: string;
+  };
 };
 
 function isPersistedWriteAuditRecord(value: unknown): value is PersistedWriteAuditRecord {
@@ -57,12 +69,39 @@ function getWriteAuditPath(auditId: string): string {
 export async function saveWriteAuditRecord(
   record: PersistedWriteAuditRecord
 ): Promise<PersistedWriteAuditRecord> {
+  const filePath = getWriteAuditPath(record.id);
+  const previousHash = record.integrity?.recordHash;
+  const unsignedRecord = { ...record };
+  delete unsignedRecord.integrity;
+  const integrity = await signArtifactIntegrity(
+    filePath,
+    "persisted-write-audit-record",
+    unsignedRecord,
+    {
+      sourceSetHash: sha256Hex([...(unsignedRecord.auditTrail.sourceSet ?? [])].sort()),
+      rowOutcomesHash: sha256Hex(
+        unsignedRecord.auditTrail.rows.map((row) => ({
+          rowIndex: row.rowIndex,
+          operationKey: row.operationKey,
+          status: row.status,
+        }))
+      ),
+      auditPayloadHash: sha256Hex(unsignedRecord),
+    },
+    previousHash
+  );
   await writePersistedStateFile(
-    getWriteAuditPath(record.id),
-    record,
+    filePath,
+    {
+      ...unsignedRecord,
+      integrity,
+    },
     WRITE_AUDIT_RETENTION_ENV_VAR
   );
-  return record;
+  return {
+    ...unsignedRecord,
+    integrity,
+  };
 }
 
 export function buildWriteAuditUrl(auditId: string): string {
@@ -91,7 +130,37 @@ export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWr
       getWriteAuditPath(trimmedAuditId),
       WRITE_AUDIT_RETENTION_ENV_VAR
     );
-    return isPersistedWriteAuditRecord(parsed) ? parsed : null;
+
+    if (!isPersistedWriteAuditRecord(parsed)) {
+      return null;
+    }
+
+    const { integrity, ...unsignedRecord } = parsed;
+    const integrityVerification = await verifyArtifactIntegrity(
+      getWriteAuditPath(trimmedAuditId),
+      "persisted-write-audit-record",
+      unsignedRecord,
+      {
+        sourceSetHash: sha256Hex([...(unsignedRecord.auditTrail.sourceSet ?? [])].sort()),
+        rowOutcomesHash: sha256Hex(
+          unsignedRecord.auditTrail.rows.map((row) => ({
+            rowIndex: row.rowIndex,
+            operationKey: row.operationKey,
+            status: row.status,
+          }))
+        ),
+        auditPayloadHash: sha256Hex(unsignedRecord),
+      },
+      integrity
+    );
+
+    if (!integrityVerification.ok) {
+      throw new Error(
+        `Persisted write audit "${trimmedAuditId}" failed integrity verification: ${integrityVerification.reason}.`
+      );
+    }
+
+    return parsed;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -99,4 +168,28 @@ export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWr
 
     throw error;
   }
+}
+
+export async function listWriteAuditIds(): Promise<string[]> {
+  try {
+    const entries = await readdir(getWriteAuditDirectory(), { withFileTypes: true });
+
+    return entries
+      .filter((entry) => entry.isFile() && path.extname(entry.name) === ".json")
+      .map((entry) => path.basename(entry.name, ".json"))
+      .filter((auditId) => isValidWriteAuditId(auditId))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function listWriteAuditRecords(): Promise<PersistedWriteAuditRecord[]> {
+  const auditIds = await listWriteAuditIds();
+  const records = await Promise.all(auditIds.map((auditId) => loadWriteAuditRecord(auditId)));
+  return records.filter((record): record is PersistedWriteAuditRecord => record !== null);
 }

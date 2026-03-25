@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
+import {
+  createEventIntegrity,
+  signArtifactIntegrity,
+  type ArtifactIntegrityMetadata,
+  verifyArtifactIntegrity,
+  verifyChainedEvents,
+} from "@/lib/artifact-integrity";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 export type JobKind = "research" | "write";
@@ -22,6 +30,12 @@ export type PersistedJobEvent = {
   event: JobEventType;
   data: unknown;
   createdAt: string;
+  eventHash: string;
+  previousEventHash?: string;
+};
+
+export type PersistedJobIntegrity = ArtifactIntegrityMetadata & {
+  finalEventChainHash?: string;
 };
 
 export type PersistedJobRecord = {
@@ -39,6 +53,7 @@ export type PersistedJobRecord = {
     pid: number;
     heartbeatAt: string;
   };
+  integrity?: PersistedJobIntegrity;
 };
 
 const JOB_ID_PATTERN = /^[0-9a-fA-F-]{36}$/;
@@ -67,8 +82,27 @@ function getJobPath(jobId: string): string {
 }
 
 async function saveJobRecord(record: PersistedJobRecord): Promise<PersistedJobRecord> {
-  await writePersistedStateFile(getJobPath(record.id), record, JOB_STATE_RETENTION_ENV_VAR);
-  return record;
+  const filePath = getJobPath(record.id);
+  const previousHash = record.integrity?.recordHash;
+  const unsignedRecord = { ...record };
+  delete unsignedRecord.integrity;
+  const signedRecord: PersistedJobRecord = {
+    ...unsignedRecord,
+    integrity: await signArtifactIntegrity(
+      filePath,
+      "persisted-job-record",
+      unsignedRecord,
+      {
+        ...(isTerminalJobStatus(unsignedRecord.status) && unsignedRecord.events.length > 0
+          ? { finalEventChainHash: unsignedRecord.events.at(-1)?.eventHash }
+          : {}),
+      },
+      previousHash
+    ),
+  };
+
+  await writePersistedStateFile(filePath, signedRecord, JOB_STATE_RETENTION_ENV_VAR);
+  return signedRecord;
 }
 
 export async function createJob(kind: JobKind, payload: unknown): Promise<PersistedJobRecord> {
@@ -92,10 +126,36 @@ export async function loadJobRecord(jobId: string): Promise<PersistedJobRecord |
   }
 
   try {
-    return await readPersistedStateFile<PersistedJobRecord>(
+    const record = await readPersistedStateFile<PersistedJobRecord>(
       getJobPath(trimmedJobId),
       JOB_STATE_RETENTION_ENV_VAR
     );
+    const { integrity, ...unsignedRecord } = record;
+    const eventVerification = verifyChainedEvents(unsignedRecord.events);
+
+    if (!eventVerification.ok) {
+      throw new Error(`Persisted job "${trimmedJobId}" failed integrity verification: ${eventVerification.reason}.`);
+    }
+
+    const integrityVerification = await verifyArtifactIntegrity(
+      getJobPath(trimmedJobId),
+      "persisted-job-record",
+      unsignedRecord,
+      {
+        ...(isTerminalJobStatus(unsignedRecord.status) && unsignedRecord.events.length > 0
+          ? { finalEventChainHash: unsignedRecord.events.at(-1)?.eventHash }
+          : {}),
+      },
+      integrity
+    );
+
+    if (!integrityVerification.ok) {
+      throw new Error(
+        `Persisted job "${trimmedJobId}" failed integrity verification: ${integrityVerification.reason}.`
+      );
+    }
+
+    return record;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -103,6 +163,30 @@ export async function loadJobRecord(jobId: string): Promise<PersistedJobRecord |
 
     throw error;
   }
+}
+
+export async function listJobIds(): Promise<string[]> {
+  try {
+    const entries = await readdir(getJobDirectory(), { withFileTypes: true });
+
+    return entries
+      .filter((entry) => entry.isFile() && path.extname(entry.name) === ".json")
+      .map((entry) => path.basename(entry.name, ".json"))
+      .filter((jobId) => isValidJobId(jobId))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function listJobRecords(): Promise<PersistedJobRecord[]> {
+  const jobIds = await listJobIds();
+  const records = await Promise.all(jobIds.map((jobId) => loadJobRecord(jobId)));
+  return records.filter((record): record is PersistedJobRecord => record !== null);
 }
 
 export async function updateJobRecord(
@@ -139,12 +223,15 @@ export async function appendJobEvent(
       checkpoint: nextCheckpoint,
       events: [
         ...record.events,
-        {
-          id: (record.events.at(-1)?.id ?? 0) + 1,
-          event,
-          data,
-          createdAt: timestamp,
-        },
+        createEventIntegrity(
+          {
+            id: (record.events.at(-1)?.id ?? 0) + 1,
+            event,
+            data,
+            createdAt: timestamp,
+          },
+          record.events.at(-1)?.eventHash
+        ),
       ],
     };
   });
