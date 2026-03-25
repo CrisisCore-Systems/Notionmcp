@@ -17,10 +17,10 @@ test("getConfiguredNotionProviderMode accepts local MCP compatibility aliases", 
   assert.equal(getConfiguredNotionProviderMode(createEnv({ NOTION_PROVIDER: "legacy-local-mcp" })), "local-mcp");
 });
 
-test("getCurrentNotionProviderState marks local MCP as the core control plane", () => {
-  assert.equal(getCurrentNotionProviderState(createEnv()).posture, "core-control-plane");
+test("getCurrentNotionProviderState marks local MCP as the default transport", () => {
+  assert.equal(getCurrentNotionProviderState(createEnv()).posture, "default-transport");
   assert.equal(
     getCurrentNotionProviderState(createEnv({ NOTION_PROVIDER: "direct-api" })).posture,
-    "alternate-lane"
+    "alternate-transport"
   );
 });

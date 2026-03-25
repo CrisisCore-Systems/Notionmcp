@@ -216,7 +216,7 @@ export async function executeWriteJob(
   );
 
   await callbacks.onUpdate(
-    `Using Notion provider lane: ${providerMode} (${providerState.posture === "core-control-plane" ? "core MCP control plane" : "alternate direct API lane"}).`,
+    `Using Notion provider lane: ${providerMode} (${providerState.posture === "default-transport" ? "default MCP transport" : "alternate direct API transport"}).`,
     {
       nextRowIndex: resumeFromIndex,
     }

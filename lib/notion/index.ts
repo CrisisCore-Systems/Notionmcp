@@ -47,7 +47,7 @@ export function getConfiguredNotionProviderMode(env: NodeJS.ProcessEnv = process
 export function getCurrentNotionProviderState(env: NodeJS.ProcessEnv = process.env): {
   mode: NotionProviderMode;
   health: "configured";
-  posture: "core-control-plane" | "alternate-lane";
+  posture: "default-transport" | "alternate-transport";
   description: string;
 } {
   const mode = getConfiguredNotionProviderMode(env);
@@ -55,11 +55,11 @@ export function getCurrentNotionProviderState(env: NodeJS.ProcessEnv = process.e
   return {
     mode,
     health: "configured",
-    posture: mode === "local-mcp" ? "core-control-plane" : "alternate-lane",
+    posture: mode === "local-mcp" ? "default-transport" : "alternate-transport",
     description:
       mode === "local-mcp"
-        ? "Local Notion MCP is the core control plane for queue intake and reviewed writes."
-        : "Direct Notion API remains available as an alternate private-host write lane.",
+        ? "Local Notion MCP is the default transport for Notion queue intake and reviewed writes."
+        : "Direct Notion API remains available as an alternate private-host transport lane.",
   };
 }
 

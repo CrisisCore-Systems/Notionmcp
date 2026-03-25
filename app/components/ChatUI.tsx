@@ -962,7 +962,7 @@ export default function ChatUI() {
                 checked={useNotionQueue}
                 onChange={(event) => setUseNotionQueue(event.target.checked)}
               />
-              Start from a Notion MCP intake queue instead of a blank prompt
+              Start from the ready Notion intake queue (via MCP) instead of a blank prompt
             </label>
             <div style={{ fontSize: "0.8rem", color: "#1e3a8a", lineHeight: 1.45 }}>
               Default queue contract: <strong>{DEFAULT_NOTION_QUEUE_STATUS_PROPERTY}</strong>=
