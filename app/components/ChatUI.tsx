@@ -469,7 +469,7 @@ export default function ChatUI() {
           uniqueDomainCount: runMetadata?.search?.uniqueDomains?.length ?? 0,
           sourceClassCount: runMetadata?.search?.sourceClasses?.length ?? 0,
           averageQualityScore: runMetadata?.search?.sourceQuality?.averageScore,
-          rejectedUrlCount: runMetadata?.rejectedUrls.length ?? 0,
+          rejectedUrlCount: runMetadata?.rejectedUrls?.length ?? 0,
           usedProviders: runMetadata?.search?.usedProviders ?? [],
         },
       });
