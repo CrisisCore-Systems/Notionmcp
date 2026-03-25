@@ -73,14 +73,14 @@ test("write route rejects an incomplete payload before touching Notion", async (
   assert.match(await response.text(), /A complete research result is required/);
 });
 
-test("write route publishes the provider and proof-artifact contract on GET", async () => {
+test("write route publishes the provider and verification-artifact contract on GET", async () => {
   const response = await getWrite(createRequest("http://localhost:3000/api/write", {}));
   const payload = (await response.json()) as {
     providerArchitecture: {
       mode: string;
       posture: string;
     };
-    proofArtifacts: string[];
+    verificationArtifacts: string[];
   };
 
   assert.equal(response.status, 200);
@@ -88,7 +88,7 @@ test("write route publishes the provider and proof-artifact contract on GET", as
   assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
   assert.equal(payload.providerArchitecture.mode, "direct-api");
   assert.equal(payload.providerArchitecture.posture, "canonical");
-  assert.deepEqual(payload.proofArtifacts, ["/api/jobs/{jobId}", "/api/write-audits/{auditId}"]);
+  assert.deepEqual(payload.verificationArtifacts, ["/api/jobs/{jobId}", "/api/write-audits/{auditId}"]);
 });
 
 test("write route rejects resume requests without a target database", async () => {

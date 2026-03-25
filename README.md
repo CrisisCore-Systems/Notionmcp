@@ -117,8 +117,8 @@ single reviewed write lane. The local MCP transport stays available, but it is n
 and should be treated as quarantined compatibility plumbing rather than the canonical path.
 
 Both `/api/research` and `/api/write` now expose `GET` contracts that mirror this architecture story, while
-`/api/jobs/{jobId}` and `/api/write-audits/{auditId}` return persisted proof artifacts plus the contract metadata
-that explains what those records prove.
+`/api/jobs/{jobId}` and `/api/write-audits/{auditId}` return persisted verification artifacts plus the contract
+metadata that explains what each record contains for operator review and replay.
 
 ## Setup
 
@@ -192,11 +192,11 @@ mode, or set `NOTION_PROVIDER=local-mcp` only if you intentionally want the bund
 Every write now also persists a server-side JSON audit record outside transient UI state and returns a
 download link from the completion panel. The same completion panel now also links to the persisted durable
 job JSON so operators can inspect checkpoints, replayable event history, and the final result/error record as
-a first-class proof surface. By default those records live under `.notionmcp-data/write-audits` and
+a first-class verification surface. By default those records live under `.notionmcp-data/write-audits` and
 `.notionmcp-data/jobs` in the project root, or you can redirect them with `WRITE_AUDIT_DIR` and
-`JOB_STATE_DIR`. The matching API proof endpoints are `/api/write-audits/{auditId}` and `/api/jobs/{jobId}`.
-Those proof endpoints now return their own proof contracts in the JSON payload and response headers so audit
-artifacts remain inspectable even outside the UI. Remote private-host request rate limiting now also persists
+`JOB_STATE_DIR`. The matching API verification endpoints are `/api/write-audits/{auditId}` and `/api/jobs/{jobId}`.
+Those verification endpoints now return their own verification contracts in the JSON payload and response headers
+so audit artifacts remain inspectable even outside the UI. Remote private-host request rate limiting now also persists
 state under `.notionmcp-data/request-rate-limits` by default (or `REMOTE_RATE_LIMIT_DIR`) so it no longer
 depends on a single in-memory process, but it still assumes one long-lived host with shared local storage.
 Old persisted job and audit JSON files are cleaned up automatically after 30 days by default via
@@ -330,13 +330,13 @@ what evidence was used, what rows were attempted, and where the resumable worker
 
 ## Trust artifact surface
 
-The durable write lane now leaves behind two operator-facing proof artifacts:
+The durable write lane now leaves behind two operator-facing verification artifacts:
 
 1. **Write audit JSON** — source set, extraction counts, row outcomes, operation keys, duplicate skips, and unresolved rows
    plus reviewed-row counts and reconciliation markers for ambiguous partial failures
 2. **Durable job JSON** — queued/running/complete status, replayable event log, checkpoints, worker heartbeat, final result, and resumable state
 
-That proof surface is visible from the completion panel and persists independently of the browser tab, which is
+That verification surface is visible from the completion panel and persists independently of the browser tab, which is
 the main trust differentiator in this repository compared with typical “research agent to Notion” demos.
 
 ## Threat model notes for hostile web content
