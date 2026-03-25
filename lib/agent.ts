@@ -176,6 +176,18 @@ export function reviewEvidenceDocumentSource(document: EvidenceDocument): Source
     reasons.push("canonical-domain-mismatch");
   }
 
+  for (const reason of document.redirectRiskReasons ?? []) {
+    reasons.push(reason);
+  }
+
+  for (const reason of document.structuredDataRiskReasons ?? []) {
+    reasons.push(reason);
+  }
+
+  for (const reason of document.renderedShellRiskReasons ?? []) {
+    reasons.push(reason);
+  }
+
   if (populatedEvidenceFields.length < 2) {
     reasons.push("insufficient-field-corroboration");
   }
@@ -632,6 +644,15 @@ export function validateResearchEvidenceCoverage(
         distinctEvidenceIds.add(citation.id);
         citedSourceUrls.add(evidenceField.sourceUrl);
         citedSnippets.push(citation.snippet);
+
+        if (
+          provenance?.sourceUrls?.length &&
+          !provenance.sourceUrls.includes(evidenceField.sourceUrl)
+        ) {
+          throw new Error(
+            `Row ${rowIndex + 1} field "${fieldName}" cited evidence from "${evidenceField.sourceUrl}" without listing that source URL in provenance.`
+          );
+        }
       }
 
       if (citedSourceUrls.size === 0) {

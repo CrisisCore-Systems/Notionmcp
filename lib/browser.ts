@@ -62,6 +62,9 @@ export interface EvidenceDocument {
   contentType: string;
   sourceUrls: string[];
   redirectChain: string[];
+  redirectRiskReasons?: string[];
+  structuredDataRiskReasons?: string[];
+  renderedShellRiskReasons?: string[];
   evidenceFields: EvidenceField[];
   evidenceSnippets: string[];
   untrusted: true;
@@ -154,6 +157,99 @@ function normalizeHttpUrlCandidate(value: string | undefined): string | undefine
   } catch {
     return undefined;
   }
+}
+
+function getDomainForUrl(value: string): string {
+  try {
+    return new URL(value).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function getBaseDomain(value: string): string {
+  const domain = getDomainForUrl(value);
+  const labels = domain.split(".").filter(Boolean);
+
+  return labels.length >= 2 ? labels.slice(-2).join(".") : domain;
+}
+
+export function analyzeRedirectChain(redirectChain: string[], finalUrl: string): string[] {
+  const hops = Array.from(new Set([...redirectChain, finalUrl].filter(Boolean)));
+
+  if (hops.length <= 1) {
+    return [];
+  }
+
+  const firstBaseDomain = getBaseDomain(hops[0] ?? "");
+  const finalBaseDomain = getBaseDomain(finalUrl);
+  const uniqueBaseDomains = new Set(hops.map((hop) => getBaseDomain(hop)).filter(Boolean));
+  const reasons: string[] = [];
+
+  if (firstBaseDomain && finalBaseDomain && firstBaseDomain !== finalBaseDomain) {
+    reasons.push("cross-domain-redirect");
+  }
+
+  if (uniqueBaseDomains.size > 2) {
+    reasons.push("multi-domain-redirect-chain");
+  }
+
+  if (hops.length > 3) {
+    reasons.push("excessive-redirect-hops");
+  }
+
+  return reasons;
+}
+
+export function analyzeStructuredDataConsistency(
+  finalUrl: string,
+  structuredData: StructuredPageData | undefined
+): string[] {
+  if (!structuredData) {
+    return [];
+  }
+
+  const finalBaseDomain = getBaseDomain(finalUrl);
+  const referencedBaseDomains = new Set(
+    collectStructuredSourceUrls(structuredData)
+      .map((url) => getBaseDomain(url))
+      .filter(Boolean)
+  );
+  const reasons: string[] = [];
+
+  if (structuredData.canonicalUrl) {
+    const canonicalBaseDomain = getBaseDomain(structuredData.canonicalUrl);
+
+    if (canonicalBaseDomain && finalBaseDomain && canonicalBaseDomain !== finalBaseDomain) {
+      reasons.push("canonical-domain-mismatch");
+    }
+  }
+
+  if (referencedBaseDomains.size > 0 && finalBaseDomain && !referencedBaseDomains.has(finalBaseDomain)) {
+    reasons.push("structured-data-domain-conflict");
+  }
+
+  return reasons;
+}
+
+export function analyzeRenderedShellRisk(initialVisibleText: string, finalVisibleText: string, title: string): string[] {
+  const initialLength = normalizeStructuredText(initialVisibleText).length;
+  const finalLength = normalizeStructuredText(finalVisibleText).length;
+  const reasons: string[] = [];
+
+  if (/^(loading|please wait|just a moment|enable javascript|javascript required)$/i.test(title.trim())) {
+    reasons.push("loading-shell-title");
+  }
+
+  if (initialLength > 0 && initialLength <= 80 && finalLength >= Math.max(initialLength * 4, 240)) {
+    reasons.push("js-rendered-content-expansion");
+  }
+
+  if (initialLength === 0 && finalLength >= 240) {
+    reasons.push("js-rendered-empty-shell");
+  }
+
+  return reasons;
 }
 
 function collectJsonLdNodes(value: unknown): Record<string, unknown>[] {
@@ -355,6 +451,9 @@ function buildEvidenceDocument(input: {
   metaDescription?: string;
   contentType: string;
   redirectChain: string[];
+  redirectRiskReasons?: string[];
+  structuredDataRiskReasons?: string[];
+  renderedShellRiskReasons?: string[];
   sourceUrls: string[];
   headings: string[];
   textBlocks: string[];
@@ -430,6 +529,13 @@ function buildEvidenceDocument(input: {
     title: input.title,
     contentType: input.contentType,
     redirectChain: input.redirectChain,
+    ...(input.redirectRiskReasons?.length ? { redirectRiskReasons: input.redirectRiskReasons } : {}),
+    ...(input.structuredDataRiskReasons?.length
+      ? { structuredDataRiskReasons: input.structuredDataRiskReasons }
+      : {}),
+    ...(input.renderedShellRiskReasons?.length
+      ? { renderedShellRiskReasons: input.renderedShellRiskReasons }
+      : {}),
     sourceUrls: input.sourceUrls,
     evidenceFields,
     evidenceSnippets,
@@ -819,6 +925,7 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
   try {
     await validatePublicHttpUrl(url);
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    const initialVisibleText = await page.evaluate(() => (document.body?.innerText ?? "").replace(/\s+/g, " ").trim());
     await waitForSettledPage(page);
 
     const redirectChain: string[] = [];
@@ -993,6 +1100,13 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
     }, { maxEvidenceSnippets: MAX_EVIDENCE_SNIPPETS });
 
     const structuredData = normalizeStructuredPageData(content.structured);
+    const redirectRiskReasons = analyzeRedirectChain(redirectChain, page.url());
+    const structuredDataRiskReasons = analyzeStructuredDataConsistency(page.url(), structuredData);
+    const renderedShellRiskReasons = analyzeRenderedShellRisk(
+      initialVisibleText,
+      [...content.headings, ...content.textBlocks, ...content.tableRows].join("\n"),
+      content.title
+    );
     const mergedSourceUrls = Array.from(
       new Set([
         ...content.sourceUrls,
@@ -1005,6 +1119,9 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
       metaDescription: content.metaDescription,
       contentType,
       redirectChain,
+      redirectRiskReasons,
+      structuredDataRiskReasons,
+      renderedShellRiskReasons,
       sourceUrls: mergedSourceUrls,
       headings: content.headings,
       textBlocks: content.textBlocks,
