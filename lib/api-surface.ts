@@ -189,6 +189,8 @@ export function getStatusRouteContract(env: NodeJS.ProcessEnv = process.env) {
       "persisted job counts by kind and status",
       "worker heartbeat freshness",
       "persisted write-audit counts by status",
+      "startup diagnostics summary",
+      "operator metrics snapshot",
     ],
     providerArchitecture: providerState,
     deploymentBoundary: getDeploymentBoundaryContract(context),
@@ -202,6 +204,7 @@ export function getHealthRouteContract(env: NodeJS.ProcessEnv = process.env) {
     route: "/api/health",
     kind: "health-check",
     livenessSemantics: "Returns 200 when the Node runtime can accept and answer API requests.",
+    diagnostics: ["process startup summary", "operator metrics snapshot"],
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };
 }
@@ -214,6 +217,7 @@ export function getReadinessRouteContract(env: NodeJS.ProcessEnv = process.env) 
     kind: "readiness-check",
     readinessSemantics:
       "Returns 200 only when deployment settings are valid and persisted job/audit directories are writable.",
+    diagnostics: ["process startup summary", "deployment readiness summary", "operator metrics snapshot"],
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };
 }

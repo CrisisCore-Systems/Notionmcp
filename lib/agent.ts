@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { browseAndExtract, getConfiguredSearchProviders, searchWebWithDiagnostics, type EvidenceDocument } from "./browser";
 import { mapWithConcurrencyLimit } from "./concurrency";
 import { assessCitationAgreement, type EvidenceCitationReference } from "./contradiction-check";
+import { incrementMetric } from "./observability";
 import { RESEARCH_RUN_METADATA_KEY, type ResearchResult } from "./research-result";
 import {
   assessEvidenceDocumentQuality,
@@ -1086,6 +1087,7 @@ ${serializeEvidenceDocuments(reviewedEvidenceDocuments, sourceQualityByUrl)}`;
   const sourceSet = Array.from(
     new Set(result.items.flatMap((item) => item.__provenance?.sourceUrls ?? []).filter(Boolean))
   ).sort((left, right) => left.localeCompare(right));
+  incrementMetric("rejectedUrls", rejectedUrlSet.size);
 
   return {
     ...result,

@@ -6,6 +6,7 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET as getHealth } from "@/app/api/health/route";
 import { GET as getReady } from "@/app/api/ready/route";
+import { observabilityTestOverrides } from "@/lib/observability";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -20,6 +21,7 @@ function createGetRequest(url: string, headers?: HeadersInit) {
 }
 
 test.beforeEach(async () => {
+  observabilityTestOverrides.reset();
   process.env = {
     ...ORIGINAL_ENV,
     JOB_STATE_DIR: await mkdtemp(path.join(os.tmpdir(), "notionmcp-ready-jobs-")),
@@ -38,6 +40,16 @@ test("health route reports liveness with a machine-readable contract", async () 
   const payload = (await response.json()) as {
     alive: boolean;
     checkedAt: string;
+    diagnostics: {
+      processStartedAt: string;
+    };
+    metrics: {
+      counters: {
+        operatorSurfaceChecks: {
+          health: number;
+        };
+      };
+    };
     healthContract: {
       route: string;
       kind: string;
@@ -49,6 +61,8 @@ test("health route reports liveness with a machine-readable contract", async () 
   assert.ok(response.headers.get("x-request-id"));
   assert.equal(payload.alive, true);
   assert.match(payload.checkedAt, /\d{4}-\d{2}-\d{2}T/);
+  assert.match(payload.diagnostics.processStartedAt, /\d{4}-\d{2}-\d{2}T/);
+  assert.equal(payload.metrics.counters.operatorSurfaceChecks.health, 1);
   assert.equal(payload.healthContract.route, "/api/health");
   assert.equal(payload.healthContract.kind, "health-check");
 });
@@ -59,6 +73,20 @@ test("ready route reports readiness with a machine-readable contract", async () 
     ready: boolean;
     checkedAt: string;
     error: string | null;
+    diagnostics: {
+      deploymentMode: string;
+      durableExecutionMode: string;
+      probes: {
+        firstSuccessfulReadyAt: string | null;
+      };
+    };
+    metrics: {
+      counters: {
+        operatorSurfaceChecks: {
+          ready: number;
+        };
+      };
+    };
     readinessContract: {
       route: string;
       kind: string;
@@ -71,6 +99,10 @@ test("ready route reports readiness with a machine-readable contract", async () 
   assert.equal(payload.ready, true);
   assert.equal(payload.error, null);
   assert.match(payload.checkedAt, /\d{4}-\d{2}-\d{2}T/);
+  assert.equal(payload.diagnostics.deploymentMode, "localhost-operator");
+  assert.equal(payload.diagnostics.durableExecutionMode, "detached");
+  assert.match(payload.diagnostics.probes.firstSuccessfulReadyAt ?? "", /\d{4}-\d{2}-\d{2}T/);
+  assert.equal(payload.metrics.counters.operatorSurfaceChecks.ready, 1);
   assert.equal(payload.readinessContract.route, "/api/ready");
   assert.equal(payload.readinessContract.kind, "readiness-check");
 });

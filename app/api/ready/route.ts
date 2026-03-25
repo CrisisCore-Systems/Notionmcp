@@ -9,7 +9,15 @@ import {
   getDurableExecutionMode,
   getDurableJobsWarning,
 } from "@/lib/deployment-boundary";
-import { buildRequestLogContext, getRequestId, infoLog, warnLog } from "@/lib/observability";
+import {
+  buildRequestLogContext,
+  getOperatorMetricsSnapshot,
+  getRequestId,
+  getStartupDiagnosticsSnapshot,
+  infoLog,
+  recordOperatorSurfaceCheck,
+  warnLog,
+} from "@/lib/observability";
 import { validateApiRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
@@ -39,6 +47,7 @@ export async function GET(req: NextRequest) {
     ready,
     ...(error ? { error } : {}),
   });
+  recordOperatorSurfaceCheck("ready", { ready });
 
   if (ready) {
     infoLog("readiness-check", "Readiness probe succeeded.", logContext);
@@ -52,6 +61,12 @@ export async function GET(req: NextRequest) {
       checkedAt: new Date().toISOString(),
       error,
       warning: getDurableJobsWarning(),
+      diagnostics: {
+        ...getStartupDiagnosticsSnapshot(),
+        deploymentMode: getDeploymentMode(),
+        durableExecutionMode: getDurableExecutionMode(),
+      },
+      metrics: getOperatorMetricsSnapshot(),
       readinessContract: getReadinessRouteContract(),
     },
     {

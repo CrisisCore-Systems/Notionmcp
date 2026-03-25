@@ -12,6 +12,7 @@ import {
   type JobStatus,
 } from "@/lib/job-store";
 import { getCurrentNotionProviderState } from "@/lib/notion";
+import { getOperatorMetricsSnapshot, getStartupDiagnosticsSnapshot } from "@/lib/observability";
 import { listWriteAuditRecords } from "@/lib/write-audit-store";
 
 type CountMap<T extends string> = Record<T, number>;
@@ -44,6 +45,15 @@ export type SystemStatusSnapshot = {
     warning: ReturnType<typeof getDurableJobsWarning>;
   };
   providerArchitecture: ReturnType<typeof getCurrentNotionProviderState>;
+  diagnostics: ReturnType<typeof getStartupDiagnosticsSnapshot> & {
+    deploymentMode: ReturnType<typeof getDeploymentMode>;
+    durableExecutionMode: ReturnType<typeof getDurableExecutionMode>;
+    providerMode: ReturnType<typeof getCurrentNotionProviderState>["mode"];
+    persistenceReady: boolean;
+    readinessError: string | null;
+    warning: ReturnType<typeof getDurableJobsWarning>;
+  };
+  metrics: ReturnType<typeof getOperatorMetricsSnapshot>;
   runtime: {
     jobs: {
       total: number;
@@ -63,12 +73,15 @@ export async function getSystemStatusSnapshot(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<SystemStatusSnapshot> {
   const deploymentReadinessError = getDeploymentReadinessError(env);
+  let persistenceReady = false;
 
   if (!deploymentReadinessError) {
     await assertDurabilityExecutionReadiness({ requireWriteAudit: true }, env);
+    persistenceReady = true;
   }
 
   const [jobRecords, writeAuditRecords] = await Promise.all([listJobRecords(), listWriteAuditRecords()]);
+  const providerArchitecture = getCurrentNotionProviderState(env);
 
   return {
     ready: deploymentReadinessError === null,
@@ -79,7 +92,17 @@ export async function getSystemStatusSnapshot(
       readinessError: deploymentReadinessError,
       warning: getDurableJobsWarning(env),
     },
-    providerArchitecture: getCurrentNotionProviderState(env),
+    providerArchitecture,
+    diagnostics: {
+      ...getStartupDiagnosticsSnapshot(),
+      deploymentMode: getDeploymentMode(env),
+      durableExecutionMode: getDurableExecutionMode(env),
+      providerMode: providerArchitecture.mode,
+      persistenceReady,
+      readinessError: deploymentReadinessError,
+      warning: getDurableJobsWarning(env),
+    },
+    metrics: getOperatorMetricsSnapshot(),
     runtime: {
       jobs: {
         total: jobRecords.length,

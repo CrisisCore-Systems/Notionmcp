@@ -6,6 +6,7 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET as getStatus } from "@/app/api/status/route";
 import { createJob, markJobRunning, updateJobRecord } from "@/lib/job-store";
+import { incrementMetric, observabilityTestOverrides } from "@/lib/observability";
 import { persistWriteAuditRecord } from "@/lib/write-audit-store";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -21,6 +22,7 @@ function createGetRequest(url: string, headers?: HeadersInit) {
 }
 
 test.beforeEach(async () => {
+  observabilityTestOverrides.reset();
   process.env = {
     ...ORIGINAL_ENV,
     JOB_STATE_DIR: await mkdtemp(path.join(os.tmpdir(), "notionmcp-status-jobs-")),
@@ -81,6 +83,7 @@ test("status route reports ready deployment details and persisted runtime counts
       : record.worker,
   }));
 
+  incrementMetric("jobsCreated", 2);
   const response = await getStatus(createGetRequest("http://localhost:3000/api/status"));
   const payload = (await response.json()) as {
     ready: boolean;
@@ -91,6 +94,22 @@ test("status route reports ready deployment details and persisted runtime counts
     };
     providerArchitecture: {
       mode: string;
+    };
+    diagnostics: {
+      processStartedAt: string;
+      persistenceReady: boolean;
+      providerMode: string;
+      probes: {
+        firstStatusCheckAt: string | null;
+      };
+    };
+    metrics: {
+      counters: {
+        jobsCreated: number;
+        operatorSurfaceChecks: {
+          status: number;
+        };
+      };
     };
     runtime: {
       jobs: {
@@ -114,10 +133,17 @@ test("status route reports ready deployment details and persisted runtime counts
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-notionmcp-surface"), "system-status");
   assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
+  assert.ok(response.headers.get("x-request-id"));
   assert.equal(payload.ready, true);
   assert.equal(payload.deployment.mode, "localhost-operator");
   assert.equal(payload.deployment.readinessError, null);
   assert.equal(payload.providerArchitecture.mode, "direct-api");
+  assert.match(payload.diagnostics.processStartedAt, /\d{4}-\d{2}-\d{2}T/);
+  assert.equal(payload.diagnostics.persistenceReady, true);
+  assert.equal(payload.diagnostics.providerMode, "direct-api");
+  assert.match(payload.diagnostics.probes.firstStatusCheckAt ?? "", /\d{4}-\d{2}-\d{2}T/);
+  assert.equal(payload.metrics.counters.jobsCreated, 2);
+  assert.equal(payload.metrics.counters.operatorSurfaceChecks.status, 1);
   assert.equal(payload.runtime.jobs.total, 2);
   assert.equal(payload.runtime.jobs.byKind.research, 1);
   assert.equal(payload.runtime.jobs.byKind.write, 1);
@@ -155,6 +181,7 @@ test("status route returns 503 with readiness details when deployment settings a
   assert.equal(response.status, 503);
   assert.equal(response.headers.get("x-notionmcp-surface"), "system-status");
   assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
+  assert.ok(response.headers.get("x-request-id"));
   assert.equal(payload.ready, false);
   assert.match(payload.deployment.readinessError ?? "", /APP_ALLOWED_ORIGIN and APP_ACCESS_TOKEN/);
   assert.equal(payload.runtime.jobs.total, 0);

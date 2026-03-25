@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { NextRequest } from "next/server";
 import { getDeploymentMode } from "@/lib/deployment-boundary";
-import { buildRequestLogContext, getRequestId, warnLog } from "@/lib/observability";
+import { buildRequestLogContext, getRequestId, incrementMetric, warnLog } from "@/lib/observability";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 type RateLimitEntry = {
@@ -240,6 +240,7 @@ export async function validateApiRequest(req: NextRequest): Promise<Response | n
 
   try {
     if (await isRemoteRequestRateLimited(req, requestOrigin)) {
+      incrementMetric("rateLimitRejects");
       return reject(req, "Remote API rate limit exceeded. Please slow down and retry shortly.", 429);
     }
   } catch (error) {

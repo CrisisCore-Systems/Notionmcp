@@ -28,6 +28,7 @@ import {
   saveWriteAuditRecord,
   type PersistedWriteAuditRecord,
 } from "@/lib/write-audit-store";
+import { incrementMetric } from "@/lib/observability";
 
 const ROW_WRITE_MAX_ATTEMPTS = 3;
 const ROW_WRITE_RETRY_DELAY_MS = 750;
@@ -372,6 +373,7 @@ export async function executeWriteJob(
           reconciledRows.add(nextRowIndex);
           nextRowIndex += 1;
           reconciled = true;
+          incrementMetric("writeReconciliations");
           await callbacks.onUpdate(
             `🧭 Reconciliation confirmed row ${nextRowIndex} landed in Notion. Future retries will start from row ${
               nextRowIndex + 1
