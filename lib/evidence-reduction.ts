@@ -54,7 +54,7 @@ export function sanitizeEvidenceText(value: string): string {
 
   for (const fragment of splitEvidenceFragments(value)) {
     if (isUnsafeEvidenceFragment(fragment)) {
-      continue;
+      break;
     }
 
     const reduced =

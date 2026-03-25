@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDeepResearchBrowseQueue, classifySourceClass, getResearchProfile, parseResearchMode } from "@/lib/agent";
+import {
+  buildDeepResearchBrowseQueue,
+  classifySourceClass,
+  getResearchProfile,
+  parseResearchMode,
+  reviewEvidenceDocumentSource,
+} from "@/lib/agent";
 
 test("getResearchProfile keeps the fast lane as default and exposes higher deep caps", () => {
   const fast = getResearchProfile();
@@ -50,4 +56,64 @@ test("buildDeepResearchBrowseQueue prioritizes domain diversity and source class
   assert.ok(domains.size >= 4);
   assert.ok(sourceClasses.size >= 3);
   assert.equal(queue.filter((url) => url.includes("alpha.com")).length <= 2, true);
+});
+
+test("reviewEvidenceDocumentSource requires corroborating extracted fields instead of trusting url shape", () => {
+  assert.deepEqual(
+    reviewEvidenceDocumentSource({
+      finalUrl: "https://docs.example.com/api",
+      title: "API Documentation",
+      contentType: "text/html",
+      sourceUrls: ["https://docs.example.com/api"],
+      redirectChain: [],
+      evidenceSnippets: ["Page title: API Documentation"],
+      evidenceFields: [
+        {
+          label: "Page text",
+          value: "Welcome to the docs.",
+          source: "text",
+          untrusted: true,
+        },
+      ],
+      untrusted: true,
+    }),
+    {
+      legitimate: false,
+      reasons: ["insufficient-field-corroboration", "page-text-only", "missing-independent-corroboration"],
+    }
+  );
+
+  assert.deepEqual(
+    reviewEvidenceDocumentSource({
+      finalUrl: "https://docs.example.com/api",
+      canonicalUrl: "https://docs.example.com/api",
+      title: "API Documentation",
+      contentType: "text/html",
+      sourceUrls: ["https://docs.example.com/api"],
+      redirectChain: [],
+      evidenceSnippets: [
+        "Page title: API Documentation",
+        "Structured evidence: name: Example API",
+      ],
+      evidenceFields: [
+        {
+          label: "Page title",
+          value: "API Documentation",
+          source: "meta",
+          untrusted: true,
+        },
+        {
+          label: "Structured evidence",
+          value: "name: Example API",
+          source: "schema",
+          untrusted: true,
+        },
+      ],
+      untrusted: true,
+    }),
+    {
+      legitimate: true,
+      reasons: [],
+    }
+  );
 });
