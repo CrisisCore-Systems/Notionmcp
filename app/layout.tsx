@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
 
 export const metadata: Metadata = {
-  title: "Notion Research Agent",
+  title: "Notion MCP Backlog Desk",
   description:
-    "Research the web with Gemini and send structured results to Notion.",
+    "Pull ready Notion backlog items via MCP, research them, review the draft, and write the approved packet back to Notion.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
