@@ -10,6 +10,8 @@ import { getCurrentNotionProviderState } from "@/lib/notion";
 export type ApiSurfaceKind =
   | "research-control"
   | "write-control"
+  | "health-check"
+  | "readiness-check"
   | "system-status"
   | "durable-job-verification"
   | "write-audit-verification";
@@ -189,6 +191,29 @@ export function getStatusRouteContract(env: NodeJS.ProcessEnv = process.env) {
       "persisted write-audit counts by status",
     ],
     providerArchitecture: providerState,
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getHealthRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+
+  return {
+    route: "/api/health",
+    kind: "health-check",
+    livenessSemantics: "Returns 200 when the Node runtime can accept and answer API requests.",
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getReadinessRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+
+  return {
+    route: "/api/ready",
+    kind: "readiness-check",
+    readinessSemantics:
+      "Returns 200 only when deployment settings are valid and persisted job/audit directories are writable.",
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };
 }
