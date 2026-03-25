@@ -10,7 +10,6 @@ import { getCurrentNotionProviderState } from "@/lib/notion";
 export type ApiSurfaceKind =
   | "research-control"
   | "write-control"
-  | "research-result-verification"
   | "durable-job-verification"
   | "write-audit-verification";
 
@@ -20,7 +19,6 @@ type ApiSurfaceContext = {
 };
 
 const JOB_VERIFICATION_ROUTE = "/api/jobs/{jobId}";
-const RESEARCH_VERIFICATION_ROUTE = "/api/research-verifications/{jobId}";
 const WRITE_AUDIT_VERIFICATION_ROUTE = "/api/write-audits/{auditId}";
 
 function getApiSurfaceContext(env: NodeJS.ProcessEnv = process.env): ApiSurfaceContext {
@@ -73,7 +71,7 @@ export function getResearchRouteContract(env: NodeJS.ProcessEnv = process.env) {
     route: "/api/research",
     kind: "research-control",
     createsDurableJob: true,
-    verificationArtifacts: [JOB_VERIFICATION_ROUTE, RESEARCH_VERIFICATION_ROUTE],
+    verificationArtifacts: [JOB_VERIFICATION_ROUTE],
     researchModes: {
       default: fast.mode,
       available: [
@@ -116,28 +114,6 @@ export function getWriteRouteContract(env: NodeJS.ProcessEnv = process.env) {
       "Writes are resumable with row checkpoints and deterministic operation keys.",
       "Write audits persist as first-class verification artifacts outside transient UI state.",
     ],
-    deploymentBoundary: getDeploymentBoundaryContract(context),
-  };
-}
-
-export function getResearchVerificationContract(env: NodeJS.ProcessEnv = process.env) {
-  const context = getApiSurfaceContext(env);
-
-  return {
-    route: RESEARCH_VERIFICATION_ROUTE,
-    kind: "research-result-verification",
-    verificationArtifact: "research result and evidence state",
-    includes: [
-      "research prompt and lane selection",
-      "checkpointed search-query, evidence-document, and browse counts",
-      "verified research result payload for operator approval",
-      "source-set and extraction metadata from the reviewed run",
-      "artifact integrity metadata with chained event hashes and HMAC attestation",
-    ],
-    artifactIntegrity: {
-      status: "hmac-sha256-attested",
-      fields: ["recordHash", "previousHash", "mac", "keyId", "signedAt", "finalEventChainHash"],
-    },
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };
 }

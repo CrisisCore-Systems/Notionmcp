@@ -5,9 +5,15 @@ import {
   type Page,
   type Route,
 } from "playwright";
+import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { sanitizeEvidenceText } from "@/lib/evidence-reduction";
+import {
+  reduceEvidenceFieldCandidates,
+  type EvidenceFieldCandidate,
+  type EvidenceFieldCertainty,
+  type EvidenceFieldKind,
+} from "@/lib/evidence-reduction";
 
 let browser: Browser | null = null;
 const MAX_SEARCH_RESULTS = 6;
@@ -39,9 +45,13 @@ export interface BrowseResult {
 }
 
 export interface EvidenceField {
+  id: string;
   label: string;
   value: string;
   source: "meta" | "text" | "table" | "link" | "schema" | "json-ld";
+  kind: EvidenceFieldKind;
+  certainty: EvidenceFieldCertainty;
+  sourceUrl: string;
   untrusted: true;
 }
 
@@ -342,52 +352,77 @@ function collapseLines(lines: string[], maxCharacters: number): string {
 function buildEvidenceDocument(input: {
   finalUrl: string;
   title: string;
+  metaDescription?: string;
   contentType: string;
   redirectChain: string[];
   sourceUrls: string[];
-  textLines: string[];
-  notableLinks: string[];
+  headings: string[];
+  textBlocks: string[];
+  notableLinks: Array<{ label: string; url: string }>;
   tableRows: string[];
   structuredData?: StructuredPageData;
 }): EvidenceDocument {
-  const evidenceFields: EvidenceField[] = [];
-  const push = (label: string, value: string | undefined, source: EvidenceField["source"]) => {
-    const sanitized = sanitizeEvidenceText(value ?? "");
-
-    if (!sanitized) {
+  const candidates: EvidenceFieldCandidate[] = [];
+  const push = (
+    label: string,
+    value: string | undefined,
+    source: EvidenceField["source"],
+    kind: EvidenceFieldKind,
+    certainty: EvidenceFieldCertainty,
+    sourceUrl = input.finalUrl
+  ) => {
+    if (!value?.trim()) {
       return;
     }
 
-    evidenceFields.push({
+    candidates.push({
       label,
-      value: sanitized,
+      value,
       source,
-      untrusted: true,
+      kind,
+      certainty,
+      sourceUrl,
     });
   };
 
-  push("Page title", input.title, "meta");
+  push("Page title", input.title, "meta", "title", "high");
+  push("Meta description", input.metaDescription, "meta", "meta-description", "high");
 
-  for (const line of input.textLines.slice(0, 24)) {
-    push("Page text", line, "text");
+  for (const heading of input.headings) {
+    push("Heading", heading, "text", "heading", "medium");
   }
 
-  for (const row of input.tableRows.slice(0, 12)) {
-    push("Table row", row, "table");
+  for (const block of input.textBlocks) {
+    push("Text block", block, "text", "text-block", "low");
   }
 
-  for (const link of input.notableLinks.slice(0, 8)) {
-    push("Notable link", link, "link");
+  for (const row of input.tableRows) {
+    push("Table row", row, "table", "table-row", "medium");
+  }
+
+  for (const link of input.notableLinks) {
+    push("Notable link", `${link.label}: ${link.url}`, "link", "notable-link", "medium", link.url);
   }
 
   for (const line of buildStructuredDataLines(input.structuredData)) {
-    push("Structured evidence", line, line.startsWith("JSON-LD") ? "json-ld" : "schema");
+    push(
+      "Structured evidence",
+      line,
+      line.startsWith("JSON-LD") ? "json-ld" : "schema",
+      "structured",
+      "high"
+    );
   }
 
-  const evidenceSnippets = Array.from(new Set(evidenceFields.map((field) => `${field.label}: ${field.value}`))).slice(
-    0,
-    MAX_EVIDENCE_SNIPPETS
-  );
+  const documentId = createHash("sha256").update(input.finalUrl).digest("hex").slice(0, 8);
+  const evidenceFields: EvidenceField[] = reduceEvidenceFieldCandidates(candidates).map((field, index) => ({
+    id: `${documentId}-f${index + 1}`,
+    ...field,
+    untrusted: true,
+  }));
+  const evidenceSnippets = evidenceFields
+    .map((field) => `[${field.id}] ${field.label}: ${field.value}`)
+    .slice(0, MAX_EVIDENCE_SNIPPETS);
 
   return {
     finalUrl: input.finalUrl,
@@ -811,6 +846,14 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         document.querySelector("main, article, [role='main'], .main, #main") ??
         document.body;
       const container = root.cloneNode(true) as HTMLElement;
+      const isVisible = (element: Element | null) => {
+        if (!element || element.closest("[hidden], [aria-hidden='true']")) {
+          return false;
+        }
+
+        const style = window.getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+      };
 
       container
         .querySelectorAll(
@@ -818,70 +861,76 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         )
         .forEach((el) => el.remove());
 
-      const lines: string[] = [];
-      const pushLine = (value?: string | null) => {
+      const pushUnique = (bucket: string[], value?: string | null) => {
         const nextValue = value?.replace(/\s+/g, " ").trim();
 
-        if (!nextValue || lines.includes(nextValue)) {
+        if (!nextValue || bucket.includes(nextValue)) {
           return;
         }
 
-        lines.push(nextValue);
+        bucket.push(nextValue);
       };
 
-      pushLine(document.title);
-      pushLine(document.querySelector("meta[name='description']")?.getAttribute("content"));
+      const headings: string[] = [];
+      const textBlocks: string[] = [];
+      const tableRows: string[] = [];
+      const notableLinks: Array<{ label: string; url: string }> = [];
+      const metaDescription = document.querySelector("meta[name='description']")?.getAttribute("content") ?? "";
 
-      const textNodes = Array.from(
-        container.querySelectorAll("h1, h2, h3, p, li, blockquote, pre")
-      )
+      Array.from(container.querySelectorAll("h1, h2, h3"))
+        .filter((element) => isVisible(element))
         .map((element) => element.textContent)
         .filter((value): value is string => Boolean(value))
         .map((value) => value.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .forEach((value) => pushUnique(headings, value));
 
-        for (const value of textNodes) {
-          pushLine(value);
+      Array.from(container.querySelectorAll("p, li, blockquote, pre"))
+        .filter((element) => isVisible(element))
+        .map((element) => element.textContent)
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .forEach((value) => pushUnique(textBlocks, value));
+
+      for (const row of Array.from(container.querySelectorAll("table")).slice(0, 3)) {
+        if (!isVisible(row)) {
+          continue;
         }
 
-      const tableRows = Array.from(container.querySelectorAll("table"))
-        .slice(0, 3)
-        .flatMap((table) =>
-          Array.from(table.querySelectorAll("tr")).map((row) =>
-            Array.from(row.querySelectorAll("th, td"))
+        for (const tableRow of Array.from(row.querySelectorAll("tr"))) {
+          if (!isVisible(tableRow)) {
+            continue;
+          }
+
+          pushUnique(
+            tableRows,
+            Array.from(tableRow.querySelectorAll("th, td"))
               .map((cell) => cell.textContent?.replace(/\s+/g, " ").trim() ?? "")
               .filter(Boolean)
               .join(" | ")
-          )
-        )
-        .filter(Boolean);
-
-        for (const row of tableRows) {
-          pushLine(row);
+          );
         }
+      }
 
-      const notableLinks = Array.from(container.querySelectorAll("a[href]"))
+      Array.from(container.querySelectorAll("a[href]"))
+        .filter((link) => isVisible(link))
         .slice(0, 8)
-        .map((link) => {
+        .forEach((link) => {
           const label = link.textContent?.replace(/\s+/g, " ").trim() ?? "";
           const href = link.getAttribute("href") ?? "";
 
           if (!label || !href) {
-            return "";
+            return;
           }
 
           try {
             const absoluteUrl = new URL(href, document.baseURI).toString();
-            return `${label}: ${absoluteUrl}`;
+            notableLinks.push({ label, url: absoluteUrl });
           } catch {
-            return "";
+            return;
           }
-        })
-        .filter(Boolean);
-
-        for (const link of notableLinks) {
-          pushLine(link);
-        }
+        });
 
       const openGraph = Object.fromEntries(
         Array.from(document.querySelectorAll("meta[property]"))
@@ -912,13 +961,13 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
 
         return {
           title: document.title.trim(),
-          textLines: lines,
+          metaDescription,
+          headings,
+          textBlocks,
           notableLinks,
           tableRows,
-          sourceUrls: Array.from(new Set([document.location.href, ...notableLinks
-            .map((entry) => entry.split(": ").slice(1).join(": ").trim())
-            .filter(Boolean)])),
-          evidenceSnippets: lines.slice(0, maxEvidenceSnippets),
+          sourceUrls: Array.from(new Set([document.location.href, ...notableLinks.map((entry) => entry.url)])),
+          evidenceSnippets: [...headings, ...textBlocks].slice(0, maxEvidenceSnippets),
           structured: {
           canonicalUrl: document.querySelector("link[rel='canonical']")?.getAttribute("href") ?? "",
           openGraph,
@@ -938,10 +987,12 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
     const evidenceDocument = buildEvidenceDocument({
       finalUrl: page.url(),
       title: content.title,
+      metaDescription: content.metaDescription,
       contentType,
       redirectChain,
       sourceUrls: mergedSourceUrls,
-      textLines: content.textLines,
+      headings: content.headings,
+      textBlocks: content.textBlocks,
       notableLinks: content.notableLinks,
       tableRows: content.tableRows,
       structuredData,
