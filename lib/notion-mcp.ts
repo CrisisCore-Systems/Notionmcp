@@ -742,6 +742,19 @@ function buildQueuePropertyTypeLookup(
   return lookup;
 }
 
+function getQueuePropertyType(
+  entry: ResearchNotionQueueMetadata,
+  propertyName: string
+): NotionQueueWritablePropertyType | undefined {
+  const propertyType = entry.propertyTypes?.[propertyName];
+
+  return ["title", "rich_text", "url", "number", "select", "status", "date"].includes(
+    propertyType ?? ""
+  )
+    ? (propertyType as NotionQueueWritablePropertyType)
+    : undefined;
+}
+
 function buildNotionQueueRecommendedDirection(result: ResearchResult): string {
   const topCompetitors = result.items
     .map((item) => (typeof item.Name === "string" ? item.Name.trim() : ""))
@@ -893,18 +906,18 @@ function buildQueueLifecycleProperties(
           ? DEFAULT_NOTION_QUEUE_PACKET_READY_VALUE
           : DEFAULT_NOTION_QUEUE_ERROR_VALUE;
 
-  setQueuePropertyValue(properties, entry.statusProperty, entry.propertyTypes?.[entry.statusProperty], stageStatusValue, "text");
+  setQueuePropertyValue(properties, entry.statusProperty, getQueuePropertyType(entry, entry.statusProperty), stageStatusValue, "text");
   setQueuePropertyValue(
     properties,
     DEFAULT_NOTION_QUEUE_LAST_RUN_STATUS_PROPERTY,
-    entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_LAST_RUN_STATUS_PROPERTY],
+    getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_LAST_RUN_STATUS_PROPERTY),
     update.message ?? stageStatusValue,
     "text"
   );
   setQueuePropertyValue(
     properties,
     DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY,
-    entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY],
+    getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY),
     update.auditUrl ?? update.jobId,
     "text"
   );
@@ -913,21 +926,21 @@ function buildQueueLifecycleProperties(
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY),
       occurredAt,
       "date"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_CLAIMED_BY_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_CLAIMED_BY_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_CLAIMED_BY_PROPERTY),
       entry.claimedBy,
       "text"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_RUN_ID_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_RUN_ID_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_RUN_ID_PROPERTY),
       entry.runId,
       "text"
     );
@@ -938,49 +951,49 @@ function buildQueueLifecycleProperties(
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_LAST_RESEARCHED_AT_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_LAST_RESEARCHED_AT_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_LAST_RESEARCHED_AT_PROPERTY),
       occurredAt,
       "date"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_RESEARCH_SUMMARY_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_RESEARCH_SUMMARY_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_RESEARCH_SUMMARY_PROPERTY),
       result.summary,
       "text"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_RECOMMENDED_DIRECTION_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_RECOMMENDED_DIRECTION_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_RECOMMENDED_DIRECTION_PROPERTY),
       buildNotionQueueRecommendedDirection(result),
       "text"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_COMPETITORS_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_COMPETITORS_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_COMPETITORS_PROPERTY),
       buildNotionQueueCompetitors(result),
       "text"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_SOURCE_COUNT_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_SOURCE_COUNT_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_SOURCE_COUNT_PROPERTY),
       runMetadata?.sourceSet.length ?? 0,
       "number"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_EVIDENCE_BLOCK_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_EVIDENCE_BLOCK_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_EVIDENCE_BLOCK_PROPERTY),
       buildNotionQueueEvidenceBlock(result),
       "text"
     );
     setQueuePropertyValue(
       properties,
       DEFAULT_NOTION_QUEUE_CONFIDENCE_NOTE_PROPERTY,
-      entry.propertyTypes?.[DEFAULT_NOTION_QUEUE_CONFIDENCE_NOTE_PROPERTY],
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_CONFIDENCE_NOTE_PROPERTY),
       buildNotionQueueConfidenceNote(result),
       "text"
     );

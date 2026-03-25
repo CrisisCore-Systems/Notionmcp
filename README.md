@@ -34,12 +34,12 @@ Add `-- --json` if you want the same information as structured JSON.
 
 ## How it works
 
-1. **Notion is the control plane and queue**: the UI pulls the next ready backlog item from a Notion database via the default local MCP transport (`Status=Ready`, `Research Prompt`, and `Name` by default)
+1. **Notion is the control plane and queue**: the UI claims the next ready backlog item from a Notion database via the default local MCP transport (`Status=Ready`, `Research Prompt`, and `Name` by default), immediately moves it to `In Progress`, and records run metadata like `Claimed At`, `Claimed By`, and `Run ID`
 2. **A durable job** is created immediately for research or write work and persisted under `.notionmcp-data/jobs`
 3. **Gemini 2.0 Flash** plans the research, Playwright extracts normalized evidence documents, and a verifier synthesizes supported rows
 4. **The app validates and normalizes** the model payload before the approval UI ever renders it
 5. **You review** the structured data and proposed Notion schema
-6. **One click** writes the approved packet back into Notion, with continuous row checkpoints and resumable writes
+6. **One click** writes the approved packet back into Notion, with continuous row checkpoints, resumable writes, and original-row enrichment that moves the backlog item through `Needs Review` and `Packet Ready`
 
 The UI now exposes two reviewed research lanes:
 
@@ -260,6 +260,13 @@ The app now also renders a runtime banner when detached durable jobs are enabled
 the default deployment posture for a stateless hobby deploy.
 
 ## Example queue items / fallback prompts
+
+Recommended backlog properties for the strongest demo are:
+
+- `Status` with `Ready`, `In Progress`, `Needs Review`, `Packet Ready`, and `Error`
+- `Claimed At`, `Claimed By`, `Run ID`, and `Last Researched At`
+- `Research Summary`, `Recommended Direction`, `Competitors`, `Source Count`, `Last Run Status`, `Audit URL or Job ID`
+- `Evidence Block` and `Confidence Note`
 
 - "Research this backlog item: AI meeting notes assistant for product teams"
 - "Research this backlog item: lightweight CRM for solo consultants"
