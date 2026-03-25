@@ -6,7 +6,7 @@ import test from "node:test";
 import { POST as postResearch } from "@/app/api/research/route";
 import { POST as postWrite } from "@/app/api/write/route";
 import { jobRunnerTestOverrides } from "@/lib/job-runner";
-import { notionQueueTestOverrides } from "@/lib/notion-mcp";
+import { claimNextNotionQueueEntry, notionQueueTestOverrides } from "@/lib/notion-mcp";
 import { notionTestOverrides, type NotionProvider } from "@/lib/notion";
 import { RESEARCH_RUN_METADATA_KEY, type ResearchResult } from "@/lib/research-result";
 import { collectSseResponse, createPostRequest } from "@/tests/support/e2e";
@@ -26,6 +26,7 @@ test.afterEach(async () => {
   const directories = [process.env.JOB_STATE_DIR, process.env.WRITE_AUDIT_DIR].filter(Boolean) as string[];
   process.env = { ...ORIGINAL_ENV };
   delete jobRunnerTestOverrides.runResearchAgent;
+  delete notionQueueTestOverrides.callNotion;
   delete notionQueueTestOverrides.claimNextNotionQueueEntry;
   delete notionQueueTestOverrides.updateNotionQueueLifecycle;
   delete notionTestOverrides.provider;
@@ -225,4 +226,113 @@ test("ready item to reviewed packet claims the backlog row and writes lifecycle 
   assert.equal(writes.length, 1);
   assert.equal(lifecycleUpdates.at(-1)?.stage, "packet-ready");
   assert.ok((lifecycleUpdates.at(-1)?.auditUrl ?? "").includes("/api/write-audits/"));
+});
+
+test("claimNextNotionQueueEntry only allows one concurrent claimant per queue row on the same host", async () => {
+  const readyRow = {
+    id: "page-ready-1",
+    properties: {
+      Status: {
+        type: "status",
+        status: { name: "Ready" },
+      },
+      Name: {
+        type: "title",
+        title: [{ plain_text: "Acme backlog row" }],
+      },
+      Prompt: {
+        type: "rich_text",
+        rich_text: [{ plain_text: "Find Acme alternatives with public pricing pages" }],
+      },
+      "Claimed At": {
+        type: "date",
+        date: null,
+      },
+      "Claimed By": {
+        type: "rich_text",
+        rich_text: [],
+      },
+      "Run ID": {
+        type: "rich_text",
+        rich_text: [],
+      },
+      "Last Run Status": {
+        type: "rich_text",
+        rich_text: [],
+      },
+      "Audit URL or Job ID": {
+        type: "rich_text",
+        rich_text: [],
+      },
+    },
+  };
+  const updateCalls: Array<{ pageId: string; runId: string }> = [];
+
+  notionQueueTestOverrides.callNotion = async (tool, args) => {
+    if (tool === "notion_retrieve_database") {
+      return {
+        structuredContent: {
+          id: "db-claim-test",
+          data_sources: [{ id: "ds-claim-test" }],
+        },
+      };
+    }
+
+    if (tool === "notion_query_data_source") {
+      return {
+        structuredContent: {
+          results: [readyRow],
+          has_more: false,
+          next_cursor: null,
+        },
+      };
+    }
+
+    if (tool === "notion_update_page") {
+      updateCalls.push({
+        pageId: String(args.page_id),
+        runId:
+          (((args.properties as Record<string, unknown>)["Run ID"] as Record<string, unknown>).rich_text as Array<{
+            text?: { content?: string };
+          }>)[0]?.text?.content ?? "",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { structuredContent: { id: String(args.page_id) } };
+    }
+
+    throw new Error(`Unexpected Notion tool call in test: ${tool}`);
+  };
+
+  const queueConfig = {
+    databaseId: "db-claim-test",
+    statusProperty: "Status",
+    titleProperty: "Name",
+    promptProperty: "Prompt",
+    readyValue: "Ready",
+  };
+  const [firstClaim, secondClaim] = await Promise.allSettled([
+    claimNextNotionQueueEntry(queueConfig, {
+      runId: "run-1",
+      claimedBy: "Worker A",
+    }),
+    claimNextNotionQueueEntry(queueConfig, {
+      runId: "run-2",
+      claimedBy: "Worker B",
+    }),
+  ]);
+
+  const fulfilledClaims = [firstClaim, secondClaim].filter((result) => result.status === "fulfilled");
+  const rejectedClaims = [firstClaim, secondClaim].filter((result) => result.status === "rejected");
+
+  assert.equal(fulfilledClaims.length, 1);
+  assert.equal(rejectedClaims.length, 1);
+  assert.match(
+    rejectedClaims[0]?.reason instanceof Error
+      ? rejectedClaims[0].reason.message
+      : String(rejectedClaims[0]?.reason),
+    /No ready Notion queue items/
+  );
+  assert.equal(updateCalls.length, 1);
+  assert.equal(updateCalls[0]?.pageId, "page-ready-1");
+  assert.match(updateCalls[0]?.runId ?? "", /^run-[12]$/);
 });

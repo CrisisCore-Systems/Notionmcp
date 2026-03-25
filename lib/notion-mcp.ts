@@ -1,7 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 import {
   DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY,
   DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY,
@@ -119,6 +122,7 @@ const FULL_NOTION_WRITE_METADATA_SUPPORT: NotionWriteMetadataSupport = {
   confidenceScore: true,
   evidenceSummary: true,
 };
+const NOTION_QUEUE_CLAIM_LOCK_STALE_MS = 5 * 60 * 1000;
 const NOTION_QUEUE_WRITABLE_PROPERTY_TYPES = [
   "title",
   "rich_text",
@@ -130,6 +134,7 @@ const NOTION_QUEUE_WRITABLE_PROPERTY_TYPES = [
 ] as const satisfies readonly NotionQueueWritablePropertyType[];
 
 export const notionQueueTestOverrides: {
+  callNotion?: (tool: string, args: Record<string, unknown>) => Promise<NotionToolResponse>;
   claimNextNotionQueueEntry?: (
     input: NotionQueueConfig,
     options: { runId: string; claimedBy: string }
@@ -417,6 +422,10 @@ export async function callNotion(
   tool: string,
   args: Record<string, unknown>
 ): Promise<NotionToolResponse> {
+  if (notionQueueTestOverrides.callNotion) {
+    return await notionQueueTestOverrides.callNotion(tool, args);
+  }
+
   try {
     return await callNotionToolOnce(tool, args);
   } catch (error) {
@@ -494,6 +503,73 @@ async function getDataSourceId(databaseId: string): Promise<string> {
 
   dataSourceIdCache.set(databaseId, dataSourceId);
   return dataSourceId;
+}
+
+function getNotionQueueClaimLockDirectory(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.JOB_STATE_DIR?.trim();
+  return configured
+    ? path.join(configured, ".notion-queue-claim-locks")
+    : path.join(os.tmpdir(), "notionmcp-notion-queue-claim-locks");
+}
+
+function getNotionQueueClaimLockPath(databaseId: string, pageId: string): string {
+  const normalizedDatabaseId = databaseId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+  const normalizedPageId = pageId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+  return path.join(getNotionQueueClaimLockDirectory(), `${normalizedDatabaseId}-${normalizedPageId}.lock`);
+}
+
+async function removeNotionQueueClaimLock(lockPath: string): Promise<void> {
+  try {
+    await unlink(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+async function isStaleNotionQueueClaimLock(lockPath: string, now = Date.now()): Promise<boolean> {
+  try {
+    const details = await stat(lockPath);
+    return now - details.mtimeMs >= NOTION_QUEUE_CLAIM_LOCK_STALE_MS;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function tryAcquireNotionQueueClaimLock(
+  databaseId: string,
+  pageId: string,
+  runId: string,
+  allowStaleRetry = true
+): Promise<(() => Promise<void>) | null> {
+  const lockPath = getNotionQueueClaimLockPath(databaseId, pageId);
+  await mkdir(path.dirname(lockPath), { recursive: true });
+
+  try {
+    await writeFile(lockPath, `${JSON.stringify({ pageId, runId, pid: process.pid })}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    return async () => {
+      await removeNotionQueueClaimLock(lockPath);
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
+    }
+
+    if (allowStaleRetry && (await isStaleNotionQueueClaimLock(lockPath))) {
+      await removeNotionQueueClaimLock(lockPath);
+      return await tryAcquireNotionQueueClaimLock(databaseId, pageId, runId, false);
+    }
+
+    return null;
+  }
 }
 
 export async function getDatabaseMetadataSupport(
@@ -1243,34 +1319,44 @@ export async function claimNextNotionQueueEntry(
         continue;
       }
 
-      const title = getPagePropertyText(row, input.titleProperty);
-      const prompt = buildResearchPromptFromNotionQueueItem({
-        title,
-        prompt: getPagePropertyText(row, input.promptProperty),
-      });
+      const releaseClaimLock = await tryAcquireNotionQueueClaimLock(input.databaseId, row.id, options.runId);
 
-      if (!prompt) {
+      if (!releaseClaimLock) {
         continue;
       }
 
-      const entry: ClaimedNotionQueueEntry = {
-        databaseId: input.databaseId,
-        pageId: row.id,
-        title,
-        prompt,
-        statusProperty: input.statusProperty,
-        runId: options.runId,
-        claimedBy: options.claimedBy,
-        propertyTypes: buildQueuePropertyTypeLookup(row, input.statusProperty),
-      };
+      try {
+        const title = getPagePropertyText(row, input.titleProperty);
+        const prompt = buildResearchPromptFromNotionQueueItem({
+          title,
+          prompt: getPagePropertyText(row, input.promptProperty),
+        });
 
-      await updateNotionQueueLifecycle(entry, {
-        stage: "in-progress",
-        jobId: options.runId,
-        message: DEFAULT_NOTION_QUEUE_IN_PROGRESS_VALUE,
-      });
+        if (!prompt) {
+          continue;
+        }
 
-      return entry;
+        const entry: ClaimedNotionQueueEntry = {
+          databaseId: input.databaseId,
+          pageId: row.id,
+          title,
+          prompt,
+          statusProperty: input.statusProperty,
+          runId: options.runId,
+          claimedBy: options.claimedBy,
+          propertyTypes: buildQueuePropertyTypeLookup(row, input.statusProperty),
+        };
+
+        await updateNotionQueueLifecycle(entry, {
+          stage: "in-progress",
+          jobId: options.runId,
+          message: DEFAULT_NOTION_QUEUE_IN_PROGRESS_VALUE,
+        });
+
+        return entry;
+      } finally {
+        await releaseClaimLock();
+      }
     }
 
     nextCursor = queryResult?.has_more ? queryResult.next_cursor ?? null : null;
