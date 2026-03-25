@@ -112,6 +112,7 @@ test("job store detects tampering with persisted artifacts", async () => {
   if ("format" in parsed) {
     parsed.ciphertext = `A${parsed.ciphertext.slice(1)}`;
   } else {
+    // HMAC-SHA256 digests are 64 hex chars; replacing one character keeps the shape but breaks validation.
     parsed.integrity.mac = `${"0".repeat(63)}1`;
   }
 

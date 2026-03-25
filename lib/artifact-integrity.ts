@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const ARTIFACT_INTEGRITY_ALGORITHM = "hmac-sha256";
@@ -70,6 +70,11 @@ async function getLocalIntegritySecret(directory: string): Promise<string> {
   await mkdir(directory, { recursive: true });
   const secret = randomBytes(32).toString("base64url");
   await writeFile(secretPath, `${secret}\n`, { encoding: "utf8", mode: 0o600 });
+
+  if (process.platform !== "win32") {
+    await chmod(secretPath, 0o600);
+  }
+
   return secret;
 }
 
