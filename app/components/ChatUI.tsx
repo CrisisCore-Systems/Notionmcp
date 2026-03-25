@@ -127,6 +127,9 @@ export default function ChatUI() {
   const reviewedProfile = runMetadata?.search?.profile;
   const reviewedUniqueDomainCount = runMetadata?.search?.uniqueDomains?.length ?? 0;
   const reviewedSourceClassCount = runMetadata?.search?.sourceClasses?.length ?? 0;
+  const isStartActionEnabled = Boolean(
+    prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim())
+  );
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
     setLogs((prev) => [...prev, { type, message }]);
@@ -1118,15 +1121,15 @@ export default function ChatUI() {
               onClick={() => {
                 void startResearch();
               }}
-             disabled={!prompt.trim() && (!useNotionQueue || !notionQueueDatabaseId.trim())}
+              disabled={!isStartActionEnabled}
               style={{
                 marginTop: "1rem",
                 padding: "0.75rem 1.5rem",
-                background: prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim()) ? "#000" : "#ccc",
+                background: isStartActionEnabled ? "#000" : "#ccc",
                 color: "#fff",
                 border: "none",
                borderRadius: 8,
-               cursor: prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim()) ? "pointer" : "default",
+               cursor: isStartActionEnabled ? "pointer" : "default",
                fontSize: "0.95rem",
                fontWeight: 500,
              }}

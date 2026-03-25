@@ -119,6 +119,15 @@ const FULL_NOTION_WRITE_METADATA_SUPPORT: NotionWriteMetadataSupport = {
   confidenceScore: true,
   evidenceSummary: true,
 };
+const NOTION_QUEUE_WRITABLE_PROPERTY_TYPES = [
+  "title",
+  "rich_text",
+  "url",
+  "number",
+  "select",
+  "status",
+  "date",
+] as const satisfies readonly NotionQueueWritablePropertyType[];
 
 export const notionQueueTestOverrides: {
   claimNextNotionQueueEntry?: (
@@ -705,7 +714,7 @@ function getPagePropertyType(page: unknown, propertyName: string): NotionQueueWr
     return null;
   }
 
-  return ["title", "rich_text", "url", "number", "select", "status", "date"].includes(property.type)
+  return NOTION_QUEUE_WRITABLE_PROPERTY_TYPES.includes(property.type as NotionQueueWritablePropertyType)
     ? (property.type as NotionQueueWritablePropertyType)
     : null;
 }
@@ -748,11 +757,21 @@ function getQueuePropertyType(
 ): NotionQueueWritablePropertyType | undefined {
   const propertyType = entry.propertyTypes?.[propertyName];
 
-  return ["title", "rich_text", "url", "number", "select", "status", "date"].includes(
-    propertyType ?? ""
-  )
+  return NOTION_QUEUE_WRITABLE_PROPERTY_TYPES.includes(propertyType as NotionQueueWritablePropertyType)
     ? (propertyType as NotionQueueWritablePropertyType)
     : undefined;
+}
+
+function formatCompetitorList(items: string[]): string {
+  if (items.length <= 1) {
+    return items[0] ?? "";
+  }
+
+  if (items.length === 2) {
+    return `${items[0]} and ${items[1]}`;
+  }
+
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
 }
 
 function buildNotionQueueRecommendedDirection(result: ResearchResult): string {
@@ -769,8 +788,7 @@ function buildNotionQueueRecommendedDirection(result: ResearchResult): string {
     return `Review ${topCompetitors[0]} as the best-supported direction from this research packet.`;
   }
 
-  const [first, second, ...rest] = topCompetitors;
-  return `Review ${first}, ${second}${rest.length > 0 ? `, and ${rest.join(", ")}` : ""} as the best-supported directions from this packet.`;
+  return `Review ${formatCompetitorList(topCompetitors)} as the best-supported directions from this packet.`;
 }
 
 function buildNotionQueueCompetitors(result: ResearchResult): string {
@@ -850,7 +868,15 @@ function setQueuePropertyValue(
     return;
   }
 
-  const content = enforceNotionValueLimit(textValue, propertyType === "title" ? "title" : propertyType === "url" ? "url" : "rich_text");
+  let notionValueType: "title" | "url" | "rich_text" = "rich_text";
+
+  if (propertyType === "title") {
+    notionValueType = "title";
+  } else if (propertyType === "url") {
+    notionValueType = "url";
+  }
+
+  const content = enforceNotionValueLimit(textValue, notionValueType);
 
   if (propertyType === "status") {
     properties[propertyName] = { status: { name: content } };
