@@ -544,14 +544,13 @@ async function isStaleNotionQueueClaimLock(lockPath: string, now = Date.now()): 
 async function tryAcquireNotionQueueClaimLock(
   databaseId: string,
   pageId: string,
-  runId: string,
   allowStaleRetry = true
 ): Promise<(() => Promise<void>) | null> {
   const lockPath = getNotionQueueClaimLockPath(databaseId, pageId);
   await mkdir(path.dirname(lockPath), { recursive: true });
 
   try {
-    await writeFile(lockPath, `${JSON.stringify({ pageId, runId, pid: process.pid })}\n`, {
+    await writeFile(lockPath, "locked\n", {
       encoding: "utf8",
       flag: "wx",
     });
@@ -565,7 +564,7 @@ async function tryAcquireNotionQueueClaimLock(
 
     if (allowStaleRetry && (await isStaleNotionQueueClaimLock(lockPath))) {
       await removeNotionQueueClaimLock(lockPath);
-      return await tryAcquireNotionQueueClaimLock(databaseId, pageId, runId, false);
+      return await tryAcquireNotionQueueClaimLock(databaseId, pageId, false);
     }
 
     return null;
@@ -1319,23 +1318,23 @@ export async function claimNextNotionQueueEntry(
         continue;
       }
 
-      const releaseClaimLock = await tryAcquireNotionQueueClaimLock(input.databaseId, row.id, options.runId);
+      const title = getPagePropertyText(row, input.titleProperty);
+      const prompt = buildResearchPromptFromNotionQueueItem({
+        title,
+        prompt: getPagePropertyText(row, input.promptProperty),
+      });
+
+      if (!prompt) {
+        continue;
+      }
+
+      const releaseClaimLock = await tryAcquireNotionQueueClaimLock(input.databaseId, row.id);
 
       if (!releaseClaimLock) {
         continue;
       }
 
       try {
-        const title = getPagePropertyText(row, input.titleProperty);
-        const prompt = buildResearchPromptFromNotionQueueItem({
-          title,
-          prompt: getPagePropertyText(row, input.promptProperty),
-        });
-
-        if (!prompt) {
-          continue;
-        }
-
         const entry: ClaimedNotionQueueEntry = {
           databaseId: input.databaseId,
           pageId: row.id,

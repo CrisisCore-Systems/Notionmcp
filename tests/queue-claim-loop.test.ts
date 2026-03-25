@@ -267,6 +267,11 @@ test("claimNextNotionQueueEntry only allows one concurrent claimant per queue ro
     },
   };
   const updateCalls: Array<{ pageId: string; runId: string }> = [];
+  let queryCalls = 0;
+  let releaseQueryBarrier: (() => void) | undefined;
+  const queryBarrier = new Promise<void>((resolve) => {
+    releaseQueryBarrier = resolve;
+  });
 
   notionQueueTestOverrides.callNotion = async (tool, args) => {
     if (tool === "notion_retrieve_database") {
@@ -279,6 +284,14 @@ test("claimNextNotionQueueEntry only allows one concurrent claimant per queue ro
     }
 
     if (tool === "notion_query_data_source") {
+      queryCalls += 1;
+
+      if (queryCalls === 2) {
+        releaseQueryBarrier?.();
+      } else {
+        await queryBarrier;
+      }
+
       return {
         structuredContent: {
           results: [readyRow],
@@ -326,6 +339,7 @@ test("claimNextNotionQueueEntry only allows one concurrent claimant per queue ro
 
   assert.equal(fulfilledClaims.length, 1);
   assert.equal(rejectedClaims.length, 1);
+  assert.equal(queryCalls, 2);
   assert.match(
     rejectedClaims[0]?.reason instanceof Error
       ? rejectedClaims[0].reason.message
@@ -335,4 +349,5 @@ test("claimNextNotionQueueEntry only allows one concurrent claimant per queue ro
   assert.equal(updateCalls.length, 1);
   assert.equal(updateCalls[0]?.pageId, "page-ready-1");
   assert.match(updateCalls[0]?.runId ?? "", /^run-[12]$/);
+  assert.equal(fulfilledClaims[0]?.value.runId, updateCalls[0]?.runId);
 });
