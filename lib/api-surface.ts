@@ -130,7 +130,12 @@ export function getJobVerificationContract(env: NodeJS.ProcessEnv = process.env)
       "replayable event log",
       "checkpoint metadata for resumable work",
       "terminal result or error state",
+      "artifact integrity metadata with chained event hashes and HMAC attestation",
     ],
+    artifactIntegrity: {
+      status: "hmac-sha256-attested",
+      fields: ["recordHash", "previousHash", "mac", "keyId", "signedAt", "finalEventChainHash"],
+    },
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };
 }
@@ -148,7 +153,21 @@ export function getWriteAuditVerificationContract(env: NodeJS.ProcessEnv = proce
       "row-level operation-key outcomes",
       "reconciliation results",
       "provider lane used for the write",
+      "artifact integrity metadata with HMAC attestation",
     ],
+    artifactIntegrity: {
+      status: "hmac-sha256-attested",
+      fields: [
+        "recordHash",
+        "previousHash",
+        "mac",
+        "keyId",
+        "signedAt",
+        "sourceSetHash",
+        "rowOutcomesHash",
+        "auditPayloadHash",
+      ],
+    },
     providerArchitecture: providerState,
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };

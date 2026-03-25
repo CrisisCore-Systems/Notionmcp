@@ -44,6 +44,12 @@ test("durable job verification route returns persisted job state plus verificati
   });
   const payload = (await response.json()) as {
     id: string;
+    integrity: {
+      recordHash: string;
+      mac: string;
+      keyId: string;
+      signedAt: string;
+    };
     verificationContract: {
       kind: string;
       verificationArtifact: string;
@@ -53,6 +59,10 @@ test("durable job verification route returns persisted job state plus verificati
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-notionmcp-surface"), "durable-job-verification");
   assert.equal(payload.id, job.id);
+  assert.ok(payload.integrity.recordHash);
+  assert.ok(payload.integrity.mac);
+  assert.ok(payload.integrity.keyId);
+  assert.ok(payload.integrity.signedAt);
   assert.equal(payload.verificationContract.kind, "durable-job-verification");
   assert.equal(payload.verificationContract.verificationArtifact, "durable job state");
 });
@@ -90,6 +100,15 @@ test("write audit verification route returns persisted audit state plus verifica
   );
   const payload = (await response.json()) as {
     id: string;
+    integrity: {
+      recordHash: string;
+      mac: string;
+      keyId: string;
+      signedAt: string;
+      sourceSetHash: string;
+      rowOutcomesHash: string;
+      auditPayloadHash: string;
+    };
     verificationContract: {
       kind: string;
       verificationArtifact: string;
@@ -103,6 +122,13 @@ test("write audit verification route returns persisted audit state plus verifica
   assert.equal(response.headers.get("x-notionmcp-surface"), "write-audit-verification");
   assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
   assert.equal(payload.id, audit.id);
+  assert.ok(payload.integrity.recordHash);
+  assert.ok(payload.integrity.mac);
+  assert.ok(payload.integrity.keyId);
+  assert.ok(payload.integrity.signedAt);
+  assert.ok(payload.integrity.sourceSetHash);
+  assert.ok(payload.integrity.rowOutcomesHash);
+  assert.ok(payload.integrity.auditPayloadHash);
   assert.equal(payload.verificationContract.kind, "write-audit-verification");
   assert.equal(payload.verificationContract.verificationArtifact, "write audit trail");
   assert.equal(payload.verificationContract.providerArchitecture.mode, "direct-api");

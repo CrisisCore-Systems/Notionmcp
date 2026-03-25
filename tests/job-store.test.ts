@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
-import { mkdtemp, readFile, rm, utimes } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -46,6 +46,13 @@ test("job store persists events, checkpoints, and terminal state", async () => {
   assert.equal(loaded?.checkpoint?.evidenceDocumentCount, 2);
   assert.equal(loaded?.events.length, 2);
   assert.deepEqual(loaded?.result, { ok: true });
+  assert.ok(loaded?.integrity?.recordHash);
+  assert.ok(loaded?.integrity?.mac);
+  assert.ok(loaded?.integrity?.keyId);
+  assert.ok(loaded?.integrity?.signedAt);
+  assert.ok(loaded?.events[0]?.eventHash);
+  assert.equal(loaded?.events[1]?.previousEventHash, loaded?.events[0]?.eventHash);
+  assert.equal(loaded?.integrity?.finalEventChainHash, loaded?.events.at(-1)?.eventHash);
 });
 
 test("queued and stale running jobs are restartable", async () => {
@@ -83,6 +90,33 @@ test("job store encrypts persisted state when configured", async () => {
   assert.match(rawFile, /notionmcp-encrypted-state\/v1/);
   assert.doesNotMatch(rawFile, /Encrypted durable jobs/);
   assert.equal((loaded?.payload as { prompt?: string }).prompt, "Encrypted durable jobs");
+});
+
+test("job store detects tampering with persisted artifacts", async () => {
+  process.env.JOB_STATE_DIR = await mkdtemp(path.join(os.tmpdir(), "notionmcp-jobs-"));
+
+  const job = await createJob("research", { prompt: "Integrity-sensitive job" });
+  await markJobRunning(job.id, { pid: 1234 }, { phase: "planning" });
+  const jobPath = path.join(process.env.JOB_STATE_DIR, `${job.id}.json`);
+  const parsed = JSON.parse(await readFile(jobPath, "utf8")) as
+    | {
+        format: string;
+        ciphertext: string;
+      }
+    | {
+        integrity: {
+          mac: string;
+        };
+      };
+
+  if ("format" in parsed) {
+    parsed.ciphertext = `A${parsed.ciphertext.slice(1)}`;
+  } else {
+    parsed.integrity.mac = `${"0".repeat(63)}1`;
+  }
+
+  await writeFile(jobPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  await assert.rejects(async () => await loadJobRecord(job.id));
 });
 
 test("detached job workers resolve the shipped TS entrypoint through the runtime tsx CLI", async () => {
