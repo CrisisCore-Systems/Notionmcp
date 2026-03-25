@@ -2,6 +2,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createRequire } from "node:module";
+import {
+  buildResearchPromptFromNotionQueueItem,
+  type NotionQueueConfig,
+} from "@/lib/notion-queue";
 import type {
   DuplicateTracker,
   NotionSchema,
@@ -579,6 +583,54 @@ function getPagePropertyValue(
   return isRecord(select) && typeof select.name === "string" ? select.name.trim() : "";
 }
 
+function getPagePropertyText(page: unknown, propertyName: string): string {
+  if (!isRecord(page)) {
+    return "";
+  }
+
+  const properties = page.properties;
+
+  if (!isRecord(properties)) {
+    return "";
+  }
+
+  const property = properties[propertyName];
+
+  if (!isRecord(property)) {
+    return "";
+  }
+
+  const type = typeof property.type === "string" ? property.type : "";
+
+  if (type === "title") {
+    return extractPlainText(property.title);
+  }
+
+  if (type === "rich_text") {
+    return extractPlainText(property.rich_text);
+  }
+
+  if (type === "url") {
+    return typeof property.url === "string" ? property.url.trim() : "";
+  }
+
+  if (type === "number") {
+    return typeof property.number === "number" ? String(property.number) : "";
+  }
+
+  if (type === "select") {
+    const select = property.select;
+    return isRecord(select) && typeof select.name === "string" ? select.name.trim() : "";
+  }
+
+  if (type === "status") {
+    const status = property.status;
+    return isRecord(status) && typeof status.name === "string" ? status.name.trim() : "";
+  }
+
+  return "";
+}
+
 function buildDuplicateFingerprintFromPage(
   page: unknown,
   schema: NotionSchema
@@ -710,6 +762,57 @@ export async function createDuplicateTracker(
       }
     },
   };
+}
+
+export async function loadNextNotionQueueEntry(input: NotionQueueConfig): Promise<{
+  pageId: string;
+  title: string;
+  prompt: string;
+}> {
+  const dataSourceId = await getDataSourceId(input.databaseId);
+  const expectedReadyValue = input.readyValue.trim().toLowerCase();
+  let nextCursor: string | null | undefined = undefined;
+
+  do {
+    const result = await callNotion("notion_query_data_source", {
+      data_source_id: dataSourceId,
+      page_size: 25,
+      ...(nextCursor ? { start_cursor: nextCursor } : {}),
+    });
+    const queryResult = extractStructuredPayload(result, isQueryResult);
+
+    for (const row of queryResult?.results ?? []) {
+      if (!isRecordWithId(row)) {
+        continue;
+      }
+
+      const status = getPagePropertyText(row, input.statusProperty);
+
+      if (expectedReadyValue && status.trim().toLowerCase() !== expectedReadyValue) {
+        continue;
+      }
+
+      const title = getPagePropertyText(row, input.titleProperty);
+      const prompt = buildResearchPromptFromNotionQueueItem({
+        title,
+        prompt: getPagePropertyText(row, input.promptProperty),
+      });
+
+      if (!prompt) {
+        continue;
+      }
+
+      return {
+        pageId: row.id,
+        title,
+        prompt,
+      };
+    }
+
+    nextCursor = queryResult?.has_more ? queryResult.next_cursor ?? null : null;
+  } while (nextCursor);
+
+  throw new Error("No ready Notion queue items with a usable research prompt were found.");
 }
 
 export async function addRow(

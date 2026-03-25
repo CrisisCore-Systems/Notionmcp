@@ -1,16 +1,16 @@
-# Notion Research Agent
+# Notion MCP Backlog Desk
 
-Notionmcp is a **private, single-operator research workstation**. It is optimized for **reviewed research runs, controlled Notion writes, and auditability**. It is **not a multi-tenant SaaS**.
+Notionmcp is a **private, single-operator Notion backlog desk**. Notion is the workspace of record, MCP is the control plane that pulls the next ready item, and the app is the reviewed execution layer for durable research runs and audited write-back. It is **not a multi-tenant SaaS**.
 
 ## Repository profile
 
-- **Description**: Private operator research workstation for durable Gemini web research and audited Notion writes.
+- **Description**: Notion MCP backlog desk for durable reviewed research runs and audited Notion write-back.
 - **Topics**: `nextjs`, `gemini`, `notion`, `mcp`, `playwright`, `web-research`, `human-in-the-loop`, `private-operator-tool`
 - **Release tags**: `v0.2.1` (worker path + remote encryption hardening), `v0.2.x` (stability and evidence hardening). Mirror these in GitHub releases/tags so operators can verify what build they are running, and keep `CHANGELOG.md` aligned with each tag.
 
 ## What this repository is
 
-This repository is a **small runnable Next.js app** for a Notion research workflow built with **Next.js, Gemini, Playwright, and Notion provider adapters**. It is intended as a **private operator tool, not a public SaaS offering**.
+This repository is a **small runnable Next.js app** for one sharp Notion-native workflow: **pull the next ready backlog item from Notion via MCP, research it, review the result, and write the approved packet back into Notion**. It is built with **Next.js, Gemini, Playwright, and Notion provider adapters**, and it is intended as a **private operator tool, not a public SaaS offering**.
 
 It contains the core application pieces:
 
@@ -20,9 +20,9 @@ It contains the core application pieces:
 - a Gemini agent loop (`lib/agent.ts`)
 - Playwright browsing helpers (`lib/browser.ts`)
 - a Notion provider layer (`lib/notion/index.ts`)
-- a local MCP compatibility wrapper (`lib/notion-mcp.ts`)
+- a local Notion MCP control plane (`lib/notion-mcp.ts`)
 
-The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The default Notion path now talks directly to Notion's official REST API with the operator token you already configure. The pinned local `@notionhq/notion-mcp-server` package remains available as an explicit compatibility mode instead of being the only transport.
+The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The default Notion path now runs through the pinned local `@notionhq/notion-mcp-server` package so the visible workflow starts in Notion instead of treating MCP as compatibility plumbing. A direct Notion API lane remains available when you intentionally want that alternate execution path.
 
 To quickly crawl the repository and print its current state, run:
 
@@ -34,12 +34,12 @@ Add `-- --json` if you want the same information as structured JSON.
 
 ## How it works
 
-1. **You type a research prompt** (e.g. "Find the top 5 competitors to Linear")
+1. **Notion is the control plane**: the UI can pull the next ready backlog item from a Notion database via MCP (`Status=Ready`, `Research Prompt`, and `Name` by default)
 2. **A durable job** is created immediately for research or write work and persisted under `.notionmcp-data/jobs`
 3. **Gemini 2.0 Flash** plans the research, Playwright extracts normalized evidence documents, and a verifier synthesizes supported rows
 4. **The app validates and normalizes** the model payload before the approval UI ever renders it
 5. **You review** the structured data and proposed Notion schema
-6. **One click** writes everything to Notion via the configured provider mode, with continuous row checkpoints
+6. **One click** writes the approved packet back into Notion, with continuous row checkpoints and resumable writes
 
 The UI now exposes two reviewed research lanes:
 
@@ -73,7 +73,7 @@ can be opened in a browser or shared into the Notion app on Android.
 
 - **LLM**: Gemini 2.0 Flash (free via Google AI Studio)
 - **Search + browsing**: Serper, Brave, and DuckDuckGo provider support, plus Playwright for page browsing
-- **Notion integration**: Direct Notion API by default, optional local MCP compatibility mode
+- **Notion integration**: Local Notion MCP by default, optional direct API alternate lane
 - **Frontend**: Next.js 15 with streaming SSE
 
 When the app falls back to DuckDuckGo HTML search, the UI now labels that run as degraded mode instead of
@@ -109,12 +109,12 @@ non-HTML content types, and strips instruction-like text before the verifier see
 `app/api/write/route.ts` now talks to a provider layer under `lib/notion/` instead of binding directly
 to the local subprocess transport.
 
-- **`direct-api` (default)** — use the configured operator token against Notion's official REST API
-- **`local-mcp`** — keep using the bundled `@notionhq/notion-mcp-server` subprocess only as a legacy compatibility fallback
+- **`local-mcp` (default)** — use the bundled `@notionhq/notion-mcp-server` subprocess as the core Notion control plane for queue intake and reviewed writes
+- **`direct-api`** — use the configured operator token against Notion's official REST API when you intentionally want an alternate write lane
 
-The direct API path is the default because this repo is optimized for a private operator workflow with a
-single reviewed write lane. The local MCP transport stays available, but it is no longer the architectural spine
-and should be treated as quarantined compatibility plumbing rather than the canonical path.
+The MCP path is the default because this repo is optimized for a Notion-first operator workflow where the next unit
+of work starts in Notion instead of in a blank prompt box. The direct API path stays available, but it is now the
+alternate lane instead of the architectural spine.
 
 Both `/api/research` and `/api/write` now expose `GET` contracts that mirror this architecture story, while
 `/api/jobs/{jobId}` and `/api/write-audits/{auditId}` return persisted verification artifacts plus the contract
@@ -155,7 +155,7 @@ Fill in `.env.local`:
 | `NOTION_TOKEN` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) — create internal integration |
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 | `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by both provider modes |
-| `NOTION_PROVIDER` | Optional provider mode. `direct-api` is the default; set `local-mcp` only for the legacy subprocess compatibility path |
+| `NOTION_PROVIDER` | Optional provider mode. `local-mcp` is the default control-plane path; set `direct-api` only when you intentionally want the alternate write lane |
 | `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` | Optional local MCP replacement command and JSON-array args |
 | `WRITE_AUDIT_DIR` | Optional server-side directory for persisted write audit JSON records |
 | `WRITE_AUDIT_RETENTION_DAYS` | Optional retention window before old write-audit JSON files are removed. Defaults to 30 |
@@ -186,8 +186,9 @@ start because that deployment boundary depends on detached resumable workers plu
 
 The Notion provider layer pins the `Notion-Version` header to `2025-09-03` by default so the app does not
 silently drift with ambient API defaults. If you intentionally test a newer Notion API release, set
-`NOTION_API_VERSION` explicitly in `.env.local`. Leave `NOTION_PROVIDER` unset for the default direct API
-mode, or set `NOTION_PROVIDER=local-mcp` only if you intentionally want the bundled subprocess fallback.
+`NOTION_API_VERSION` explicitly in `.env.local`. Leave `NOTION_PROVIDER` unset for the default MCP
+control-plane mode, or set `NOTION_PROVIDER=direct-api` only if you intentionally want the alternate
+REST write lane.
 
 Every write now also persists a server-side JSON audit record outside transient UI state and returns a
 download link from the completion panel. The same completion panel now also links to the persisted durable
@@ -258,13 +259,13 @@ deployment only after additional hardening**.
 The app now also renders a runtime banner when detached durable jobs are enabled so operators do not mistake
 the default deployment posture for a stateless hobby deploy.
 
-## Example prompts
+## Example queue items / fallback prompts
 
-- "Find the top 5 competitors to Notion in the productivity space"
-- "Research the best free open-source React component libraries with GitHub stars"  
-- "List the top VC firms focused on AI startups with portfolio info"
-- "Find recent AI papers on reasoning and tool use from arXiv"
-- "Research job postings for senior React engineers at Series B startups"
+- "Research this backlog item: AI meeting notes assistant for product teams"
+- "Research this backlog item: lightweight CRM for solo consultants"
+- "Research this backlog item: privacy-first internal wiki for startups"
+- "Research this backlog item: customer interview repository with semantic search"
+- "Research this backlog item: procurement workspace for growing finance teams"
 
 ## Architecture
 
@@ -274,7 +275,7 @@ the default deployment posture for a stateless hobby deploy.
 - [SVG source](docs/architecture-overview.svg)
 
 ```
-User prompt
+Notion backlog queue via MCP
     ↓
 Durable research job
     ├── planner → search queries
@@ -287,12 +288,12 @@ Human approval UI ← YOU REVIEW HERE
     ↓
 Durable write job
     └── Notion provider layer
-        ├── direct-api (default)
-        └── local-mcp (compatibility mode)
+        ├── local-mcp (default control plane)
+        └── direct-api (alternate lane)
            with deterministic operation keys, row retries, reconciliation, continuous row checkpoints,
            and resumable job streaming
     ↓
-Notion database ✅
+Notion workspace ✅
 ```
 
 ## Failure and resume walkthrough

@@ -6,8 +6,8 @@ function createEnv(overrides: Partial<NodeJS.ProcessEnv> = {}): NodeJS.ProcessEn
   return { ...overrides, NODE_ENV: "test" } as NodeJS.ProcessEnv;
 }
 
-test("getConfiguredNotionProviderMode defaults to direct-api", () => {
-  assert.equal(getConfiguredNotionProviderMode(createEnv()), "direct-api");
+test("getConfiguredNotionProviderMode defaults to local-mcp", () => {
+  assert.equal(getConfiguredNotionProviderMode(createEnv()), "local-mcp");
 });
 
 test("getConfiguredNotionProviderMode accepts local MCP compatibility aliases", () => {
@@ -17,10 +17,10 @@ test("getConfiguredNotionProviderMode accepts local MCP compatibility aliases", 
   assert.equal(getConfiguredNotionProviderMode(createEnv({ NOTION_PROVIDER: "legacy-local-mcp" })), "local-mcp");
 });
 
-test("getCurrentNotionProviderState marks local MCP as a legacy fallback", () => {
-  assert.equal(getCurrentNotionProviderState(createEnv()).posture, "canonical");
+test("getCurrentNotionProviderState marks local MCP as the core control plane", () => {
+  assert.equal(getCurrentNotionProviderState(createEnv()).posture, "core-control-plane");
   assert.equal(
-    getCurrentNotionProviderState(createEnv({ NOTION_PROVIDER: "legacy-local-mcp" })).posture,
-    "legacy-fallback"
+    getCurrentNotionProviderState(createEnv({ NOTION_PROVIDER: "direct-api" })).posture,
+    "alternate-lane"
   );
 });

@@ -65,7 +65,30 @@ export async function processJob(jobId: string): Promise<void> {
 
   try {
     if (record.kind === "research") {
-      const payload = record.payload as { prompt?: string; researchMode?: string };
+      const payload = record.payload as {
+        prompt?: string;
+        researchMode?: string;
+        notionQueue?: {
+          pageId?: string;
+          title?: string;
+          databaseId?: string;
+        };
+      };
+
+      if (payload.notionQueue?.pageId) {
+        const queueLabel = payload.notionQueue.title?.trim() || payload.notionQueue.pageId;
+        await appendJobEvent(
+          jobId,
+          "update",
+          {
+            message: `Loaded Notion queue item "${queueLabel}" via MCP from database ${payload.notionQueue.databaseId}.`,
+          },
+          {
+            phase: "planning",
+          }
+        );
+      }
+
       const result = await (jobRunnerTestOverrides.runResearchAgent ?? runResearchAgent)(
         payload.prompt ?? "",
         async (message, checkpoint) => {

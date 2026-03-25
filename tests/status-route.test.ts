@@ -132,15 +132,15 @@ test("status route reports ready deployment details and persisted runtime counts
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-notionmcp-surface"), "system-status");
-  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
+  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "local-mcp");
   assert.ok(response.headers.get("x-request-id"));
   assert.equal(payload.ready, true);
   assert.equal(payload.deployment.mode, "localhost-operator");
   assert.equal(payload.deployment.readinessError, null);
-  assert.equal(payload.providerArchitecture.mode, "direct-api");
+  assert.equal(payload.providerArchitecture.mode, "local-mcp");
   assert.match(payload.diagnostics.processStartedAt, /\d{4}-\d{2}-\d{2}T/);
   assert.equal(payload.diagnostics.persistenceReady, true);
-  assert.equal(payload.diagnostics.providerMode, "direct-api");
+  assert.equal(payload.diagnostics.providerMode, "local-mcp");
   assert.match(payload.diagnostics.probes.firstStatusCheckAt ?? "", /\d{4}-\d{2}-\d{2}T/);
   assert.equal(payload.metrics.counters.jobsCreated, 2);
   assert.equal(payload.metrics.counters.operatorSurfaceChecks.status, 1);
@@ -180,7 +180,7 @@ test("status route returns 503 with readiness details when deployment settings a
 
   assert.equal(response.status, 503);
   assert.equal(response.headers.get("x-notionmcp-surface"), "system-status");
-  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
+  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "local-mcp");
   assert.ok(response.headers.get("x-request-id"));
   assert.equal(payload.ready, false);
   assert.match(payload.deployment.readinessError ?? "", /APP_ALLOWED_ORIGIN and APP_ACCESS_TOKEN/);

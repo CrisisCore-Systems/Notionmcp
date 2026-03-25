@@ -22,12 +22,21 @@ test("research route rejects an empty prompt before calling the agent", async ()
   const response = await postResearch(createRequest("http://localhost:3000/api/research", { prompt: "" }));
 
   assert.equal(response.status, 400);
-  assert.match(await response.text(), /Prompt is required/);
+  assert.match(await response.text(), /Prompt or notionQueue intake is required/);
 });
 
 test("research route publishes the fast and deep lane contract on GET", async () => {
   const response = await getResearch(createRequest("http://localhost:3000/api/research", {}));
   const payload = (await response.json()) as {
+    workflow: {
+      defaultEntry: string;
+    };
+    notionQueueIntake: {
+      transport: string;
+      defaults: {
+        promptProperty: string;
+      };
+    };
     researchModes: {
       default: string;
       available: Array<{
@@ -42,6 +51,9 @@ test("research route publishes the fast and deep lane contract on GET", async ()
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-notionmcp-surface"), "research-control");
+  assert.equal(payload.workflow.defaultEntry, "notion-mcp-queue");
+  assert.equal(payload.notionQueueIntake.transport, "local-mcp");
+  assert.equal(payload.notionQueueIntake.defaults.promptProperty, "Research Prompt");
   assert.equal(payload.researchModes.default, "fast");
   assert.deepEqual(
     payload.researchModes.available.map((entry) => entry.mode),
@@ -66,6 +78,19 @@ test("research route rejects unknown research lanes instead of silently falling 
   assert.match(await response.text(), /Supported values are: \\"fast\\", \\"deep\\"/);
 });
 
+test("research route rejects invalid Notion queue database IDs before touching MCP", async () => {
+  const response = await postResearch(
+    createRequest("http://localhost:3000/api/research", {
+      notionQueue: {
+        databaseId: "not-a-real-database-id",
+      },
+    })
+  );
+
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /valid Notion database ID is required for notionQueue intake/);
+});
+
 test("write route rejects an incomplete payload before touching Notion", async () => {
   const response = await postWrite(createRequest("http://localhost:3000/api/write", { foo: "bar" }));
 
@@ -85,9 +110,9 @@ test("write route publishes the provider and verification-artifact contract on G
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-notionmcp-surface"), "write-control");
-  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
-  assert.equal(payload.providerArchitecture.mode, "direct-api");
-  assert.equal(payload.providerArchitecture.posture, "canonical");
+  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "local-mcp");
+  assert.equal(payload.providerArchitecture.mode, "local-mcp");
+  assert.equal(payload.providerArchitecture.posture, "core-control-plane");
   assert.deepEqual(payload.verificationArtifacts, ["/api/jobs/{jobId}", "/api/write-audits/{auditId}"]);
 });
 

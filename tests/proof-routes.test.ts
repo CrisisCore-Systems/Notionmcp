@@ -120,7 +120,7 @@ test("write audit verification route returns persisted audit state plus verifica
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-notionmcp-surface"), "write-audit-verification");
-  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "direct-api");
+  assert.equal(response.headers.get("x-notionmcp-provider-mode"), "local-mcp");
   assert.equal(payload.id, audit.id);
   assert.ok(payload.integrity.recordHash);
   assert.ok(payload.integrity.mac);
@@ -131,5 +131,5 @@ test("write audit verification route returns persisted audit state plus verifica
   assert.ok(payload.integrity.auditPayloadHash);
   assert.equal(payload.verificationContract.kind, "write-audit-verification");
   assert.equal(payload.verificationContract.verificationArtifact, "write audit trail");
-  assert.equal(payload.verificationContract.providerArchitecture.mode, "direct-api");
+  assert.equal(payload.verificationContract.providerArchitecture.mode, "local-mcp");
 });
