@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { getResearchRouteContract, buildApiSurfaceHeaders } from "@/lib/api-surface";
 import { parseResearchMode } from "@/lib/agent";
@@ -8,7 +9,7 @@ import {
   getNotionQueueConfigValidationError,
   normalizeNotionQueueConfig,
 } from "@/lib/notion-queue";
-import { loadNextNotionQueueEntry } from "@/lib/notion-mcp";
+import { claimNextNotionQueueEntry, updateNotionQueueLifecycle } from "@/lib/notion-mcp";
 import {
   assertDeploymentReadiness,
   assertDurabilityExecutionReadiness,
@@ -128,25 +129,33 @@ export async function POST(req: NextRequest) {
           databaseId: string;
           pageId: string;
           title: string;
-          promptProperty: string;
-          titleProperty: string;
           statusProperty: string;
-          readyValue: string;
+          runId: string;
+          claimedBy: string;
+          propertyTypes?: Record<string, string>;
         }
       | undefined;
 
     if (notionQueue) {
       try {
-        const queueEntry = await loadNextNotionQueueEntry(notionQueue);
+        const runId = randomUUID();
+        const claimedBy =
+          process.env.NOTIONMCP_OPERATOR_NAME?.trim() ||
+          process.env.USER?.trim() ||
+          "Notion MCP Backlog Desk";
+        const queueEntry = await claimNextNotionQueueEntry(notionQueue, {
+          runId,
+          claimedBy,
+        });
         resolvedPrompt = queueEntry.prompt;
         resolvedNotionQueue = {
           databaseId: notionQueue.databaseId,
           pageId: queueEntry.pageId,
           title: queueEntry.title,
-          promptProperty: notionQueue.promptProperty,
-          titleProperty: notionQueue.titleProperty,
           statusProperty: notionQueue.statusProperty,
-          readyValue: notionQueue.readyValue,
+          runId: queueEntry.runId,
+          claimedBy: queueEntry.claimedBy,
+          propertyTypes: queueEntry.propertyTypes,
         };
       } catch (error) {
         return new Response(
@@ -167,12 +176,28 @@ export async function POST(req: NextRequest) {
     }
 
     await assertDurabilityExecutionReadiness();
-    const job = await createDurableJob("research", {
-      prompt: resolvedPrompt,
-      researchMode,
-      ...(resolvedNotionQueue ? { notionQueue: resolvedNotionQueue } : {}),
-    });
-    jobId = job.id;
+    try {
+      const job = await createDurableJob(
+        "research",
+        {
+          prompt: resolvedPrompt,
+          researchMode,
+          ...(resolvedNotionQueue ? { notionQueue: resolvedNotionQueue } : {}),
+        },
+        resolvedNotionQueue?.runId
+      );
+      jobId = job.id;
+    } catch (error) {
+      if (resolvedNotionQueue) {
+        await updateNotionQueueLifecycle(resolvedNotionQueue, {
+          stage: "error",
+          jobId: resolvedNotionQueue.runId,
+          message: error instanceof Error ? error.message : "Failed to create the durable research run.",
+        });
+      }
+
+      throw error;
+    }
   }
 
   await ensureJobWorker(jobId);

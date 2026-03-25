@@ -47,11 +47,22 @@ export interface ResearchSearchMetadata {
   };
 }
 
+export interface ResearchNotionQueueMetadata {
+  databaseId: string;
+  pageId: string;
+  title: string;
+  statusProperty: string;
+  runId: string;
+  claimedBy: string;
+  propertyTypes?: Record<string, string>;
+}
+
 export interface ResearchRunMetadata {
   sourceSet: string[];
   extractionCounts: ResearchExtractionCounts;
   rejectedUrls: string[];
   search?: ResearchSearchMetadata;
+  notionQueue?: ResearchNotionQueueMetadata;
 }
 
 export interface ResearchItem extends Record<string, unknown> {

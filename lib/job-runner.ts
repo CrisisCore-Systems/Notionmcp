@@ -16,8 +16,14 @@ import {
   type JobKind,
   type PersistedJobRecord,
 } from "@/lib/job-store";
+import { updateNotionQueueLifecycle } from "@/lib/notion-mcp";
 import { errorLog, incrementMetric, infoLog, warnLog } from "@/lib/observability";
 import { runResearchAgent } from "@/lib/agent";
+import {
+  RESEARCH_RUN_METADATA_KEY,
+  type ResearchNotionQueueMetadata,
+  type ResearchResult,
+} from "@/lib/research-result";
 import { executeWriteJob, WriteExecutionError, type WriteExecutionInput } from "@/lib/write-execution";
 
 const require = createRequire(import.meta.url);
@@ -27,8 +33,80 @@ export const jobRunnerTestOverrides: {
   executeWriteJob?: typeof executeWriteJob;
 } = {};
 
-export async function createDurableJob(kind: JobKind, payload: unknown): Promise<PersistedJobRecord> {
-  const record = await createJob(kind, payload);
+function getResearchQueueMetadata(
+  payload: {
+    notionQueue?: ResearchNotionQueueMetadata;
+  }
+): ResearchNotionQueueMetadata | undefined {
+  return payload.notionQueue?.pageId ? payload.notionQueue : undefined;
+}
+
+function getWriteQueueMetadata(payload: WriteExecutionInput): ResearchNotionQueueMetadata | undefined {
+  const runMetadata = payload[RESEARCH_RUN_METADATA_KEY];
+  return runMetadata?.notionQueue?.pageId ? runMetadata.notionQueue : undefined;
+}
+
+function attachQueueMetadataToResult(
+  result: ResearchResult,
+  notionQueue?: ResearchNotionQueueMetadata
+): ResearchResult {
+  if (!notionQueue) {
+    return result;
+  }
+
+  const existingRunMetadata = result[RESEARCH_RUN_METADATA_KEY];
+  return {
+    ...result,
+    [RESEARCH_RUN_METADATA_KEY]: {
+      sourceSet: existingRunMetadata?.sourceSet ?? [],
+      extractionCounts:
+        existingRunMetadata?.extractionCounts ?? {
+          searchQueries: 0,
+          candidateSources: 0,
+          pagesBrowsed: 0,
+          rowsExtracted: result.items.length,
+        },
+      rejectedUrls: existingRunMetadata?.rejectedUrls ?? [],
+      ...(existingRunMetadata?.search ? { search: existingRunMetadata.search } : {}),
+      notionQueue,
+    },
+  };
+}
+
+async function syncQueueLifecycleUpdate(
+  jobId: string,
+  notionQueue: ResearchNotionQueueMetadata | undefined,
+  update: Parameters<typeof updateNotionQueueLifecycle>[1],
+  successMessage: string,
+  failurePhase: string
+) {
+  if (!notionQueue) {
+    return;
+  }
+
+  try {
+    await updateNotionQueueLifecycle(notionQueue, update);
+    await appendJobEvent(jobId, "update", { message: successMessage }, { phase: failurePhase });
+  } catch (error) {
+    await appendJobEvent(
+      jobId,
+      "update",
+      {
+        message: `⚠️ Could not update the original Notion backlog row: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      },
+      { phase: failurePhase }
+    );
+  }
+}
+
+export async function createDurableJob(
+  kind: JobKind,
+  payload: unknown,
+  requestedId?: string
+): Promise<PersistedJobRecord> {
+  const record = await createJob(kind, payload, requestedId);
   incrementMetric("jobsCreated");
   infoLog("job-runner", "Created durable job.", {
     jobId: record.id,
@@ -68,20 +146,17 @@ export async function processJob(jobId: string): Promise<void> {
       const payload = record.payload as {
         prompt?: string;
         researchMode?: string;
-        notionQueue?: {
-          pageId?: string;
-          title?: string;
-          databaseId?: string;
-        };
+        notionQueue?: ResearchNotionQueueMetadata;
       };
+      const notionQueue = getResearchQueueMetadata(payload);
 
-      if (payload.notionQueue?.pageId) {
-        const queueLabel = payload.notionQueue.title?.trim() || payload.notionQueue.pageId;
+      if (notionQueue?.pageId) {
+        const queueLabel = notionQueue.title?.trim() || notionQueue.pageId;
         await appendJobEvent(
           jobId,
           "update",
           {
-            message: `Loaded Notion queue item "${queueLabel}" via MCP from database ${payload.notionQueue.databaseId}.`,
+            message: `Claimed Notion queue item "${queueLabel}" via MCP from database ${notionQueue.databaseId}.`,
           },
           {
             phase: "planning",
@@ -103,8 +178,22 @@ export async function processJob(jobId: string): Promise<void> {
         },
         { researchMode: payload.researchMode }
       );
+      const enrichedResult = attachQueueMetadataToResult(result, notionQueue);
 
-      await markJobComplete(jobId, result, {
+      await syncQueueLifecycleUpdate(
+        jobId,
+        notionQueue,
+        {
+          stage: "needs-review",
+          result: enrichedResult,
+          jobId,
+          message: "Needs Review",
+        },
+        `Moved the original Notion backlog row to Needs Review for run ${jobId}.`,
+        "complete"
+      );
+
+      await markJobComplete(jobId, enrichedResult, {
         phase: "complete",
       });
       infoLog("job-runner", "Completed research job.", {
@@ -115,6 +204,7 @@ export async function processJob(jobId: string): Promise<void> {
     }
 
     const payload = record.payload as WriteExecutionInput;
+    const notionQueue = getWriteQueueMetadata(payload);
     const resumedPayload: WriteExecutionInput = {
       ...payload,
       targetDatabaseId: record.checkpoint?.databaseId ?? payload.targetDatabaseId,
@@ -132,7 +222,21 @@ export async function processJob(jobId: string): Promise<void> {
         await appendJobEvent(jobId, "update", { message }, mergedCheckpoint);
         await touchJobHeartbeat(jobId, mergedCheckpoint);
       },
-    });
+      });
+
+    await syncQueueLifecycleUpdate(
+      jobId,
+      notionQueue,
+      {
+        stage: "packet-ready",
+        result: payload,
+        auditUrl: result.auditUrl,
+        jobId,
+        message: "Packet Ready",
+      },
+      `Updated the original Notion backlog row to Packet Ready for run ${notionQueue?.runId ?? jobId}.`,
+      "writing"
+    );
 
     await markJobComplete(jobId, result, {
       phase: "complete",
@@ -149,6 +253,21 @@ export async function processJob(jobId: string): Promise<void> {
     });
   } catch (error) {
     if (error instanceof WriteExecutionError) {
+      const payload = record.payload as WriteExecutionInput;
+      const notionQueue = getWriteQueueMetadata(payload);
+      await syncQueueLifecycleUpdate(
+        jobId,
+        notionQueue,
+        {
+          stage: "error",
+          result: payload,
+          auditUrl: error.details.auditUrl,
+          jobId,
+          message: error.details.message,
+        },
+        `Marked the original Notion backlog row as Error for run ${notionQueue?.runId ?? jobId}.`,
+        "error"
+      );
       incrementMetric("jobFailures");
       await markJobError(jobId, error.details, {
         phase: "error",
@@ -164,6 +283,38 @@ export async function processJob(jobId: string): Promise<void> {
         providerMode: error.details.providerMode,
       });
       return;
+    }
+
+    if (record.kind === "research") {
+      const payload = record.payload as {
+        notionQueue?: ResearchNotionQueueMetadata;
+      };
+      await syncQueueLifecycleUpdate(
+        jobId,
+        getResearchQueueMetadata(payload),
+        {
+          stage: "error",
+          jobId,
+          message: error instanceof Error ? error.message : String(error),
+        },
+        `Marked the original Notion backlog row as Error for run ${payload.notionQueue?.runId ?? jobId}.`,
+        "error"
+      );
+    } else {
+      const payload = record.payload as WriteExecutionInput;
+      const notionQueue = getWriteQueueMetadata(payload);
+      await syncQueueLifecycleUpdate(
+        jobId,
+        notionQueue,
+        {
+          stage: "error",
+          result: payload,
+          jobId,
+          message: error instanceof Error ? error.message : String(error),
+        },
+        `Marked the original Notion backlog row as Error for run ${notionQueue?.runId ?? jobId}.`,
+        "error"
+      );
     }
 
     incrementMetric("jobFailures");
