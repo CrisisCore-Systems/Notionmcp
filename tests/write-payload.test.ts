@@ -337,7 +337,7 @@ test("normalizeResearchResult preserves run metadata for downstream audit trails
       },
       rejectedUrls: ["https://example.com/blocked", "notaurl"],
       search: {
-        configuredProviders: ["serper", 123],
+        configuredProviders: ["serper", 123] as unknown as string[],
         usedProviders: ["serper", ""],
         degraded: false,
         mode: "deep",

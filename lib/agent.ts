@@ -22,8 +22,12 @@ const FAST_MODEL_NAME = "gemini-2.0-flash";
 const DEEP_MODEL_NAME = "gemini-2.5-pro";
 const MAX_RECONCILIATION_ATTEMPTS = 1;
 const DEFAULT_RESEARCH_MODE = "fast";
+// Treat longer multi-word values and values containing digits as non-trivial claims that need stronger evidence.
 const MIN_NONTRIVIAL_CLAIM_LENGTH = 24;
 const MIN_NONTRIVIAL_CLAIM_WORDS = 4;
+// Product and operational claims are the ones most likely to require a primary or official source in deep mode.
+const PRIMARY_SOURCE_REQUIRED_PATTERN =
+  /\b(?:price|pricing|api|docs?|documentation|feature|plan|release|version|support|integration)\b/i;
 
 const FAST_RESEARCH_ALIASES = new Set(["fast", "fast-lane", "bounded", "default"]);
 const DEEP_RESEARCH_ALIASES = new Set(["deep", "deep-research", "reviewed", "reviewed-deep"]);
@@ -281,6 +285,7 @@ export function buildDeepResearchBrowseQueue(
   const selectedDomains = new Set<string>();
   const selectedSourceClasses = new Set<SourceClass>();
   const domainCounts = new Map<string, number>();
+  const qualitySortedCandidates = [...candidates].sort((left, right) => right.qualityScore - left.qualityScore);
 
   const pushCandidate = (candidate: CandidateSource, ignoreDomainCap = false): boolean => {
     if (selected.length >= profile.maxEvidenceDocuments || selectedUrls.has(candidate.url)) {
@@ -329,13 +334,13 @@ export function buildDeepResearchBrowseQueue(
     }
   }
 
-  for (const candidate of [...candidates].sort((left, right) => right.qualityScore - left.qualityScore)) {
+  for (const candidate of qualitySortedCandidates) {
     pushCandidate(candidate);
   }
 
   // If the diversity-first passes and per-domain cap leave unused evidence budget, fill the remainder with the
   // best-ranked leftovers instead of ending the deep run early with avoidable empty slots.
-  for (const candidate of [...candidates].sort((left, right) => right.qualityScore - left.qualityScore)) {
+  for (const candidate of qualitySortedCandidates) {
     pushCandidate(candidate, true);
   }
 
@@ -661,9 +666,7 @@ export function validateResearchEvidenceCoverage(
 
         const requiresPrimarySource =
           getResearchProfile("deep").requirePrimarySourceWhenRelevant &&
-          /\b(?:price|pricing|api|docs?|documentation|feature|plan|release|version|support|integration)\b/i.test(
-            `${options.prompt ?? ""} ${fieldName} ${fieldValue}`
-          );
+          PRIMARY_SOURCE_REQUIRED_PATTERN.test(`${options.prompt ?? ""} ${fieldName} ${fieldValue}`);
 
         if (requiresPrimarySource && !citedSourceQuality.some((assessment) => assessment.primary || assessment.official)) {
           throw new Error(

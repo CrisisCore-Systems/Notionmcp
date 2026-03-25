@@ -11,6 +11,8 @@ export interface EvidenceAgreementAssessment {
 }
 
 export function extractComparableTokens(value: string): string[] {
+  // Extract the compact claim tokens most useful for contradiction detection: numeric amounts, months/dates,
+  // and small availability/pricing qualifiers that often distinguish one source from another.
   return Array.from(
     new Set(
       (value.toLowerCase().match(
@@ -47,16 +49,13 @@ export function assessCitationAgreement(
 
     if (tokens.some((token) => expectedTokens.includes(token))) {
       matchingSourceUrls.add(citation.sourceUrl);
-      conflictingSourceUrls.delete(citation.sourceUrl);
       continue;
     }
 
-    if (!matchingSourceUrls.has(citation.sourceUrl)) {
-      conflictingSourceUrls.add(citation.sourceUrl);
-    }
+    conflictingSourceUrls.add(citation.sourceUrl);
   }
 
-  const comparedSourceCount = matchingSourceUrls.size + conflictingSourceUrls.size;
+  const comparedSourceCount = new Set([...matchingSourceUrls, ...conflictingSourceUrls]).size;
 
   return {
     matchingSourceUrls: Array.from(matchingSourceUrls).sort((left, right) => left.localeCompare(right)),
