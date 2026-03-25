@@ -10,6 +10,7 @@ import { getCurrentNotionProviderState } from "@/lib/notion";
 export type ApiSurfaceKind =
   | "research-control"
   | "write-control"
+  | "system-status"
   | "durable-job-verification"
   | "write-audit-verification";
 
@@ -49,7 +50,7 @@ export function buildApiSurfaceHeaders(
 ): HeadersInit {
   const context = getApiSurfaceContext(env);
   const providerState =
-    kind === "write-control" || kind === "write-audit-verification"
+    kind === "write-control" || kind === "write-audit-verification" || kind === "system-status"
       ? getCurrentNotionProviderState(env)
       : null;
 
@@ -168,6 +169,25 @@ export function getWriteAuditVerificationContract(env: NodeJS.ProcessEnv = proce
         "auditPayloadHash",
       ],
     },
+    providerArchitecture: providerState,
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getStatusRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+  const providerState = getCurrentNotionProviderState(env);
+
+  return {
+    route: "/api/status",
+    kind: "system-status",
+    reports: [
+      "deployment readiness",
+      "durable execution mode",
+      "persisted job counts by kind and status",
+      "worker heartbeat freshness",
+      "persisted write-audit counts by status",
+    ],
     providerArchitecture: providerState,
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import {
   signArtifactIntegrity,
@@ -167,4 +168,28 @@ export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWr
 
     throw error;
   }
+}
+
+export async function listWriteAuditIds(): Promise<string[]> {
+  try {
+    const entries = await readdir(getWriteAuditDirectory(), { withFileTypes: true });
+
+    return entries
+      .filter((entry) => entry.isFile() && path.extname(entry.name) === ".json")
+      .map((entry) => path.basename(entry.name, ".json"))
+      .filter((auditId) => isValidWriteAuditId(auditId))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function listWriteAuditRecords(): Promise<PersistedWriteAuditRecord[]> {
+  const auditIds = await listWriteAuditIds();
+  const records = await Promise.all(auditIds.map((auditId) => loadWriteAuditRecord(auditId)));
+  return records.filter((record): record is PersistedWriteAuditRecord => record !== null);
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import {
   createEventIntegrity,
@@ -162,6 +163,30 @@ export async function loadJobRecord(jobId: string): Promise<PersistedJobRecord |
 
     throw error;
   }
+}
+
+export async function listJobIds(): Promise<string[]> {
+  try {
+    const entries = await readdir(getJobDirectory(), { withFileTypes: true });
+
+    return entries
+      .filter((entry) => entry.isFile() && path.extname(entry.name) === ".json")
+      .map((entry) => path.basename(entry.name, ".json"))
+      .filter((jobId) => isValidJobId(jobId))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function listJobRecords(): Promise<PersistedJobRecord[]> {
+  const jobIds = await listJobIds();
+  const records = await Promise.all(jobIds.map((jobId) => loadJobRecord(jobId)));
+  return records.filter((record): record is PersistedJobRecord => record !== null);
 }
 
 export async function updateJobRecord(
