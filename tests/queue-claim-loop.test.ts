@@ -301,6 +301,12 @@ test("claimNextNotionQueueEntry only allows one concurrent claimant per queue ro
       };
     }
 
+    if (tool === "notion_retrieve_page") {
+      return {
+        structuredContent: readyRow,
+      };
+    }
+
     if (tool === "notion_update_page") {
       updateCalls.push({
         pageId: String(args.page_id),
@@ -350,4 +356,95 @@ test("claimNextNotionQueueEntry only allows one concurrent claimant per queue ro
   assert.equal(updateCalls[0]?.pageId, "page-ready-1");
   assert.match(updateCalls[0]?.runId ?? "", /^run-[12]$/);
   assert.equal(fulfilledClaims[0]?.value.runId, updateCalls[0]?.runId);
+});
+
+test("claimNextNotionQueueEntry rechecks Notion before updating so stale ready reads do not overwrite another claim", async () => {
+  const queriedReadyRow = {
+    id: "page-ready-2",
+    properties: {
+      Status: {
+        type: "status",
+        status: { name: "Ready" },
+      },
+      Name: {
+        type: "title",
+        title: [{ plain_text: "Beta backlog row" }],
+      },
+      Prompt: {
+        type: "rich_text",
+        rich_text: [{ plain_text: "Research Beta's public security posture" }],
+      },
+    },
+  };
+  const updatedRow = {
+    ...queriedReadyRow,
+    properties: {
+      ...queriedReadyRow.properties,
+      Status: {
+        type: "status",
+        status: { name: "In Progress" },
+      },
+      "Run ID": {
+        type: "rich_text",
+        rich_text: [{ plain_text: "existing-run" }],
+      },
+    },
+  };
+  let updateCalls = 0;
+  let retrieveCalls = 0;
+
+  notionQueueTestOverrides.callNotion = async (tool) => {
+    if (tool === "notion_retrieve_database") {
+      return {
+        structuredContent: {
+          id: "db-claim-test",
+          data_sources: [{ id: "ds-claim-test" }],
+        },
+      };
+    }
+
+    if (tool === "notion_query_data_source") {
+      return {
+        structuredContent: {
+          results: [queriedReadyRow],
+          has_more: false,
+          next_cursor: null,
+        },
+      };
+    }
+
+    if (tool === "notion_retrieve_page") {
+      retrieveCalls += 1;
+      return {
+        structuredContent: updatedRow,
+      };
+    }
+
+    if (tool === "notion_update_page") {
+      updateCalls += 1;
+      return { structuredContent: { id: "page-ready-2" } };
+    }
+
+    throw new Error(`Unexpected Notion tool call in test: ${tool}`);
+  };
+
+  await assert.rejects(
+    claimNextNotionQueueEntry(
+      {
+        databaseId: "db-claim-test",
+        statusProperty: "Status",
+        titleProperty: "Name",
+        promptProperty: "Prompt",
+        readyValue: "Ready",
+      },
+      {
+        runId: "run-stale-read",
+        claimedBy: "Worker C",
+      }
+    ),
+    /No ready Notion queue items/
+  );
+
+  assert.equal(retrieveCalls, 1);
+  assert.equal(updateCalls, 0);
 });
