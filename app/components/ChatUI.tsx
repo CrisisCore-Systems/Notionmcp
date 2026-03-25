@@ -127,6 +127,9 @@ export default function ChatUI() {
   const reviewedProfile = runMetadata?.search?.profile;
   const reviewedUniqueDomainCount = runMetadata?.search?.uniqueDomains?.length ?? 0;
   const reviewedSourceClassCount = runMetadata?.search?.sourceClasses?.length ?? 0;
+  const isStartActionEnabled = Boolean(
+    prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim())
+  );
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
     setLogs((prev) => [...prev, { type, message }]);
@@ -319,14 +322,14 @@ export default function ChatUI() {
     setPendingWriteResume(null);
 
     try {
-      addLog(
-        jobId
-          ? `Reconnecting to research job ${jobId}...`
-          : useNotionQueue
-            ? `Starting research from the next ready Notion MCP queue item in ${notionQueueDatabaseId.trim()}...`
+        addLog(
+          jobId
+            ? `Reconnecting to research job ${jobId}...`
+            : useNotionQueue
+            ? `Processing the next ready Notion item from ${notionQueueDatabaseId.trim()} and claiming it in Notion...`
             : `Starting research: "${prompt}"`,
-        "info"
-      );
+          "info"
+        );
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -770,7 +773,7 @@ export default function ChatUI() {
           🔍 Notion MCP Backlog Desk
         </h1>
         <p style={{ color: "#666", marginTop: "0.5rem", fontSize: "0.9rem" }}>
-          Pull the next Notion queue item → research it → review the draft → write the approved packet back to Notion
+          Ready Item → Reviewed Packet: claim the next backlog row, research it, review it, and write the approved packet back into Notion
         </p>
       </div>
 
@@ -917,7 +920,7 @@ export default function ChatUI() {
           }}
         >
           <div style={{ fontSize: "0.9rem", color: "#155e75", marginBottom: "0.6rem" }}>
-            A {activeJob.kind} job is still running on the server. Reconnect to resume its live output.
+            A {activeJob.kind} run is still active on the server. Reconnect to resume the same live backlog claim.
           </div>
           <button
             onClick={() => {
@@ -938,7 +941,7 @@ export default function ChatUI() {
               fontSize: "0.85rem",
             }}
           >
-            Resume active job
+            Resume active run
           </button>
         </div>
       )}
@@ -962,13 +965,14 @@ export default function ChatUI() {
                 checked={useNotionQueue}
                 onChange={(event) => setUseNotionQueue(event.target.checked)}
               />
-              Start from the ready Notion intake queue (via MCP) instead of a blank prompt
+              Use the Notion backlog claim loop (claim Ready → In Progress via MCP) instead of a blank prompt
             </label>
             <div style={{ fontSize: "0.8rem", color: "#1e3a8a", lineHeight: 1.45 }}>
               Default queue contract: <strong>{DEFAULT_NOTION_QUEUE_STATUS_PROPERTY}</strong>=
-              <strong>{DEFAULT_NOTION_QUEUE_READY_VALUE}</strong>, title from{" "}
+              <strong>{DEFAULT_NOTION_QUEUE_READY_VALUE}</strong> is claimed into <strong>In Progress</strong>, title from{" "}
               <strong>{DEFAULT_NOTION_QUEUE_TITLE_PROPERTY}</strong>, research text from{" "}
-              <strong>{DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY}</strong>.
+              <strong>{DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY}</strong>, then the original row is enriched through{" "}
+              <strong>Needs Review</strong> and <strong>Packet Ready</strong>.
             </div>
             {useNotionQueue && (
               <div style={{ display: "grid", gap: "0.5rem" }}>
@@ -1117,21 +1121,21 @@ export default function ChatUI() {
               onClick={() => {
                 void startResearch();
               }}
-             disabled={!prompt.trim() && (!useNotionQueue || !notionQueueDatabaseId.trim())}
-             style={{
-               marginTop: "1rem",
-               padding: "0.75rem 1.5rem",
-               background: prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim()) ? "#000" : "#ccc",
-               color: "#fff",
-               border: "none",
-              borderRadius: 8,
-              cursor: prompt.trim() ? "pointer" : "default",
-              fontSize: "0.95rem",
-              fontWeight: 500,
-            }}
-          >
-            Start Research
-          </button>
+              disabled={!isStartActionEnabled}
+              style={{
+                marginTop: "1rem",
+                padding: "0.75rem 1.5rem",
+                background: isStartActionEnabled ? "#000" : "#ccc",
+                color: "#fff",
+                border: "none",
+               borderRadius: 8,
+               cursor: isStartActionEnabled ? "pointer" : "default",
+               fontSize: "0.95rem",
+               fontWeight: 500,
+             }}
+           >
+             {useNotionQueue ? "Process next ready item" : "Start research"}
+           </button>
         </div>
       )}
 

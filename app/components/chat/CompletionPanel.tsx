@@ -30,10 +30,10 @@ export function CompletionPanel({
         borderRadius: 8,
         padding: "1.25rem",
       }}
-    >
-      <div style={{ fontSize: "1rem", fontWeight: 600, color: "#166534", marginBottom: "0.5rem" }}>
-        ✅ Written to Notion!
-      </div>
+      >
+        <div style={{ fontSize: "1rem", fontWeight: 600, color: "#166534", marginBottom: "0.5rem" }}>
+          ✅ Packet Ready in Notion!
+        </div>
       {writeSummary && (
         <div
           style={{
@@ -191,7 +191,7 @@ export function CompletionPanel({
           fontSize: "0.9rem",
         }}
       >
-        New research
+        Process another item
       </button>
     </div>
   );

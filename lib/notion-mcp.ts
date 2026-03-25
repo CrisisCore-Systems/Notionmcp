@@ -3,6 +3,22 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createRequire } from "node:module";
 import {
+  DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY,
+  DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY,
+  DEFAULT_NOTION_QUEUE_CLAIMED_BY_PROPERTY,
+  DEFAULT_NOTION_QUEUE_COMPETITORS_PROPERTY,
+  DEFAULT_NOTION_QUEUE_CONFIDENCE_NOTE_PROPERTY,
+  DEFAULT_NOTION_QUEUE_ERROR_VALUE,
+  DEFAULT_NOTION_QUEUE_EVIDENCE_BLOCK_PROPERTY,
+  DEFAULT_NOTION_QUEUE_IN_PROGRESS_VALUE,
+  DEFAULT_NOTION_QUEUE_LAST_RESEARCHED_AT_PROPERTY,
+  DEFAULT_NOTION_QUEUE_LAST_RUN_STATUS_PROPERTY,
+  DEFAULT_NOTION_QUEUE_NEEDS_REVIEW_VALUE,
+  DEFAULT_NOTION_QUEUE_PACKET_READY_VALUE,
+  DEFAULT_NOTION_QUEUE_RECOMMENDED_DIRECTION_PROPERTY,
+  DEFAULT_NOTION_QUEUE_RESEARCH_SUMMARY_PROPERTY,
+  DEFAULT_NOTION_QUEUE_RUN_ID_PROPERTY,
+  DEFAULT_NOTION_QUEUE_SOURCE_COUNT_PROPERTY,
   buildResearchPromptFromNotionQueueItem,
   type NotionQueueConfig,
 } from "@/lib/notion-queue";
@@ -12,7 +28,12 @@ import type {
   NotionWriteMetadataSupport,
 } from "@/lib/notion/provider";
 import { enforceNotionValueLimit, isValidHttpUrl } from "@/lib/notion-validation";
-import type { ResearchItem } from "@/lib/research-result";
+import {
+  RESEARCH_RUN_METADATA_KEY,
+  type ResearchItem,
+  type ResearchNotionQueueMetadata,
+  type ResearchResult,
+} from "@/lib/research-result";
 import type { RowWriteMetadata } from "@/lib/write-audit";
 
 let mcpClient: Client | null = null;
@@ -23,6 +44,7 @@ export const DEFAULT_NOTION_API_VERSION = "2025-09-03";
 const TOOL_NAME_ALIASES: Record<string, string[]> = {
   notion_create_database: ["create-a-data-source", "API-create-a-data-source", "notion_create_database"],
   notion_create_page: ["post-page", "API-post-page", "notion_create_page"],
+  notion_update_page: ["patch-page", "API-patch-page", "notion_update_page"],
   notion_retrieve_database: ["retrieve-a-database", "API-retrieve-a-database", "notion_retrieve_database"],
   notion_query_data_source: ["query-data-source", "API-query-data-source", "notion_query_data_source"],
 };
@@ -54,6 +76,30 @@ interface NotionQueryResult {
   next_cursor?: string | null;
 }
 
+type NotionQueueWritablePropertyType =
+  | "title"
+  | "rich_text"
+  | "url"
+  | "number"
+  | "select"
+  | "status"
+  | "date";
+
+type ClaimedNotionQueueEntry = ResearchNotionQueueMetadata & {
+  prompt: string;
+};
+
+type QueueLifecycleStage = "in-progress" | "needs-review" | "packet-ready" | "error";
+
+type QueueLifecycleUpdateInput = {
+  stage: QueueLifecycleStage;
+  result?: ResearchResult;
+  auditUrl?: string;
+  jobId?: string;
+  message?: string;
+  occurredAt?: string;
+};
+
 type NotionTransportFactory = () => Transport;
 type NotionMcpLaunchSpec = {
   command: string;
@@ -73,6 +119,26 @@ const FULL_NOTION_WRITE_METADATA_SUPPORT: NotionWriteMetadataSupport = {
   confidenceScore: true,
   evidenceSummary: true,
 };
+const NOTION_QUEUE_WRITABLE_PROPERTY_TYPES = [
+  "title",
+  "rich_text",
+  "url",
+  "number",
+  "select",
+  "status",
+  "date",
+] as const satisfies readonly NotionQueueWritablePropertyType[];
+
+export const notionQueueTestOverrides: {
+  claimNextNotionQueueEntry?: (
+    input: NotionQueueConfig,
+    options: { runId: string; claimedBy: string }
+  ) => Promise<ClaimedNotionQueueEntry>;
+  updateNotionQueueLifecycle?: (
+    entry: ResearchNotionQueueMetadata,
+    update: QueueLifecycleUpdateInput
+  ) => Promise<void>;
+} = {};
 
 /** Read a required environment variable or throw a setup error. */
 function getRequiredEnv(name: "NOTION_TOKEN" | "NOTION_PARENT_PAGE_ID"): string {
@@ -631,6 +697,337 @@ function getPagePropertyText(page: unknown, propertyName: string): string {
   return "";
 }
 
+function getPagePropertyType(page: unknown, propertyName: string): NotionQueueWritablePropertyType | null {
+  if (!isRecord(page)) {
+    return null;
+  }
+
+  const properties = page.properties;
+
+  if (!isRecord(properties)) {
+    return null;
+  }
+
+  const property = properties[propertyName];
+
+  if (!isRecord(property) || typeof property.type !== "string") {
+    return null;
+  }
+
+  return NOTION_QUEUE_WRITABLE_PROPERTY_TYPES.includes(property.type as NotionQueueWritablePropertyType)
+    ? (property.type as NotionQueueWritablePropertyType)
+    : null;
+}
+
+function buildQueuePropertyTypeLookup(
+  page: unknown,
+  statusProperty: string
+): Record<string, NotionQueueWritablePropertyType> {
+  const propertyNames = [
+    statusProperty,
+    DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY,
+    DEFAULT_NOTION_QUEUE_CLAIMED_BY_PROPERTY,
+    DEFAULT_NOTION_QUEUE_RUN_ID_PROPERTY,
+    DEFAULT_NOTION_QUEUE_LAST_RESEARCHED_AT_PROPERTY,
+    DEFAULT_NOTION_QUEUE_RESEARCH_SUMMARY_PROPERTY,
+    DEFAULT_NOTION_QUEUE_RECOMMENDED_DIRECTION_PROPERTY,
+    DEFAULT_NOTION_QUEUE_COMPETITORS_PROPERTY,
+    DEFAULT_NOTION_QUEUE_SOURCE_COUNT_PROPERTY,
+    DEFAULT_NOTION_QUEUE_LAST_RUN_STATUS_PROPERTY,
+    DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY,
+    DEFAULT_NOTION_QUEUE_EVIDENCE_BLOCK_PROPERTY,
+    DEFAULT_NOTION_QUEUE_CONFIDENCE_NOTE_PROPERTY,
+  ];
+  const lookup: Record<string, NotionQueueWritablePropertyType> = {};
+
+  for (const propertyName of propertyNames) {
+    const propertyType = getPagePropertyType(page, propertyName);
+
+    if (propertyType) {
+      lookup[propertyName] = propertyType;
+    }
+  }
+
+  return lookup;
+}
+
+function getQueuePropertyType(
+  entry: ResearchNotionQueueMetadata,
+  propertyName: string
+): NotionQueueWritablePropertyType | undefined {
+  const propertyType = entry.propertyTypes?.[propertyName];
+
+  return NOTION_QUEUE_WRITABLE_PROPERTY_TYPES.includes(propertyType as NotionQueueWritablePropertyType)
+    ? (propertyType as NotionQueueWritablePropertyType)
+    : undefined;
+}
+
+function formatCompetitorList(items: string[]): string {
+  if (items.length <= 1) {
+    return items[0] ?? "";
+  }
+
+  if (items.length === 2) {
+    return `${items[0]} and ${items[1]}`;
+  }
+
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+}
+
+function buildNotionQueueRecommendedDirection(result: ResearchResult): string {
+  const topCompetitors = result.items
+    .map((item) => (typeof item.Name === "string" ? item.Name.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 3);
+
+  if (topCompetitors.length === 0) {
+    return "Review the researched packet and decide whether to proceed with the current direction.";
+  }
+
+  if (topCompetitors.length === 1) {
+    return `Review ${topCompetitors[0]} as the best-supported direction from this research packet.`;
+  }
+
+  return `Review ${formatCompetitorList(topCompetitors)} as the best-supported directions from this packet.`;
+}
+
+function buildNotionQueueCompetitors(result: ResearchResult): string {
+  return result.items
+    .map((item) => (typeof item.Name === "string" ? item.Name.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 8)
+    .join(", ");
+}
+
+function buildNotionQueueEvidenceBlock(result: ResearchResult): string {
+  const runMetadata = result[RESEARCH_RUN_METADATA_KEY];
+  const strongestSources = runMetadata?.search?.sourceQuality?.strongestSourceUrls ?? [];
+  const topSources = [...strongestSources, ...(runMetadata?.sourceSet ?? [])]
+    .map((url) => url.trim())
+    .filter(Boolean)
+    .filter((url, index, list) => list.indexOf(url) === index)
+    .slice(0, 3);
+  const sourceCount = runMetadata?.sourceSet.length ?? topSources.length;
+
+  if (topSources.length === 0 && sourceCount === 0) {
+    return "";
+  }
+
+  const lines = [`Top sources (${topSources.length}/${sourceCount}):`, ...topSources.map((url, index) => `${index + 1}. ${url}`)];
+  return lines.join("\n");
+}
+
+function buildNotionQueueConfidenceNote(result: ResearchResult): string {
+  const runMetadata = result[RESEARCH_RUN_METADATA_KEY];
+  const mode = runMetadata?.search?.mode ?? "fast";
+  const sourceCount = runMetadata?.sourceSet.length ?? 0;
+  const averageScore = runMetadata?.search?.sourceQuality?.averageScore;
+  const degradedSuffix = runMetadata?.search?.degraded ? " Search degraded gracefully during collection." : "";
+
+  return `Reviewed ${mode} lane packet backed by ${sourceCount} source${
+    sourceCount === 1 ? "" : "s"
+  }${typeof averageScore === "number" ? ` with average source quality ${averageScore.toFixed(1)}.` : "."}${degradedSuffix}`.trim();
+}
+
+function setQueuePropertyValue(
+  properties: Record<string, unknown>,
+  propertyName: string,
+  propertyType: NotionQueueWritablePropertyType | undefined,
+  value: string | number | undefined,
+  kind: "text" | "number" | "date"
+) {
+  if (!propertyType || value === undefined || value === "") {
+    return;
+  }
+
+  if (kind === "number") {
+    const normalizedNumber = typeof value === "number" ? value : Number(value);
+
+    if (!Number.isFinite(normalizedNumber)) {
+      return;
+    }
+
+    if (propertyType === "number") {
+      properties[propertyName] = { number: normalizedNumber };
+      return;
+    }
+
+    value = String(normalizedNumber);
+  }
+
+  if (kind === "date" && typeof value === "string") {
+    if (propertyType === "date") {
+      properties[propertyName] = { date: { start: value } };
+      return;
+    }
+  }
+
+  const textValue = typeof value === "string" ? value : String(value);
+
+  if (!textValue.trim()) {
+    return;
+  }
+
+  let notionValueType: "title" | "url" | "rich_text" = "rich_text";
+
+  if (propertyType === "title") {
+    notionValueType = "title";
+  } else if (propertyType === "url") {
+    notionValueType = "url";
+  }
+
+  const content = enforceNotionValueLimit(textValue, notionValueType);
+
+  if (propertyType === "status") {
+    properties[propertyName] = { status: { name: content } };
+    return;
+  }
+
+  if (propertyType === "select") {
+    properties[propertyName] = { select: { name: content } };
+    return;
+  }
+
+  if (propertyType === "url" && isValidHttpUrl(content)) {
+    properties[propertyName] = { url: content };
+    return;
+  }
+
+  if (propertyType === "title") {
+    properties[propertyName] = { title: [{ text: { content } }] };
+    return;
+  }
+
+  if (propertyType === "number") {
+    const normalizedNumber = Number(textValue);
+
+    if (Number.isFinite(normalizedNumber)) {
+      properties[propertyName] = { number: normalizedNumber };
+    }
+    return;
+  }
+
+  if (propertyType === "date") {
+    properties[propertyName] = { date: { start: textValue } };
+    return;
+  }
+
+  properties[propertyName] = { rich_text: [{ text: { content } }] };
+}
+
+function buildQueueLifecycleProperties(
+  entry: ResearchNotionQueueMetadata,
+  update: QueueLifecycleUpdateInput
+): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const occurredAt = update.occurredAt ?? new Date().toISOString();
+  const result = update.result;
+  const runMetadata = result?.[RESEARCH_RUN_METADATA_KEY];
+  const stageStatusValue =
+    update.stage === "in-progress"
+      ? DEFAULT_NOTION_QUEUE_IN_PROGRESS_VALUE
+      : update.stage === "needs-review"
+        ? DEFAULT_NOTION_QUEUE_NEEDS_REVIEW_VALUE
+        : update.stage === "packet-ready"
+          ? DEFAULT_NOTION_QUEUE_PACKET_READY_VALUE
+          : DEFAULT_NOTION_QUEUE_ERROR_VALUE;
+
+  setQueuePropertyValue(properties, entry.statusProperty, getQueuePropertyType(entry, entry.statusProperty), stageStatusValue, "text");
+  setQueuePropertyValue(
+    properties,
+    DEFAULT_NOTION_QUEUE_LAST_RUN_STATUS_PROPERTY,
+    getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_LAST_RUN_STATUS_PROPERTY),
+    update.message ?? stageStatusValue,
+    "text"
+  );
+  setQueuePropertyValue(
+    properties,
+    DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY,
+    getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY),
+    update.auditUrl ?? update.jobId,
+    "text"
+  );
+
+  if (update.stage === "in-progress") {
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY),
+      occurredAt,
+      "date"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_CLAIMED_BY_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_CLAIMED_BY_PROPERTY),
+      entry.claimedBy,
+      "text"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_RUN_ID_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_RUN_ID_PROPERTY),
+      entry.runId,
+      "text"
+    );
+    return properties;
+  }
+
+  if (result) {
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_LAST_RESEARCHED_AT_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_LAST_RESEARCHED_AT_PROPERTY),
+      occurredAt,
+      "date"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_RESEARCH_SUMMARY_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_RESEARCH_SUMMARY_PROPERTY),
+      result.summary,
+      "text"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_RECOMMENDED_DIRECTION_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_RECOMMENDED_DIRECTION_PROPERTY),
+      buildNotionQueueRecommendedDirection(result),
+      "text"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_COMPETITORS_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_COMPETITORS_PROPERTY),
+      buildNotionQueueCompetitors(result),
+      "text"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_SOURCE_COUNT_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_SOURCE_COUNT_PROPERTY),
+      runMetadata?.sourceSet.length ?? 0,
+      "number"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_EVIDENCE_BLOCK_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_EVIDENCE_BLOCK_PROPERTY),
+      buildNotionQueueEvidenceBlock(result),
+      "text"
+    );
+    setQueuePropertyValue(
+      properties,
+      DEFAULT_NOTION_QUEUE_CONFIDENCE_NOTE_PROPERTY,
+      getQueuePropertyType(entry, DEFAULT_NOTION_QUEUE_CONFIDENCE_NOTE_PROPERTY),
+      buildNotionQueueConfidenceNote(result),
+      "text"
+    );
+  }
+
+  return properties;
+}
+
 function buildDuplicateFingerprintFromPage(
   page: unknown,
   schema: NotionSchema
@@ -813,6 +1210,94 @@ export async function loadNextNotionQueueEntry(input: NotionQueueConfig): Promis
   } while (nextCursor);
 
   throw new Error("No ready Notion queue items with a usable research prompt were found.");
+}
+
+export async function claimNextNotionQueueEntry(
+  input: NotionQueueConfig,
+  options: { runId: string; claimedBy: string }
+): Promise<ClaimedNotionQueueEntry> {
+  if (notionQueueTestOverrides.claimNextNotionQueueEntry) {
+    return await notionQueueTestOverrides.claimNextNotionQueueEntry(input, options);
+  }
+
+  const dataSourceId = await getDataSourceId(input.databaseId);
+  const expectedReadyValue = input.readyValue.trim().toLowerCase();
+  let nextCursor: string | null | undefined = undefined;
+
+  do {
+    const result = await callNotion("notion_query_data_source", {
+      data_source_id: dataSourceId,
+      page_size: 25,
+      ...(nextCursor ? { start_cursor: nextCursor } : {}),
+    });
+    const queryResult = extractStructuredPayload(result, isQueryResult);
+
+    for (const row of queryResult?.results ?? []) {
+      if (!isRecordWithId(row)) {
+        continue;
+      }
+
+      const status = getPagePropertyText(row, input.statusProperty);
+
+      if (expectedReadyValue && status.trim().toLowerCase() !== expectedReadyValue) {
+        continue;
+      }
+
+      const title = getPagePropertyText(row, input.titleProperty);
+      const prompt = buildResearchPromptFromNotionQueueItem({
+        title,
+        prompt: getPagePropertyText(row, input.promptProperty),
+      });
+
+      if (!prompt) {
+        continue;
+      }
+
+      const entry: ClaimedNotionQueueEntry = {
+        databaseId: input.databaseId,
+        pageId: row.id,
+        title,
+        prompt,
+        statusProperty: input.statusProperty,
+        runId: options.runId,
+        claimedBy: options.claimedBy,
+        propertyTypes: buildQueuePropertyTypeLookup(row, input.statusProperty),
+      };
+
+      await updateNotionQueueLifecycle(entry, {
+        stage: "in-progress",
+        jobId: options.runId,
+        message: DEFAULT_NOTION_QUEUE_IN_PROGRESS_VALUE,
+      });
+
+      return entry;
+    }
+
+    nextCursor = queryResult?.has_more ? queryResult.next_cursor ?? null : null;
+  } while (nextCursor);
+
+  throw new Error("No ready Notion queue items with a usable research prompt were found.");
+}
+
+export async function updateNotionQueueLifecycle(
+  entry: ResearchNotionQueueMetadata,
+  update: QueueLifecycleUpdateInput
+): Promise<void> {
+  if (notionQueueTestOverrides.updateNotionQueueLifecycle) {
+    await notionQueueTestOverrides.updateNotionQueueLifecycle(entry, update);
+    return;
+  }
+
+  const properties = buildQueueLifecycleProperties(entry, update);
+
+  if (Object.keys(properties).length === 0) {
+    return;
+  }
+
+  await callNotion("notion_update_page", {
+    page_id: entry.pageId,
+    properties,
+  });
 }
 
 export async function addRow(

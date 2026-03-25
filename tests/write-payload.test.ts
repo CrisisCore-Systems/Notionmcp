@@ -367,6 +367,18 @@ test("normalizeResearchResult preserves run metadata for downstream audit trails
           sourceCountWithDates: 1,
         },
       },
+      notionQueue: {
+        databaseId: "11111111111111111111111111111111",
+        pageId: "22222222222222222222222222222222",
+        title: "Operator backlog row",
+        statusProperty: "Status",
+        runId: "33333333-3333-4333-8333-333333333333",
+        claimedBy: "Notion MCP Backlog Desk",
+        propertyTypes: {
+          Status: "status",
+          "Source Count": "number",
+        },
+      },
     },
   });
 
@@ -408,6 +420,18 @@ test("normalizeResearchResult preserves run metadata for downstream audit trails
       freshness: {
         timeSensitivePrompt: true,
         sourceCountWithDates: 1,
+      },
+    },
+    notionQueue: {
+      databaseId: "11111111111111111111111111111111",
+      pageId: "22222222222222222222222222222222",
+      title: "Operator backlog row",
+      statusProperty: "Status",
+      runId: "33333333-3333-4333-8333-333333333333",
+      claimedBy: "Notion MCP Backlog Desk",
+      propertyTypes: {
+        Status: "status",
+        "Source Count": "number",
       },
     },
   });

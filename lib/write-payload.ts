@@ -12,6 +12,7 @@ import {
   RESEARCH_ITEM_PROVENANCE_KEY,
   RESEARCH_RUN_METADATA_KEY,
   type ResearchItem,
+  type ResearchNotionQueueMetadata,
   type ResearchItemProvenance,
   type ResearchRunMetadata,
   type ResearchResult,
@@ -237,8 +238,9 @@ function normalizeResearchRunMetadata(value: unknown): ResearchRunMetadata | und
                 },
               }
             : {}),
-        }
+       }
       : undefined;
+  const notionQueue = normalizeResearchNotionQueueMetadata(value.notionQueue);
 
   return {
     sourceSet,
@@ -250,6 +252,48 @@ function normalizeResearchRunMetadata(value: unknown): ResearchRunMetadata | und
     },
     rejectedUrls,
     ...(normalizedSearch ? { search: normalizedSearch } : {}),
+    ...(notionQueue ? { notionQueue } : {}),
+  };
+}
+
+function normalizeResearchNotionQueueMetadata(value: unknown): ResearchNotionQueueMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const databaseId = normalizeTextValue(value.databaseId);
+  const pageId = normalizeTextValue(value.pageId);
+  const title = normalizeTextValue(value.title);
+  const statusProperty = normalizeTextValue(value.statusProperty);
+  const runId = normalizeTextValue(value.runId);
+  const claimedBy = normalizeTextValue(value.claimedBy);
+
+  if (!databaseId || !pageId || !statusProperty || !runId || !claimedBy) {
+    return undefined;
+  }
+
+  const propertyTypes = isRecord(value.propertyTypes)
+    ? Object.fromEntries(
+        Object.entries(value.propertyTypes)
+          .filter(
+            (entry): entry is [string, string] =>
+              typeof entry[0] === "string" &&
+              typeof entry[1] === "string" &&
+              Boolean(entry[0].trim()) &&
+              Boolean(entry[1].trim())
+          )
+          .map(([propertyName, propertyType]) => [propertyName.trim(), propertyType.trim()])
+      )
+    : undefined;
+
+  return {
+    databaseId,
+    pageId,
+    title,
+    statusProperty,
+    runId,
+    claimedBy,
+    ...(propertyTypes && Object.keys(propertyTypes).length > 0 ? { propertyTypes } : {}),
   };
 }
 

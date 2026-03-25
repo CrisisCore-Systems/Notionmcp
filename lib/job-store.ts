@@ -105,10 +105,16 @@ async function saveJobRecord(record: PersistedJobRecord): Promise<PersistedJobRe
   return signedRecord;
 }
 
-export async function createJob(kind: JobKind, payload: unknown): Promise<PersistedJobRecord> {
+export async function createJob(kind: JobKind, payload: unknown, requestedId?: string): Promise<PersistedJobRecord> {
   const timestamp = new Date().toISOString();
+  const id = requestedId?.trim() || randomUUID();
+
+  if (!isValidJobId(id)) {
+    throw new Error("Invalid job ID");
+  }
+
   return await saveJobRecord({
-    id: randomUUID(),
+    id,
     kind,
     status: "queued",
     createdAt: timestamp,
