@@ -5,7 +5,7 @@ import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
 export const metadata: Metadata = {
   title: "Notion MCP Backlog Desk",
   description:
-    "Pull ready Notion backlog items via MCP, research them, review the draft, and write the approved packet back to Notion.",
+    "Pull ready Notion queue items via MCP, research them, review the draft, and write the approved packet back to Notion.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

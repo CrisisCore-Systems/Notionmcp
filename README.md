@@ -1,6 +1,6 @@
 # Notion MCP Backlog Desk
 
-Notionmcp is a **private, single-operator Notion backlog desk**. Notion is the workspace of record, MCP is the control plane that pulls the next ready item, and the app is the reviewed execution layer for durable research runs and audited write-back. It is **not a multi-tenant SaaS**.
+Notionmcp is a **private, single-operator Notion backlog desk**. Notion is the workspace of record and backlog control plane, MCP is the default transport that pulls the next ready item, and the app is the reviewed execution layer for durable research runs and audited write-back. It is **not a multi-tenant SaaS**.
 
 ## Repository profile
 
@@ -10,7 +10,7 @@ Notionmcp is a **private, single-operator Notion backlog desk**. Notion is the w
 
 ## What this repository is
 
-This repository is a **small runnable Next.js app** for one sharp Notion-native workflow: **pull the next ready backlog item from Notion via MCP, research it, review the result, and write the approved packet back into Notion**. It is built with **Next.js, Gemini, Playwright, and Notion provider adapters**, and it is intended as a **private operator tool, not a public SaaS offering**.
+This repository is a **small runnable Next.js app** for one sharp Notion-native workflow: **pull the next ready backlog item from the Notion queue via MCP, research it, review the result, and write the approved packet back into Notion**. It is built with **Next.js, Gemini, Playwright, and Notion provider adapters**, and it is intended as a **private operator tool, not a public SaaS offering**.
 
 It contains the core application pieces:
 
@@ -20,7 +20,7 @@ It contains the core application pieces:
 - a Gemini agent loop (`lib/agent.ts`)
 - Playwright browsing helpers (`lib/browser.ts`)
 - a Notion provider layer (`lib/notion/index.ts`)
-- a local Notion MCP control plane (`lib/notion-mcp.ts`)
+- a local Notion MCP transport (`lib/notion-mcp.ts`)
 
 The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The default Notion path now runs through the pinned local `@notionhq/notion-mcp-server` package so the visible workflow starts in Notion instead of treating MCP as compatibility plumbing. A direct Notion API lane remains available when you intentionally want that alternate execution path.
 
@@ -34,7 +34,7 @@ Add `-- --json` if you want the same information as structured JSON.
 
 ## How it works
 
-1. **Notion is the control plane**: the UI can pull the next ready backlog item from a Notion database via MCP (`Status=Ready`, `Research Prompt`, and `Name` by default)
+1. **Notion is the control plane and queue**: the UI pulls the next ready backlog item from a Notion database via the default local MCP transport (`Status=Ready`, `Research Prompt`, and `Name` by default)
 2. **A durable job** is created immediately for research or write work and persisted under `.notionmcp-data/jobs`
 3. **Gemini 2.0 Flash** plans the research, Playwright extracts normalized evidence documents, and a verifier synthesizes supported rows
 4. **The app validates and normalizes** the model payload before the approval UI ever renders it
@@ -109,12 +109,12 @@ non-HTML content types, and strips instruction-like text before the verifier see
 `app/api/write/route.ts` now talks to a provider layer under `lib/notion/` instead of binding directly
 to the local subprocess transport.
 
-- **`local-mcp` (default)** — use the bundled `@notionhq/notion-mcp-server` subprocess as the core Notion control plane for queue intake and reviewed writes
+- **`local-mcp` (default)** — use the bundled `@notionhq/notion-mcp-server` subprocess as the default transport for queue intake and reviewed writes
 - **`direct-api`** — use the configured operator token against Notion's official REST API when you intentionally want an alternate write lane
 
-The MCP path is the default because this repo is optimized for a Notion-first operator workflow where the next unit
-of work starts in Notion instead of in a blank prompt box. The direct API path stays available, but it is now the
-alternate lane instead of the architectural spine.
+The local MCP path is the default because this repo is optimized for a Notion-first operator workflow where the next
+unit of work starts in the Notion queue instead of in a blank prompt box. The direct API path stays available, but it
+is an alternate lane rather than the architectural spine.
 
 Both `/api/research` and `/api/write` now expose `GET` contracts that mirror this architecture story, while
 `/api/jobs/{jobId}` and `/api/write-audits/{auditId}` return persisted verification artifacts plus the contract
@@ -275,7 +275,7 @@ the default deployment posture for a stateless hobby deploy.
 - [SVG source](docs/architecture-overview.svg)
 
 ```
-Notion backlog queue via MCP
+Notion backlog queue
     ↓
 Durable research job
     ├── planner → search queries
@@ -288,7 +288,7 @@ Human approval UI ← YOU REVIEW HERE
     ↓
 Durable write job
     └── Notion provider layer
-        ├── local-mcp (default control plane)
+        ├── local-mcp (default transport)
         └── direct-api (alternate lane)
            with deterministic operation keys, row retries, reconciliation, continuous row checkpoints,
            and resumable job streaming

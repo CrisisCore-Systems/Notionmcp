@@ -112,7 +112,7 @@ test("write route publishes the provider and verification-artifact contract on G
   assert.equal(response.headers.get("x-notionmcp-surface"), "write-control");
   assert.equal(response.headers.get("x-notionmcp-provider-mode"), "local-mcp");
   assert.equal(payload.providerArchitecture.mode, "local-mcp");
-  assert.equal(payload.providerArchitecture.posture, "core-control-plane");
+  assert.equal(payload.providerArchitecture.posture, "default-transport");
   assert.deepEqual(payload.verificationArtifacts, ["/api/jobs/{jobId}", "/api/write-audits/{auditId}"]);
 });
 
