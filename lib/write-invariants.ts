@@ -15,6 +15,7 @@ type WriteAuditRecordInvariantInput = Pick<
 >;
 
 const WRITTEN_STATUSES = new Set<RowWriteAuditEntry["status"]>(["written", "written-after-reconciliation"]);
+const MISSING_EVIDENCE_SUMMARY_SENTINEL = "evidence summary unavailable";
 
 function isNonNegativeInteger(value: number): boolean {
   return Number.isInteger(value) && value >= 0;
@@ -25,7 +26,13 @@ function hasText(value: string | undefined): boolean {
 }
 
 function hasSubstantiveEvidenceSummary(value: string | undefined): boolean {
-  return hasText(value) && value?.trim().toLowerCase() !== "evidence summary unavailable";
+  const normalized = value?.trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized !== MISSING_EVIDENCE_SUMMARY_SENTINEL;
 }
 
 export function validateWriteAuditTrailInvariants(auditTrail: WriteAuditTrail): string[] {
