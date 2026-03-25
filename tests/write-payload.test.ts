@@ -336,6 +336,37 @@ test("normalizeResearchResult preserves run metadata for downstream audit trails
         rowsExtracted: 1,
       },
       rejectedUrls: ["https://example.com/blocked", "notaurl"],
+      search: {
+        configuredProviders: ["serper", 123],
+        usedProviders: ["serper", ""],
+        degraded: false,
+        mode: "deep",
+        profile: {
+          plannerModel: "gemini-2.5-pro",
+          verifierModel: "gemini-2.5-pro",
+          maxReconciliationAttempts: 3,
+          maxPlannedQueries: 8,
+          maxEvidenceDocuments: 16,
+          minUniqueDomains: 5,
+          minSourceClasses: 4,
+          minIndependentSourcesPerField: 2,
+          minCrossSourceAgreement: 1,
+        },
+        uniqueDomains: ["docs.example.com", ""],
+        sourceClasses: ["official", ""],
+        sourceQuality: {
+          averageScore: 82.5,
+          primarySourceCount: 1,
+          officialSourceCount: 1,
+          dateAvailableSourceCount: 1,
+          authorAvailableSourceCount: 0,
+          strongestSourceUrls: ["https://example.com/source", "notaurl"],
+        },
+        freshness: {
+          timeSensitivePrompt: true,
+          sourceCountWithDates: 1,
+        },
+      },
     },
   });
 
@@ -348,6 +379,37 @@ test("normalizeResearchResult preserves run metadata for downstream audit trails
       rowsExtracted: 1,
     },
     rejectedUrls: ["https://example.com/blocked"],
+    search: {
+      configuredProviders: ["serper"],
+      usedProviders: ["serper"],
+      degraded: false,
+      mode: "deep",
+      profile: {
+        plannerModel: "gemini-2.5-pro",
+        verifierModel: "gemini-2.5-pro",
+        maxReconciliationAttempts: 3,
+        maxPlannedQueries: 8,
+        maxEvidenceDocuments: 16,
+        minUniqueDomains: 5,
+        minSourceClasses: 4,
+        minIndependentSourcesPerField: 2,
+        minCrossSourceAgreement: 1,
+      },
+      uniqueDomains: ["docs.example.com"],
+      sourceClasses: ["official"],
+      sourceQuality: {
+        averageScore: 82.5,
+        primarySourceCount: 1,
+        officialSourceCount: 1,
+        dateAvailableSourceCount: 1,
+        authorAvailableSourceCount: 0,
+        strongestSourceUrls: ["https://example.com/source"],
+      },
+      freshness: {
+        timeSensitivePrompt: true,
+        sourceCountWithDates: 1,
+      },
+    },
   });
 });
 

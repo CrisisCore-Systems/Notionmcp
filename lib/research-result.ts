@@ -21,13 +21,30 @@ export interface ResearchSearchMetadata {
   degraded: boolean;
   mode?: "fast" | "deep";
   profile?: {
+    plannerModel?: string;
+    verifierModel?: string;
+    maxReconciliationAttempts?: number;
     maxPlannedQueries: number;
     maxEvidenceDocuments: number;
     minUniqueDomains: number;
     minSourceClasses: number;
+    minIndependentSourcesPerField?: number;
+    minCrossSourceAgreement?: number;
   };
   uniqueDomains?: string[];
   sourceClasses?: string[];
+  sourceQuality?: {
+    averageScore: number;
+    primarySourceCount: number;
+    officialSourceCount: number;
+    dateAvailableSourceCount: number;
+    authorAvailableSourceCount: number;
+    strongestSourceUrls: string[];
+  };
+  freshness?: {
+    timeSensitivePrompt: boolean;
+    sourceCountWithDates: number;
+  };
 }
 
 export interface ResearchRunMetadata {

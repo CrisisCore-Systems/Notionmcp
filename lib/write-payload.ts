@@ -129,6 +129,116 @@ function normalizeResearchRunMetadata(value: unknown): ResearchRunMetadata | und
     typeof extractionCounts.rowsExtracted === "number" && extractionCounts.rowsExtracted >= 0
       ? Math.floor(extractionCounts.rowsExtracted)
       : 0;
+  const search = isRecord(value.search) ? value.search : undefined;
+  const normalizedMode =
+    search?.mode === "fast" || search?.mode === "deep" ? (search.mode as "fast" | "deep") : undefined;
+  const normalizedSearch =
+    search &&
+    Array.isArray(search.configuredProviders) &&
+    Array.isArray(search.usedProviders)
+      ? {
+          configuredProviders: search.configuredProviders.filter(
+            (provider): provider is string => typeof provider === "string" && Boolean(provider.trim())
+          ),
+          usedProviders: search.usedProviders.filter(
+            (provider): provider is string => typeof provider === "string" && Boolean(provider.trim())
+          ),
+          degraded: Boolean(search.degraded),
+          ...(normalizedMode ? { mode: normalizedMode } : {}),
+          ...(isRecord(search.profile)
+            ? {
+                profile: {
+                  maxPlannedQueries:
+                    typeof search.profile.maxPlannedQueries === "number" && search.profile.maxPlannedQueries >= 0
+                      ? Math.floor(search.profile.maxPlannedQueries)
+                      : searchQueries,
+                  maxEvidenceDocuments:
+                    typeof search.profile.maxEvidenceDocuments === "number" &&
+                    search.profile.maxEvidenceDocuments >= 0
+                      ? Math.floor(search.profile.maxEvidenceDocuments)
+                      : candidateSources,
+                  minUniqueDomains:
+                    typeof search.profile.minUniqueDomains === "number" && search.profile.minUniqueDomains >= 0
+                      ? Math.floor(search.profile.minUniqueDomains)
+                      : 0,
+                  minSourceClasses:
+                    typeof search.profile.minSourceClasses === "number" && search.profile.minSourceClasses >= 0
+                      ? Math.floor(search.profile.minSourceClasses)
+                      : 0,
+                  ...(typeof search.profile.plannerModel === "string" && search.profile.plannerModel.trim()
+                    ? { plannerModel: search.profile.plannerModel.trim() }
+                    : {}),
+                  ...(typeof search.profile.verifierModel === "string" && search.profile.verifierModel.trim()
+                    ? { verifierModel: search.profile.verifierModel.trim() }
+                    : {}),
+                  ...(typeof search.profile.maxReconciliationAttempts === "number" &&
+                  search.profile.maxReconciliationAttempts >= 0
+                    ? { maxReconciliationAttempts: Math.floor(search.profile.maxReconciliationAttempts) }
+                    : {}),
+                  ...(typeof search.profile.minIndependentSourcesPerField === "number" &&
+                  search.profile.minIndependentSourcesPerField >= 0
+                    ? { minIndependentSourcesPerField: Math.floor(search.profile.minIndependentSourcesPerField) }
+                    : {}),
+                  ...(typeof search.profile.minCrossSourceAgreement === "number" &&
+                  search.profile.minCrossSourceAgreement >= 0
+                    ? { minCrossSourceAgreement: search.profile.minCrossSourceAgreement }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(Array.isArray(search.uniqueDomains)
+            ? {
+                uniqueDomains: search.uniqueDomains.filter(
+                  (domain): domain is string => typeof domain === "string" && Boolean(domain.trim())
+                ),
+              }
+            : {}),
+          ...(Array.isArray(search.sourceClasses)
+            ? {
+                sourceClasses: search.sourceClasses.filter(
+                  (sourceClass): sourceClass is string =>
+                    typeof sourceClass === "string" && Boolean(sourceClass.trim())
+                ),
+              }
+            : {}),
+          ...(isRecord(search.sourceQuality) &&
+          Array.isArray(search.sourceQuality.strongestSourceUrls)
+            ? {
+                sourceQuality: {
+                  averageScore:
+                    typeof search.sourceQuality.averageScore === "number" ? search.sourceQuality.averageScore : 0,
+                  primarySourceCount:
+                    typeof search.sourceQuality.primarySourceCount === "number"
+                      ? Math.floor(search.sourceQuality.primarySourceCount)
+                      : 0,
+                  officialSourceCount:
+                    typeof search.sourceQuality.officialSourceCount === "number"
+                      ? Math.floor(search.sourceQuality.officialSourceCount)
+                      : 0,
+                  dateAvailableSourceCount:
+                    typeof search.sourceQuality.dateAvailableSourceCount === "number"
+                      ? Math.floor(search.sourceQuality.dateAvailableSourceCount)
+                      : 0,
+                  authorAvailableSourceCount:
+                    typeof search.sourceQuality.authorAvailableSourceCount === "number"
+                      ? Math.floor(search.sourceQuality.authorAvailableSourceCount)
+                      : 0,
+                  strongestSourceUrls: normalizeSourceUrls(search.sourceQuality.strongestSourceUrls),
+                },
+              }
+            : {}),
+          ...(isRecord(search.freshness) &&
+          typeof search.freshness.timeSensitivePrompt === "boolean" &&
+          typeof search.freshness.sourceCountWithDates === "number"
+            ? {
+                freshness: {
+                  timeSensitivePrompt: search.freshness.timeSensitivePrompt,
+                  sourceCountWithDates: Math.floor(search.freshness.sourceCountWithDates),
+                },
+              }
+            : {}),
+        }
+      : undefined;
 
   return {
     sourceSet,
@@ -139,6 +249,7 @@ function normalizeResearchRunMetadata(value: unknown): ResearchRunMetadata | und
       rowsExtracted,
     },
     rejectedUrls,
+    ...(normalizedSearch ? { search: normalizedSearch } : {}),
   };
 }
 
