@@ -5,6 +5,11 @@ import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
 import {
+  getNotionQueueConfigValidationError,
+  normalizeNotionQueueConfig,
+} from "@/lib/notion-queue";
+import { loadNextNotionQueueEntry } from "@/lib/notion-mcp";
+import {
   assertDeploymentReadiness,
   assertDurabilityExecutionReadiness,
   warnIfDurableJobsNeedLongLivedHost,
@@ -68,9 +73,37 @@ export async function POST(req: NextRequest) {
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     const requestedResearchMode = typeof body.researchMode === "string" ? body.researchMode.trim() : undefined;
     const researchMode = parseResearchMode(requestedResearchMode);
+    const rawNotionQueue = body.notionQueue;
+    const notionQueue =
+      rawNotionQueue === undefined ? null : normalizeNotionQueueConfig(rawNotionQueue);
 
-    if (!prompt) {
-      return new Response(JSON.stringify({ error: "Prompt is required" }), {
+    if (rawNotionQueue !== undefined && !notionQueue) {
+      return new Response(
+        JSON.stringify({ error: "A notionQueue object with a Notion database ID is required" }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
+
+    if (notionQueue) {
+      const queueValidationError = getNotionQueueConfigValidationError(notionQueue);
+
+      if (queueValidationError) {
+        return new Response(JSON.stringify({ error: queueValidationError }), {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+      }
+    }
+
+    if (!prompt && !notionQueue) {
+      return new Response(JSON.stringify({ error: "Prompt or notionQueue intake is required" }), {
         status: 400,
       });
     }
@@ -89,8 +122,56 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    let resolvedPrompt = prompt;
+    let resolvedNotionQueue:
+      | {
+          databaseId: string;
+          pageId: string;
+          title: string;
+          promptProperty: string;
+          titleProperty: string;
+          statusProperty: string;
+          readyValue: string;
+        }
+      | undefined;
+
+    if (notionQueue) {
+      try {
+        const queueEntry = await loadNextNotionQueueEntry(notionQueue);
+        resolvedPrompt = queueEntry.prompt;
+        resolvedNotionQueue = {
+          databaseId: notionQueue.databaseId,
+          pageId: queueEntry.pageId,
+          title: queueEntry.title,
+          promptProperty: notionQueue.promptProperty,
+          titleProperty: notionQueue.titleProperty,
+          statusProperty: notionQueue.statusProperty,
+          readyValue: notionQueue.readyValue,
+        };
+      } catch (error) {
+        return new Response(
+          JSON.stringify({
+            error:
+              error instanceof Error
+                ? error.message
+                : "Could not load a ready Notion queue item via MCP",
+          }),
+          {
+            status: 502,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+      }
+    }
+
     await assertDurabilityExecutionReadiness();
-    const job = await createDurableJob("research", { prompt, researchMode });
+    const job = await createDurableJob("research", {
+      prompt: resolvedPrompt,
+      researchMode,
+      ...(resolvedNotionQueue ? { notionQueue: resolvedNotionQueue } : {}),
+    });
     jobId = job.id;
   }
 

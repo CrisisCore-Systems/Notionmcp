@@ -6,6 +6,12 @@ import {
   type DurableExecutionMode,
 } from "@/lib/deployment-boundary";
 import { getCurrentNotionProviderState } from "@/lib/notion";
+import {
+  DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY,
+  DEFAULT_NOTION_QUEUE_READY_VALUE,
+  DEFAULT_NOTION_QUEUE_STATUS_PROPERTY,
+  DEFAULT_NOTION_QUEUE_TITLE_PROPERTY,
+} from "@/lib/notion-queue";
 
 export type ApiSurfaceKind =
   | "research-control"
@@ -75,6 +81,26 @@ export function getResearchRouteContract(env: NodeJS.ProcessEnv = process.env) {
     kind: "research-control",
     createsDurableJob: true,
     verificationArtifacts: [JOB_VERIFICATION_ROUTE],
+    workflow: {
+      controlPlane: "Notion workspace",
+      defaultEntry: "notion-mcp-queue",
+      reviewedLoop: [
+        "pull the next ready backlog item from Notion via MCP",
+        "run reviewed fast or deep research",
+        "let the operator approve edits",
+        "write the reviewed output back into Notion",
+      ],
+    },
+    notionQueueIntake: {
+      enabled: true,
+      transport: "local-mcp",
+      defaults: {
+        promptProperty: DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY,
+        titleProperty: DEFAULT_NOTION_QUEUE_TITLE_PROPERTY,
+        statusProperty: DEFAULT_NOTION_QUEUE_STATUS_PROPERTY,
+        readyValue: DEFAULT_NOTION_QUEUE_READY_VALUE,
+      },
+    },
     researchModes: {
       default: fast.mode,
       available: [
@@ -113,7 +139,7 @@ export function getWriteRouteContract(env: NodeJS.ProcessEnv = process.env) {
     verificationArtifacts: [JOB_VERIFICATION_ROUTE, WRITE_AUDIT_VERIFICATION_ROUTE],
     providerArchitecture: providerState,
     writeGuarantees: [
-      "Reviewed rows are written through the configured provider mode only after operator approval.",
+      "Reviewed rows are written back to the Notion workspace of record only after operator approval.",
       "Writes are resumable with row checkpoints and deterministic operation keys.",
       "Write audits persist as first-class verification artifacts outside transient UI state.",
     ],

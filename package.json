@@ -1,7 +1,7 @@
 {
   "name": "notion-research-agent",
   "version": "0.2.1",
-  "description": "Private operator research workstation for durable Gemini web research and audited Notion writes.",
+  "description": "Notion MCP backlog desk for durable reviewed research runs and audited Notion write-back.",
   "keywords": [
     "nextjs",
     "gemini",

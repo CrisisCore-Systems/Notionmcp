@@ -79,7 +79,7 @@ export default function HomePage() {
         <h2 style={{ fontSize: "1rem", margin: "0 0 0.75rem" }}>Quick setup</h2>
         <ol style={{ margin: 0, paddingLeft: "1.25rem", color: "#4b5563", lineHeight: 1.6 }}>
           <li>Copy <code>.env.example</code> to <code>.env.local</code>.</li>
-          <li>Set the following variables before running a research session:</li>
+          <li>Set the following variables before pulling your next Notion queue item:</li>
         </ol>
         <ul style={{ margin: "0.75rem 0 0", paddingLeft: "1.25rem", color: "#111827" }}>
           {ENVIRONMENT_VARIABLES.map((name) => (
@@ -89,10 +89,12 @@ export default function HomePage() {
           ))}
         </ul>
         <p style={{ margin: "0.75rem 0 0", color: "#4b5563", lineHeight: 1.6, fontSize: "0.92rem" }}>
-          Deployment mode: <strong>{deploymentMode}</strong>. Localhost API use works with just those variables. If you intentionally expose the app for a
-          tightly controlled private deployment, also set <code>APP_ALLOWED_ORIGIN</code> and{" "}
-          <code>APP_ACCESS_TOKEN</code>. Remote private-host mode also requires durable detached jobs plus{" "}
-          <code>PERSISTED_STATE_ENCRYPTION_KEY</code>, then enter that access token in the UI before starting a run.
+          Deployment mode: <strong>{deploymentMode}</strong>. Localhost API use works with just those variables. The
+          default contest loop is: Notion backlog item → reviewed research run → approved write-back into Notion. If
+          you intentionally expose the app for a tightly controlled private deployment, also set{" "}
+          <code>APP_ALLOWED_ORIGIN</code> and <code>APP_ACCESS_TOKEN</code>. Remote private-host mode also requires
+          durable detached jobs plus <code>PERSISTED_STATE_ENCRYPTION_KEY</code>, then enter that access token in the
+          UI before starting a run.
         </p>
       </div>
       <div
@@ -108,7 +110,11 @@ export default function HomePage() {
           gap: "0.75rem",
         }}
       >
-        <h2 style={{ fontSize: "1rem", margin: 0 }}>Operator guarantees</h2>
+        <h2 style={{ fontSize: "1rem", margin: 0 }}>Notion-first guarantees</h2>
+        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
+          <strong>Control plane:</strong> the primary workflow starts from a Notion MCP intake queue so the workspace of
+          record stays in Notion instead of a blank app prompt.
+        </div>
         <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
           <strong>Research lanes:</strong> fast stays bounded for low-latency reviewed work, while the deep lane is a
           higher-budget reviewed path with wider browse caps plus domain-diversity and source-class requirements.

@@ -2,6 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ResearchResult } from "@/lib/agent";
+import {
+  DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY,
+  DEFAULT_NOTION_QUEUE_READY_VALUE,
+  DEFAULT_NOTION_QUEUE_STATUS_PROPERTY,
+  DEFAULT_NOTION_QUEUE_TITLE_PROPERTY,
+} from "@/lib/notion-queue";
 import { RESEARCH_RUN_METADATA_KEY } from "@/lib/research-result";
 import {
   clearActiveJob,
@@ -37,10 +43,10 @@ import { usePhaseState } from "./chat/usePhaseState";
 type ResearchMode = "fast" | "deep";
 
 const EXAMPLE_PROMPTS = [
-  "Find the top 5 competitors to Notion in the productivity space",
-  "Research the best free open-source React component libraries",
-  "Find recent AI research papers on reasoning and tool use",
-  "List the top venture capital firms focused on AI startups",
+  "Research this backlog item: AI meeting notes assistant for product teams",
+  "Research this backlog item: lightweight CRM for solo consultants",
+  "Research this backlog item: privacy-first internal wiki for startups",
+  "Research this backlog item: customer interview repository with semantic search",
 ];
 
 const PROPERTY_TYPES: PropertyType[] = ["title", "rich_text", "url", "number", "select"];
@@ -64,6 +70,18 @@ export default function ChatUI() {
   const [writeSummary, setWriteSummary] = useState<WriteSummary | null>(null);
   const [useExistingDatabase, setUseExistingDatabase] = useState(false);
   const [targetDatabaseId, setTargetDatabaseId] = useState("");
+  const [useNotionQueue, setUseNotionQueue] = useState(true);
+  const [notionQueueDatabaseId, setNotionQueueDatabaseId] = useState("");
+  const [notionQueuePromptProperty, setNotionQueuePromptProperty] = useState(
+    DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY
+  );
+  const [notionQueueTitleProperty, setNotionQueueTitleProperty] = useState(
+    DEFAULT_NOTION_QUEUE_TITLE_PROPERTY
+  );
+  const [notionQueueStatusProperty, setNotionQueueStatusProperty] = useState(
+    DEFAULT_NOTION_QUEUE_STATUS_PROPERTY
+  );
+  const [notionQueueReadyValue, setNotionQueueReadyValue] = useState(DEFAULT_NOTION_QUEUE_READY_VALUE);
   const [linkActionMessage, setLinkActionMessage] = useState<string | null>(null);
   const [appAccessToken, setAppAccessToken] = useState("");
   const [pendingWriteResume, setPendingWriteResume] = useState<PendingWriteResume | null>(null);
@@ -283,7 +301,7 @@ export default function ChatUI() {
   };
 
   const startResearch = async (jobId?: string) => {
-    if (!jobId && !prompt.trim()) return;
+    if (!jobId && !prompt.trim() && (!useNotionQueue || !notionQueueDatabaseId.trim())) return;
     startAction("research");
     if (!jobId) {
       setLogs([]);
@@ -301,13 +319,33 @@ export default function ChatUI() {
     setPendingWriteResume(null);
 
     try {
-      addLog(jobId ? `Reconnecting to research job ${jobId}...` : `Starting research: "${prompt}"`, "info");
+      addLog(
+        jobId
+          ? `Reconnecting to research job ${jobId}...`
+          : useNotionQueue
+            ? `Starting research from the next ready Notion MCP queue item in ${notionQueueDatabaseId.trim()}...`
+            : `Starting research: "${prompt}"`,
+        "info"
+      );
 
       const controller = new AbortController();
       abortRef.current = controller;
       const data = (await streamSSE({
         url: "/api/research",
-        body: jobId ? { jobId } : { prompt, researchMode },
+        body: jobId
+          ? { jobId }
+          : useNotionQueue
+            ? {
+                researchMode,
+                notionQueue: {
+                  databaseId: notionQueueDatabaseId.trim(),
+                  promptProperty: notionQueuePromptProperty.trim(),
+                  titleProperty: notionQueueTitleProperty.trim(),
+                  statusProperty: notionQueueStatusProperty.trim(),
+                  readyValue: notionQueueReadyValue.trim(),
+                },
+              }
+            : { prompt, researchMode },
         signal: controller.signal,
         accessToken: appAccessToken,
         onUpdate: (msg) => addLog(msg),
@@ -710,23 +748,29 @@ export default function ChatUI() {
     setUseExistingDatabase(false);
     setTargetDatabaseId("");
     setLinkActionMessage(null);
-    setPendingWriteResume(null);
-    setFindText("");
-    setReplaceText("");
-    setShowFindReplace(false);
-    setPrompt("");
-    currentWriteJobIdRef.current = null;
-    clearSavedDraft();
-  };
+      setPendingWriteResume(null);
+      setFindText("");
+      setReplaceText("");
+      setShowFindReplace(false);
+      setPrompt("");
+      setUseNotionQueue(true);
+      setNotionQueueDatabaseId("");
+      setNotionQueuePromptProperty(DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY);
+      setNotionQueueTitleProperty(DEFAULT_NOTION_QUEUE_TITLE_PROPERTY);
+      setNotionQueueStatusProperty(DEFAULT_NOTION_QUEUE_STATUS_PROPERTY);
+      setNotionQueueReadyValue(DEFAULT_NOTION_QUEUE_READY_VALUE);
+      currentWriteJobIdRef.current = null;
+      clearSavedDraft();
+    };
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto", padding: "2rem 1rem", fontFamily: "system-ui, sans-serif" }}>
       <div style={{ marginBottom: "2rem" }}>
         <h1 style={{ fontSize: "1.5rem", fontWeight: 600, margin: 0 }}>
-          🔍 Notion Research Agent
+          🔍 Notion MCP Backlog Desk
         </h1>
         <p style={{ color: "#666", marginTop: "0.5rem", fontSize: "0.9rem" }}>
-          Browse the web → structure findings → write to Notion automatically
+          Pull the next Notion queue item → research it → review the draft → write the approved packet back to Notion
         </p>
       </div>
 
@@ -901,10 +945,112 @@ export default function ChatUI() {
 
       {phase === "idle" && (
         <div>
+          <div
+            style={{
+              marginBottom: "0.75rem",
+              display: "grid",
+              gap: "0.5rem",
+              padding: "0.85rem 0.95rem",
+              border: "1px solid #dbeafe",
+              borderRadius: 8,
+              background: "#eff6ff",
+            }}
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#1d4ed8", fontSize: "0.88rem" }}>
+              <input
+                type="checkbox"
+                checked={useNotionQueue}
+                onChange={(event) => setUseNotionQueue(event.target.checked)}
+              />
+              Start from a Notion MCP intake queue instead of a blank prompt
+            </label>
+            <div style={{ fontSize: "0.8rem", color: "#1e3a8a", lineHeight: 1.45 }}>
+              Default queue contract: <strong>{DEFAULT_NOTION_QUEUE_STATUS_PROPERTY}</strong>=
+              <strong>{DEFAULT_NOTION_QUEUE_READY_VALUE}</strong>, title from{" "}
+              <strong>{DEFAULT_NOTION_QUEUE_TITLE_PROPERTY}</strong>, research text from{" "}
+              <strong>{DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY}</strong>.
+            </div>
+            {useNotionQueue && (
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                <input
+                  value={notionQueueDatabaseId}
+                  onChange={(event) => setNotionQueueDatabaseId(event.target.value)}
+                  placeholder="Notion intake database ID"
+                  style={{
+                    width: "100%",
+                    padding: "0.65rem 0.75rem",
+                    border: "1px solid #bfdbfe",
+                    borderRadius: 8,
+                    fontSize: "0.9rem",
+                    boxSizing: "border-box",
+                    background: "#fff",
+                  }}
+                />
+                <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                  <input
+                    value={notionQueuePromptProperty}
+                    onChange={(event) => setNotionQueuePromptProperty(event.target.value)}
+                    placeholder={DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY}
+                    style={{
+                      width: "100%",
+                      padding: "0.6rem 0.7rem",
+                      border: "1px solid #bfdbfe",
+                      borderRadius: 8,
+                      fontSize: "0.85rem",
+                      boxSizing: "border-box",
+                      background: "#fff",
+                    }}
+                  />
+                  <input
+                    value={notionQueueTitleProperty}
+                    onChange={(event) => setNotionQueueTitleProperty(event.target.value)}
+                    placeholder={DEFAULT_NOTION_QUEUE_TITLE_PROPERTY}
+                    style={{
+                      width: "100%",
+                      padding: "0.6rem 0.7rem",
+                      border: "1px solid #bfdbfe",
+                      borderRadius: 8,
+                      fontSize: "0.85rem",
+                      boxSizing: "border-box",
+                      background: "#fff",
+                    }}
+                  />
+                  <input
+                    value={notionQueueStatusProperty}
+                    onChange={(event) => setNotionQueueStatusProperty(event.target.value)}
+                    placeholder={DEFAULT_NOTION_QUEUE_STATUS_PROPERTY}
+                    style={{
+                      width: "100%",
+                      padding: "0.6rem 0.7rem",
+                      border: "1px solid #bfdbfe",
+                      borderRadius: 8,
+                      fontSize: "0.85rem",
+                      boxSizing: "border-box",
+                      background: "#fff",
+                    }}
+                  />
+                  <input
+                    value={notionQueueReadyValue}
+                    onChange={(event) => setNotionQueueReadyValue(event.target.value)}
+                    placeholder={DEFAULT_NOTION_QUEUE_READY_VALUE}
+                    style={{
+                      width: "100%",
+                      padding: "0.6rem 0.7rem",
+                      border: "1px solid #bfdbfe",
+                      borderRadius: 8,
+                      fontSize: "0.85rem",
+                      boxSizing: "border-box",
+                      background: "#fff",
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="What do you want to research? e.g. 'Find the top 5 competitors to Linear in the project management space'"
+            placeholder="Fallback manual prompt if you are not pulling the next item from a Notion queue"
             rows={3}
             style={{
               width: "100%",
@@ -967,17 +1113,17 @@ export default function ChatUI() {
               </button>
             ))}
           </div>
-          <button
-            onClick={() => {
-              void startResearch();
-            }}
-            disabled={!prompt.trim()}
-            style={{
-              marginTop: "1rem",
-              padding: "0.75rem 1.5rem",
-              background: prompt.trim() ? "#000" : "#ccc",
-              color: "#fff",
-              border: "none",
+            <button
+              onClick={() => {
+                void startResearch();
+              }}
+             disabled={!prompt.trim() && (!useNotionQueue || !notionQueueDatabaseId.trim())}
+             style={{
+               marginTop: "1rem",
+               padding: "0.75rem 1.5rem",
+               background: prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim()) ? "#000" : "#ccc",
+               color: "#fff",
+               border: "none",
               borderRadius: 8,
               cursor: prompt.trim() ? "pointer" : "default",
               fontSize: "0.95rem",

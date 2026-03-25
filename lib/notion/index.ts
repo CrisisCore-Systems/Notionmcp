@@ -20,15 +20,24 @@ function normalizeProviderMode(value: string | undefined): NotionProviderMode {
   const normalized = value?.trim().toLowerCase();
 
   if (
-    normalized === "local" ||
+    !normalized ||
     normalized === "local-mcp" ||
     normalized === "legacy-local-mcp" ||
+    normalized === "local" ||
     normalized === "mcp"
   ) {
     return "local-mcp";
   }
 
-  return "direct-api";
+  if (
+    normalized === "direct-api" ||
+    normalized === "direct" ||
+    normalized === "api"
+  ) {
+    return "direct-api";
+  }
+
+  return "local-mcp";
 }
 
 export function getConfiguredNotionProviderMode(env: NodeJS.ProcessEnv = process.env): NotionProviderMode {
@@ -38,7 +47,7 @@ export function getConfiguredNotionProviderMode(env: NodeJS.ProcessEnv = process
 export function getCurrentNotionProviderState(env: NodeJS.ProcessEnv = process.env): {
   mode: NotionProviderMode;
   health: "configured";
-  posture: "canonical" | "legacy-fallback";
+  posture: "core-control-plane" | "alternate-lane";
   description: string;
 } {
   const mode = getConfiguredNotionProviderMode(env);
@@ -46,11 +55,11 @@ export function getCurrentNotionProviderState(env: NodeJS.ProcessEnv = process.e
   return {
     mode,
     health: "configured",
-    posture: mode === "direct-api" ? "canonical" : "legacy-fallback",
+    posture: mode === "local-mcp" ? "core-control-plane" : "alternate-lane",
     description:
-      mode === "direct-api"
-        ? "Direct Notion API is the canonical provider path."
-        : "Local MCP remains available only as a legacy compatibility fallback.",
+      mode === "local-mcp"
+        ? "Local Notion MCP is the core control plane for queue intake and reviewed writes."
+        : "Direct Notion API remains available as an alternate private-host write lane.",
   };
 }
 
