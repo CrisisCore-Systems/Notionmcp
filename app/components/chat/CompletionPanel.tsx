@@ -45,12 +45,50 @@ export function CompletionPanel({
             fontSize: "0.88rem",
           }}
         >
+          {writeSummary.notionQueue && (
+            <div
+              style={{
+                marginBottom: "0.75rem",
+                paddingBottom: "0.75rem",
+                borderBottom: "1px solid rgba(22, 101, 52, 0.18)",
+                display: "grid",
+                gap: "0.25rem",
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>Queue lifecycle</div>
+              <div>
+                Backlog row: <strong>{writeSummary.notionQueue.title || writeSummary.notionQueue.pageId}</strong>
+              </div>
+              <div>
+                Claimed by {writeSummary.notionQueue.claimedBy}
+                {writeSummary.notionQueue.claimedAt
+                  ? ` at ${new Date(writeSummary.notionQueue.claimedAt).toLocaleString()}`
+                  : ""}
+              </div>
+              <div>Run path: In Progress → Needs Review → Packet Ready</div>
+              <div>Claim run ID: {writeSummary.notionQueue.runId}</div>
+            </div>
+          )}
           <div>
             Database mode: {writeSummary.usedExistingDatabase ? "existing database" : "new database"}
           </div>
           <div>Rows written: {writeSummary.itemsWritten}</div>
           <div>Properties written: {writeSummary.propertyCount}</div>
           {writeSummary.providerMode && <div>Provider lane: {writeSummary.providerMode}</div>}
+          {writeSummary.research && (
+            <div style={{ marginTop: "0.4rem" }}>
+              Research lane: {writeSummary.research.mode ?? "fast"}
+              {writeSummary.research.degraded ? " (degraded fallback)" : ""}. Reviewed{" "}
+              {writeSummary.research.uniqueDomainCount} domain
+              {writeSummary.research.uniqueDomainCount === 1 ? "" : "s"} across{" "}
+              {writeSummary.research.sourceClassCount} source class
+              {writeSummary.research.sourceClassCount === 1 ? "" : "es"}
+              {typeof writeSummary.research.averageQualityScore === "number"
+                ? ` with an average source quality score of ${writeSummary.research.averageQualityScore.toFixed(1)}`
+                : ""}
+              . Rejected URLs: {writeSummary.research.rejectedUrlCount}.
+            </div>
+          )}
           <div style={{ wordBreak: "break-all" }}>Database ID: {writeSummary.databaseId}</div>
           {(writeSummary.auditUrl || writeSummary.jobUrl) && (
             <div

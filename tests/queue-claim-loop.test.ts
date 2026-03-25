@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { POST as postWrite } from "@/app/api/write/route";
 import { jobRunnerTestOverrides } from "@/lib/job-runner";
 import { claimNextNotionQueueEntry, notionQueueTestOverrides } from "@/lib/notion-mcp";
 import { notionTestOverrides, type NotionProvider } from "@/lib/notion";
+import { getOperatorMetricsSnapshot, observabilityTestOverrides } from "@/lib/observability";
 import { RESEARCH_RUN_METADATA_KEY, type ResearchResult } from "@/lib/research-result";
 import { collectSseResponse, createPostRequest } from "@/tests/support/e2e";
 
@@ -20,6 +21,7 @@ test.beforeEach(async () => {
     WRITE_AUDIT_DIR: await mkdtemp(path.join(os.tmpdir(), "notionmcp-queue-loop-audits-")),
     NOTIONMCP_HOST_DURABILITY: "inline-only",
   };
+  observabilityTestOverrides.reset();
 });
 
 test.afterEach(async () => {
@@ -356,6 +358,8 @@ test("claimNextNotionQueueEntry only allows one concurrent claimant per queue ro
   assert.equal(updateCalls[0]?.pageId, "page-ready-1");
   assert.match(updateCalls[0]?.runId ?? "", /^run-[12]$/);
   assert.equal(fulfilledClaims[0]?.value.runId, updateCalls[0]?.runId);
+  assert.equal(getOperatorMetricsSnapshot().counters.queueClaimContention, 1);
+  assert.equal(getOperatorMetricsSnapshot().counters.queueClaimFreshnessMiss, 0);
 });
 
 test("claimNextNotionQueueEntry rechecks Notion before updating so stale ready reads do not overwrite another claim", async () => {
@@ -447,4 +451,85 @@ test("claimNextNotionQueueEntry rechecks Notion before updating so stale ready r
 
   assert.equal(retrieveCalls, 1);
   assert.equal(updateCalls, 0);
+  assert.equal(getOperatorMetricsSnapshot().counters.queueClaimFreshnessMiss, 1);
+});
+
+test("claimNextNotionQueueEntry recovers a stale claim lock and records the recovery", async () => {
+  const readyRow = {
+    id: "page-ready-3",
+    properties: {
+      Status: {
+        type: "status",
+        status: { name: "Ready" },
+      },
+      Name: {
+        type: "title",
+        title: [{ plain_text: "Recovered backlog row" }],
+      },
+      Prompt: {
+        type: "rich_text",
+        rich_text: [{ plain_text: "Research recovered queue claims" }],
+      },
+    },
+  };
+  const lockDirectory = path.join(process.env.JOB_STATE_DIR ?? "", ".notion-queue-claim-locks");
+  const staleLockPath = path.join(lockDirectory, "db-claim-test-page-ready-3.lock");
+  await mkdir(lockDirectory, { recursive: true });
+  await writeFile(staleLockPath, "locked\n", "utf8");
+  const staleDate = new Date(Date.now() - 6 * 60 * 1000);
+  await utimes(staleLockPath, staleDate, staleDate);
+
+  let updateCalls = 0;
+  notionQueueTestOverrides.callNotion = async (tool) => {
+    if (tool === "notion_retrieve_database") {
+      return {
+        structuredContent: {
+          id: "db-claim-test",
+          data_sources: [{ id: "ds-claim-test" }],
+        },
+      };
+    }
+
+    if (tool === "notion_query_data_source") {
+      return {
+        structuredContent: {
+          results: [readyRow],
+          has_more: false,
+          next_cursor: null,
+        },
+      };
+    }
+
+    if (tool === "notion_retrieve_page") {
+      return {
+        structuredContent: readyRow,
+      };
+    }
+
+    if (tool === "notion_update_page") {
+      updateCalls += 1;
+      return { structuredContent: { id: readyRow.id } };
+    }
+
+    throw new Error(`Unexpected Notion tool call in test: ${tool}`);
+  };
+
+  const claim = await claimNextNotionQueueEntry(
+    {
+      databaseId: "db-claim-test",
+      statusProperty: "Status",
+      titleProperty: "Name",
+      promptProperty: "Prompt",
+      readyValue: "Ready",
+    },
+    {
+      runId: "run-stale-lock",
+      claimedBy: "Worker D",
+    }
+  );
+
+  assert.equal(claim.pageId, readyRow.id);
+  assert.match(claim.claimedAt ?? "", /\d{4}-\d{2}-\d{2}T/);
+  assert.equal(updateCalls, 1);
+  assert.equal(getOperatorMetricsSnapshot().counters.queueClaimStaleLockRecovered, 1);
 });

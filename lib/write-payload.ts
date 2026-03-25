@@ -267,6 +267,7 @@ function normalizeResearchNotionQueueMetadata(value: unknown): ResearchNotionQue
   const statusProperty = normalizeTextValue(value.statusProperty);
   const runId = normalizeTextValue(value.runId);
   const claimedBy = normalizeTextValue(value.claimedBy);
+  const claimedAt = normalizeTextValue(value.claimedAt);
 
   if (!databaseId || !pageId || !statusProperty || !runId || !claimedBy) {
     return undefined;
@@ -293,6 +294,7 @@ function normalizeResearchNotionQueueMetadata(value: unknown): ResearchNotionQue
     statusProperty,
     runId,
     claimedBy,
+    ...(claimedAt ? { claimedAt } : {}),
     ...(propertyTypes && Object.keys(propertyTypes).length > 0 ? { propertyTypes } : {}),
   };
 }

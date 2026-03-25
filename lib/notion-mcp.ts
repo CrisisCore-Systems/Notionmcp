@@ -37,6 +37,7 @@ import {
   type ResearchNotionQueueMetadata,
   type ResearchResult,
 } from "@/lib/research-result";
+import { incrementMetric } from "@/lib/observability";
 import type { RowWriteMetadata } from "@/lib/write-audit";
 
 let mcpClient: Client | null = null;
@@ -564,10 +565,12 @@ async function tryAcquireNotionQueueClaimLock(
     }
 
     if (allowStaleRetry && (await isStaleNotionQueueClaimLock(lockPath))) {
+      incrementMetric("queueClaimStaleLockRecovered");
       await removeNotionQueueClaimLock(lockPath);
       return await tryAcquireNotionQueueClaimLock(databaseId, pageId, false);
     }
 
+    incrementMetric("queueClaimContention");
     return null;
   }
 }
@@ -1370,9 +1373,11 @@ export async function claimNextNotionQueueEntry(
         const freshReadyRow = await loadReadyNotionQueueRow(row.id, input);
 
         if (!freshReadyRow) {
+          incrementMetric("queueClaimFreshnessMiss");
           continue;
         }
 
+        const claimedAt = new Date().toISOString();
         const entry: ClaimedNotionQueueEntry = {
           databaseId: input.databaseId,
           pageId: freshReadyRow.row.id,
@@ -1381,6 +1386,7 @@ export async function claimNextNotionQueueEntry(
           statusProperty: input.statusProperty,
           runId: options.runId,
           claimedBy: options.claimedBy,
+          claimedAt,
           propertyTypes: buildQueuePropertyTypeLookup(freshReadyRow.row, input.statusProperty),
         };
 
@@ -1388,6 +1394,7 @@ export async function claimNextNotionQueueEntry(
           stage: "in-progress",
           jobId: options.runId,
           message: DEFAULT_NOTION_QUEUE_IN_PROGRESS_VALUE,
+          occurredAt: claimedAt,
         });
 
         return entry;

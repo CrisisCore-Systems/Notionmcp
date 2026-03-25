@@ -374,6 +374,7 @@ test("normalizeResearchResult preserves run metadata for downstream audit trails
         statusProperty: "Status",
         runId: "33333333-3333-4333-8333-333333333333",
         claimedBy: "Notion MCP Backlog Desk",
+        claimedAt: "2026-03-25T08:00:00.000Z",
         propertyTypes: {
           Status: "status",
           "Source Count": "number",
@@ -429,6 +430,7 @@ test("normalizeResearchResult preserves run metadata for downstream audit trails
       statusProperty: "Status",
       runId: "33333333-3333-4333-8333-333333333333",
       claimedBy: "Notion MCP Backlog Desk",
+      claimedAt: "2026-03-25T08:00:00.000Z",
       propertyTypes: {
         Status: "status",
         "Source Count": "number",

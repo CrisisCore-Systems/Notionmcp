@@ -451,6 +451,27 @@ export default function ChatUI() {
         auditId: data.auditId,
         auditUrl: data.auditUrl,
         auditTrail: data.auditTrail,
+        ...(runMetadata?.notionQueue
+          ? {
+              notionQueue: {
+                databaseId: runMetadata.notionQueue.databaseId,
+                pageId: runMetadata.notionQueue.pageId,
+                title: runMetadata.notionQueue.title,
+                claimedBy: runMetadata.notionQueue.claimedBy,
+                claimedAt: runMetadata.notionQueue.claimedAt,
+                runId: runMetadata.notionQueue.runId,
+              },
+            }
+          : {}),
+        research: {
+          mode: runMetadata?.search?.mode,
+          degraded: runMetadata?.search?.degraded === true,
+          uniqueDomainCount: runMetadata?.search?.uniqueDomains?.length ?? 0,
+          sourceClassCount: runMetadata?.search?.sourceClasses?.length ?? 0,
+          averageQualityScore: runMetadata?.search?.sourceQuality?.averageScore,
+          rejectedUrlCount: runMetadata?.rejectedUrls.length ?? 0,
+          usedProviders: runMetadata?.search?.usedProviders ?? [],
+        },
       });
       clearSavedDraft();
       showDone();
@@ -1240,6 +1261,30 @@ export default function ChatUI() {
                 ? `This run covered ${reviewedUniqueDomainCount} distinct domain${reviewedUniqueDomainCount === 1 ? "" : "s"}.`
                 : ""}
           </div>
+
+          {runMetadata?.notionQueue && (
+            <div
+              style={{
+                marginBottom: "1rem",
+                padding: "0.75rem 0.9rem",
+                background: "#f0fdf4",
+                border: "1px solid #bbf7d0",
+                borderRadius: 8,
+                color: "#166534",
+                fontSize: "0.85rem",
+                lineHeight: 1.45,
+              }}
+            >
+              <strong>Backlog lifecycle</strong> claimed{" "}
+              <strong>{runMetadata.notionQueue.title || runMetadata.notionQueue.pageId}</strong> from Notion as{" "}
+              <strong>In Progress</strong>
+              {runMetadata.notionQueue.claimedAt
+                ? ` at ${new Date(runMetadata.notionQueue.claimedAt).toLocaleString()}`
+                : ""}
+              . After your review, the same row will advance through <strong>Needs Review</strong> and{" "}
+              <strong>Packet Ready</strong>. Claim owner: <strong>{runMetadata.notionQueue.claimedBy}</strong>.
+            </div>
+          )}
 
           <div style={{ marginBottom: "1rem" }}>
             <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", color: "#333" }}>
