@@ -846,13 +846,28 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
         document.querySelector("main, article, [role='main'], .main, #main") ??
         document.body;
       const container = root.cloneNode(true) as HTMLElement;
+      const visibilityCache = new WeakMap<Element, boolean>();
       const isVisible = (element: Element | null) => {
-        if (!element || element.closest("[hidden], [aria-hidden='true']")) {
+        if (!element) {
+          return false;
+        }
+
+        const cached = visibilityCache.get(element);
+
+        if (typeof cached === "boolean") {
+          return cached;
+        }
+
+        if (element.closest("[hidden], [aria-hidden='true']")) {
+          visibilityCache.set(element, false);
           return false;
         }
 
         const style = window.getComputedStyle(element);
-        return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+        const visible =
+          style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+        visibilityCache.set(element, visible);
+        return visible;
       };
 
       container

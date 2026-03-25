@@ -9,6 +9,8 @@ export type { ResearchResult } from "./research-result";
 const MODEL_NAME = "gemini-2.0-flash";
 const MAX_RECONCILIATION_ATTEMPTS = 1;
 const DEFAULT_RESEARCH_MODE = "fast";
+const MIN_NONTRIVIAL_CLAIM_LENGTH = 24;
+const MIN_NONTRIVIAL_CLAIM_WORDS = 4;
 
 const FAST_RESEARCH_ALIASES = new Set(["fast", "fast-lane", "bounded", "default"]);
 const DEEP_RESEARCH_ALIASES = new Set(["deep", "deep-research", "reviewed", "reviewed-deep"]);
@@ -528,7 +530,11 @@ function isNonTrivialClaim(value: unknown): boolean {
     return false;
   }
 
-  return normalized.length >= 24 || normalized.split(/\s+/).length >= 4 || /\d/.test(normalized);
+  return (
+    normalized.length >= MIN_NONTRIVIAL_CLAIM_LENGTH ||
+    normalized.split(/\s+/).length >= MIN_NONTRIVIAL_CLAIM_WORDS ||
+    /\d/.test(normalized)
+  );
 }
 
 function extractComparableTokens(value: string): string[] {
@@ -634,7 +640,7 @@ export function validateResearchEvidenceCoverage(
 
       if (isNonTrivialClaim(fieldValue) && distinctEvidenceIds.size < 2) {
         throw new Error(
-          `Row ${rowIndex + 1} field "${fieldName}" must cite at least 2 distinct evidence snippets for non-trivial claims.`
+          `Row ${rowIndex + 1} field "${fieldName}" must cite at least 2 distinct evidence IDs for non-trivial claims.`
         );
       }
 

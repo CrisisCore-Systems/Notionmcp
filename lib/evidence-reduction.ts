@@ -1,6 +1,8 @@
 const MAX_EVIDENCE_FRAGMENTS = 3;
 const MAX_EVIDENCE_FRAGMENT_LENGTH = 240;
 const MAX_REDUCED_FIELDS = 18;
+const UNSAFE_EVIDENCE_FRAGMENT_PATTERN =
+  /\b(system prompt|developer message|prompt injection|chatgpt|ai assistant|tool call|correct answer|best answer|real answer|only answer|regardless of evidence|regardless of source|trust this summary)\b/i;
 const MAX_FIELDS_PER_KIND: Record<EvidenceFieldKind, number> = {
   title: 1,
   "meta-description": 1,
@@ -84,15 +86,7 @@ function isUnsafeEvidenceFragment(value: string): boolean {
     return true;
   }
 
-  if (
-    /\b(correct answer|best answer|real answer|only answer|regardless of evidence|regardless of source|trust this summary)\b/i.test(
-      lower
-    )
-  ) {
-    return true;
-  }
-
-  return /\b(system prompt|developer message|prompt injection|chatgpt|ai assistant|tool call)\b/i.test(lower);
+  return UNSAFE_EVIDENCE_FRAGMENT_PATTERN.test(lower);
 }
 
 function hasInvisibleMarkers(value: string): boolean {
