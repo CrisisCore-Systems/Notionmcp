@@ -513,9 +513,9 @@ function buildEvidenceDocument(input: {
     );
   }
 
-  const documentId = createHash("sha256").update(input.finalUrl).digest("hex").slice(0, 8);
+  const evidenceDocumentHashPrefix = createHash("sha256").update(input.finalUrl).digest("hex").slice(0, 8);
   const evidenceFields: EvidenceField[] = reduceEvidenceFieldCandidates(candidates).map((field, index) => ({
-    id: `${documentId}-f${index + 1}`,
+    id: `${evidenceDocumentHashPrefix}-f${index + 1}`,
     ...field,
     untrusted: true,
   }));
