@@ -20,8 +20,13 @@ const MAX_SEARCH_RESULTS = 6;
 const MAX_EXTRACTED_CHARACTERS = 8000;
 const MAX_EVIDENCE_SNIPPETS = 8;
 const MAX_BLOCKED_URL_VALIDATION_CACHE_ENTRIES = 256;
+const SIGNAL_EXIT_CODES: Record<"SIGINT" | "SIGTERM", number> = {
+  SIGINT: 130,
+  SIGTERM: 143,
+};
 const blockedUrlValidationCache = new Map<string, Promise<void>>();
 let browserShutdownHandlersRegistered = false;
+let browserShutdownInProgress = false;
 
 export interface SearchResult {
   title: string;
@@ -562,13 +567,8 @@ function setBlockedUrlValidation(target: string, validation: Promise<void>): voi
   blockedUrlValidationCache.set(target, validation);
 
   while (blockedUrlValidationCache.size > MAX_BLOCKED_URL_VALIDATION_CACHE_ENTRIES) {
-    const oldestKey = blockedUrlValidationCache.keys().next().value;
-
-    if (!oldestKey) {
-      break;
-    }
-
-    blockedUrlValidationCache.delete(oldestKey);
+    const leastRecentlyUsedKey = blockedUrlValidationCache.keys().next().value!;
+    blockedUrlValidationCache.delete(leastRecentlyUsedKey);
   }
 }
 
@@ -593,14 +593,15 @@ function registerBrowserShutdownHandlers(): void {
   }
 
   browserShutdownHandlersRegistered = true;
-  process.once("beforeExit", () => {
-    void closeSharedBrowser();
-  });
-
-  const registerSignalHandler = (signal: NodeJS.Signals) => {
+  const registerSignalHandler = (signal: "SIGINT" | "SIGTERM") => {
     process.once(signal, () => {
+      if (browserShutdownInProgress) {
+        return;
+      }
+
+      browserShutdownInProgress = true;
       void closeSharedBrowser().finally(() => {
-        process.kill(process.pid, signal);
+        process.exit(SIGNAL_EXIT_CODES[signal]);
       });
     });
   };

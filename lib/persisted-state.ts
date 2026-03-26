@@ -9,7 +9,7 @@ const ENCRYPTION_ALGORITHM = "aes-256-gcm";
 const ENCRYPTION_KEY_DERIVATION = "pbkdf2-sha256";
 const LEGACY_ENCRYPTION_KEY_DERIVATION = "sha256";
 const ENCRYPTION_KEY_LENGTH_BYTES = 32;
-const ENCRYPTION_KEY_DERIVATION_ITERATIONS = 210_000;
+export const ENCRYPTION_KEY_DERIVATION_ITERATIONS = 210_000;
 const ENCRYPTION_KEY_DERIVATION_SALT_BYTES = 16;
 
 type EncryptedStateEnvelope = {
@@ -18,9 +18,9 @@ type EncryptedStateEnvelope = {
   iv: string;
   tag: string;
   ciphertext: string;
-   kdf?: typeof ENCRYPTION_KEY_DERIVATION | typeof LEGACY_ENCRYPTION_KEY_DERIVATION;
-   salt?: string;
-   iterations?: number;
+  kdf?: typeof ENCRYPTION_KEY_DERIVATION | typeof LEGACY_ENCRYPTION_KEY_DERIVATION;
+  salt?: string;
+  iterations?: number;
 };
 
 function hasConfiguredValue(value: string | undefined): boolean {
@@ -68,7 +68,7 @@ function deriveLegacyEncryptionKey(secret: string): Buffer {
 }
 
 function deriveEncryptionKeyForEnvelope(envelope: EncryptedStateEnvelope, secret: string): Buffer {
-  if (!envelope.kdf || envelope.kdf === LEGACY_ENCRYPTION_KEY_DERIVATION) {
+  if (envelope.kdf === undefined || envelope.kdf === LEGACY_ENCRYPTION_KEY_DERIVATION) {
     return deriveLegacyEncryptionKey(secret);
   }
 
@@ -76,10 +76,19 @@ function deriveEncryptionKeyForEnvelope(envelope: EncryptedStateEnvelope, secret
     throw new Error("Unsupported persisted-state encryption key derivation function.");
   }
 
-  const iterations =
-    Number.isSafeInteger(envelope.iterations) && (envelope.iterations ?? 0) > 0
-      ? envelope.iterations
-      : ENCRYPTION_KEY_DERIVATION_ITERATIONS;
+  const candidateIterations = envelope.iterations;
+  if (candidateIterations !== undefined) {
+    const hasValidIterations =
+      typeof candidateIterations === "number" &&
+      Number.isSafeInteger(candidateIterations) &&
+      candidateIterations >= ENCRYPTION_KEY_DERIVATION_ITERATIONS;
+
+    if (!hasValidIterations) {
+      throw new Error("Invalid persisted-state PBKDF2 iteration count.");
+    }
+  }
+
+  const iterations = candidateIterations ?? ENCRYPTION_KEY_DERIVATION_ITERATIONS;
   return deriveEncryptionKey(secret, Buffer.from(envelope.salt, "base64"), iterations);
 }
 
