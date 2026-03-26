@@ -71,6 +71,7 @@ const OPERATOR_METRIC_NAMES = [
   "backgroundCleanupFilesDeleted",
 ] as const satisfies readonly OperatorMetricName[];
 const OPERATOR_SURFACE_NAMES = ["health", "ready", "status"] as const satisfies readonly OperatorSurfaceKind[];
+const OPERATOR_METRICS_FLUSH_DELAY_MS = 250;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -101,6 +102,10 @@ let processStartedAt = nowIso();
 let metricsStartedAt = processStartedAt;
 let metricsUpdatedAt = processStartedAt;
 let metricsCounters = createEmptyCounters();
+let metricsHydrated = false;
+let metricsFlushScheduled = false;
+let metricsFlushTimer: NodeJS.Timeout | null = null;
+let metricsFlushHandlersRegistered = false;
 let probeTimestamps: StartupDiagnosticsSnapshot["probes"] = {
   firstHealthCheckAt: null,
   lastHealthCheckAt: null,
@@ -125,7 +130,7 @@ function getOperatorMetricsPath(env: NodeJS.ProcessEnv = process.env): string | 
   return path.join(process.cwd(), ".notionmcp-data", "operator-metrics.json");
 }
 
-function isIsoTimestamp(value: unknown): value is string {
+function isParsableDateString(value: unknown): value is string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
@@ -190,8 +195,8 @@ function restorePersistedMetrics(env: NodeJS.ProcessEnv = process.env): void {
       return;
     }
 
-    metricsStartedAt = isIsoTimestamp(candidate.startedAt) ? candidate.startedAt : metricsStartedAt;
-    metricsUpdatedAt = isIsoTimestamp(candidate.updatedAt) ? candidate.updatedAt : metricsStartedAt;
+    metricsStartedAt = isParsableDateString(candidate.startedAt) ? candidate.startedAt : metricsStartedAt;
+    metricsUpdatedAt = isParsableDateString(candidate.updatedAt) ? candidate.updatedAt : metricsStartedAt;
     metricsCounters = normalizedCounters;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -200,8 +205,23 @@ function restorePersistedMetrics(env: NodeJS.ProcessEnv = process.env): void {
   }
 }
 
-function persistOperatorMetrics(env: NodeJS.ProcessEnv = process.env): void {
+function ensureMetricsHydrated(env: NodeJS.ProcessEnv = process.env): void {
+  if (metricsHydrated) {
+    return;
+  }
+
+  metricsHydrated = true;
+  restorePersistedMetrics(env);
+}
+
+function flushOperatorMetrics(env: NodeJS.ProcessEnv = process.env): void {
   const metricsPath = getOperatorMetricsPath(env);
+  metricsFlushScheduled = false;
+
+  if (metricsFlushTimer) {
+    clearTimeout(metricsFlushTimer);
+    metricsFlushTimer = null;
+  }
 
   if (!metricsPath) {
     return;
@@ -215,7 +235,34 @@ function persistOperatorMetrics(env: NodeJS.ProcessEnv = process.env): void {
   }
 }
 
-restorePersistedMetrics();
+function registerMetricsFlushHandlers(): void {
+  if (metricsFlushHandlersRegistered) {
+    return;
+  }
+
+  metricsFlushHandlersRegistered = true;
+  process.once("exit", () => {
+    flushOperatorMetrics();
+  });
+}
+
+function scheduleOperatorMetricsPersistence(env: NodeJS.ProcessEnv = process.env): void {
+  registerMetricsFlushHandlers();
+  metricsFlushScheduled = true;
+
+  if (metricsFlushTimer) {
+    return;
+  }
+
+  metricsFlushTimer = setTimeout(() => {
+    metricsFlushTimer = null;
+
+    if (metricsFlushScheduled) {
+      flushOperatorMetrics(env);
+    }
+  }, OPERATOR_METRICS_FLUSH_DELAY_MS);
+  metricsFlushTimer.unref?.();
+}
 
 function touchMetricsUpdatedAt(): void {
   metricsUpdatedAt = nowIso();
@@ -255,19 +302,23 @@ export function buildRequestLogContext(
 }
 
 export function incrementMetric(metric: OperatorMetricName, amount = 1): void {
+  ensureMetricsHydrated();
+
   if (amount <= 0) {
     return;
   }
 
   metricsCounters[metric] += amount;
   touchMetricsUpdatedAt();
-  persistOperatorMetrics();
+  scheduleOperatorMetricsPersistence();
 }
 
 export function recordOperatorSurfaceCheck(
   surface: OperatorSurfaceKind,
   options: { ready?: boolean } = {}
 ): void {
+  ensureMetricsHydrated();
+
   const timestamp = nowIso();
   metricsCounters.operatorSurfaceChecks[surface] += 1;
   metricsUpdatedAt = timestamp;
@@ -275,7 +326,7 @@ export function recordOperatorSurfaceCheck(
   if (surface === "health") {
     probeTimestamps.firstHealthCheckAt ??= timestamp;
     probeTimestamps.lastHealthCheckAt = timestamp;
-    persistOperatorMetrics();
+    scheduleOperatorMetricsPersistence();
     return;
   }
 
@@ -287,16 +338,18 @@ export function recordOperatorSurfaceCheck(
       probeTimestamps.firstSuccessfulReadyAt ??= timestamp;
     }
 
-    persistOperatorMetrics();
+    scheduleOperatorMetricsPersistence();
     return;
   }
 
   probeTimestamps.firstStatusCheckAt ??= timestamp;
   probeTimestamps.lastStatusCheckAt = timestamp;
-  persistOperatorMetrics();
+  scheduleOperatorMetricsPersistence();
 }
 
 export function getOperatorMetricsSnapshot(): OperatorMetricsSnapshot {
+  ensureMetricsHydrated();
+
   return {
     startedAt: metricsStartedAt,
     updatedAt: metricsUpdatedAt,
@@ -359,6 +412,12 @@ export const observabilityTestOverrides = {
     metricsStartedAt = processStartedAt;
     metricsUpdatedAt = processStartedAt;
     metricsCounters = createEmptyCounters();
+    metricsHydrated = true;
+    metricsFlushScheduled = false;
+    if (metricsFlushTimer) {
+      clearTimeout(metricsFlushTimer);
+      metricsFlushTimer = null;
+    }
     probeTimestamps = {
       firstHealthCheckAt: null,
       lastHealthCheckAt: null,
@@ -382,6 +441,12 @@ export const observabilityTestOverrides = {
     metricsStartedAt = processStartedAt;
     metricsUpdatedAt = processStartedAt;
     metricsCounters = createEmptyCounters();
+    metricsHydrated = false;
+    metricsFlushScheduled = false;
+    if (metricsFlushTimer) {
+      clearTimeout(metricsFlushTimer);
+      metricsFlushTimer = null;
+    }
     probeTimestamps = {
       firstHealthCheckAt: null,
       lastHealthCheckAt: null,
@@ -391,6 +456,9 @@ export const observabilityTestOverrides = {
       firstStatusCheckAt: null,
       lastStatusCheckAt: null,
     };
-    restorePersistedMetrics();
+    ensureMetricsHydrated();
+  },
+  flushPersistedMetrics(): void {
+    flushOperatorMetrics();
   },
 };

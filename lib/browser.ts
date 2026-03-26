@@ -658,7 +658,18 @@ async function createIsolatedPage(): Promise<{ browser: Browser; context: Browse
 }
 
 async function closeIsolatedBrowserSession(browser: Browser, context: BrowserContext): Promise<void> {
-  await Promise.allSettled([context.close(), closeTrackedBrowser(browser)]);
+  const [contextCloseResult, browserCloseResult] = await Promise.allSettled([
+    context.close(),
+    closeTrackedBrowser(browser),
+  ]);
+
+  if (contextCloseResult.status === "rejected") {
+    console.warn("Failed to close isolated browser context.", contextCloseResult.reason);
+  }
+
+  if (browserCloseResult.status === "rejected") {
+    console.warn("Failed to close isolated browser.", browserCloseResult.reason);
+  }
 }
 
 function normalizeIpAddress(value: string): string {

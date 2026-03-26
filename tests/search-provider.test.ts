@@ -23,7 +23,7 @@ test("getConfiguredSearchProviders accepts an explicit provider order", () => {
   assert.equal(providers.includes("unknown" as never), false);
 });
 
-test("duckduckgo fallback launches a fresh browser for each search and tolerates context shutdown crashes", async () => {
+test("DuckDuckGo fallback launches a fresh browser for each search and tolerates context shutdown crashes", async () => {
   const originalSearchProviders = process.env.SEARCH_PROVIDERS;
   const launchedBrowsers: number[] = [];
   const closedBrowsers: number[] = [];

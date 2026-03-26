@@ -35,6 +35,7 @@ test("operator metrics reload from the persisted sink after a simulated worker r
   incrementMetric("jobsCreated", 2);
   incrementMetric("queueClaimContention");
   recordOperatorSurfaceCheck("status");
+  observabilityTestOverrides.flushPersistedMetrics();
   const snapshotBeforeRestart = getOperatorMetricsSnapshot();
 
   observabilityTestOverrides.reloadPersistedMetrics();
