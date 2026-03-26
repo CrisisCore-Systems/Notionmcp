@@ -19,7 +19,9 @@ let browser: Browser | null = null;
 const MAX_SEARCH_RESULTS = 6;
 const MAX_EXTRACTED_CHARACTERS = 8000;
 const MAX_EVIDENCE_SNIPPETS = 8;
+const MAX_BLOCKED_URL_VALIDATION_CACHE_ENTRIES = 256;
 const blockedUrlValidationCache = new Map<string, Promise<void>>();
+let browserShutdownHandlersRegistered = false;
 
 export interface SearchResult {
   title: string;
@@ -543,9 +545,74 @@ function buildEvidenceDocument(input: {
   };
 }
 
+function getBlockedUrlValidation(target: string): Promise<void> | undefined {
+  const cached = blockedUrlValidationCache.get(target);
+
+  if (!cached) {
+    return undefined;
+  }
+
+  blockedUrlValidationCache.delete(target);
+  blockedUrlValidationCache.set(target, cached);
+  return cached;
+}
+
+function setBlockedUrlValidation(target: string, validation: Promise<void>): void {
+  blockedUrlValidationCache.delete(target);
+  blockedUrlValidationCache.set(target, validation);
+
+  while (blockedUrlValidationCache.size > MAX_BLOCKED_URL_VALIDATION_CACHE_ENTRIES) {
+    const oldestKey = blockedUrlValidationCache.keys().next().value;
+
+    if (!oldestKey) {
+      break;
+    }
+
+    blockedUrlValidationCache.delete(oldestKey);
+  }
+}
+
+async function closeSharedBrowser(): Promise<void> {
+  if (!browser) {
+    return;
+  }
+
+  const activeBrowser = browser;
+  browser = null;
+
+  if (!activeBrowser.isConnected()) {
+    return;
+  }
+
+  await activeBrowser.close();
+}
+
+function registerBrowserShutdownHandlers(): void {
+  if (browserShutdownHandlersRegistered) {
+    return;
+  }
+
+  browserShutdownHandlersRegistered = true;
+  process.once("beforeExit", () => {
+    void closeSharedBrowser();
+  });
+
+  const registerSignalHandler = (signal: NodeJS.Signals) => {
+    process.once(signal, () => {
+      void closeSharedBrowser().finally(() => {
+        process.kill(process.pid, signal);
+      });
+    });
+  };
+
+  registerSignalHandler("SIGINT");
+  registerSignalHandler("SIGTERM");
+}
+
 async function getBrowser(): Promise<Browser> {
   if (!browser || !browser.isConnected()) {
     browser = await chromium.launch({ headless: true });
+    registerBrowserShutdownHandlers();
   }
   return browser;
 }
@@ -706,7 +773,7 @@ function isBlockedIpAddress(address: string): boolean {
 }
 
 export async function validatePublicHttpUrl(target: string): Promise<void> {
-  let validation = blockedUrlValidationCache.get(target);
+  let validation = getBlockedUrlValidation(target);
 
   if (!validation) {
     validation = (async () => {
@@ -740,7 +807,7 @@ export async function validatePublicHttpUrl(target: string): Promise<void> {
       }
     })();
 
-    blockedUrlValidationCache.set(target, validation);
+    setBlockedUrlValidation(target, validation);
   }
 
   try {

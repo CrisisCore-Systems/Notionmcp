@@ -236,6 +236,17 @@ Old persisted job and audit JSON files are cleaned up automatically after 30 day
 unencrypted, but any remote private deployment must set `PERSISTED_STATE_ENCRYPTION_KEY` so those JSON files
 stay encrypted at rest.
 
+### Persisted-state encryption key rotation
+
+If you rotate `PERSISTED_STATE_ENCRYPTION_KEY`, existing encrypted files under `.notionmcp-data/jobs`,
+`.notionmcp-data/write-audits`, and `.notionmcp-data/request-rate-limits` cannot be decrypted with the new
+secret until they are re-encrypted. Drain or stop active jobs first, back up those directories, then either:
+
+- re-encrypt the persisted JSON files with the old key before switching to the new one, or
+- delete the old persisted files if you intentionally accept losing resumable state and rate-limit history.
+
+Deploying a new key without one of those steps will strand any already-encrypted persisted state.
+
 ### 3. Run
 
 ```bash

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { incrementMetric, infoLog } from "@/lib/observability";
@@ -6,6 +6,11 @@ import { incrementMetric, infoLog } from "@/lib/observability";
 const DEFAULT_RETENTION_DAYS = 30;
 const ENCRYPTED_STATE_FORMAT = "notionmcp-encrypted-state/v1";
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
+const ENCRYPTION_KEY_DERIVATION = "pbkdf2-sha256";
+const LEGACY_ENCRYPTION_KEY_DERIVATION = "sha256";
+const ENCRYPTION_KEY_LENGTH_BYTES = 32;
+const ENCRYPTION_KEY_DERIVATION_ITERATIONS = 210_000;
+const ENCRYPTION_KEY_DERIVATION_SALT_BYTES = 16;
 
 type EncryptedStateEnvelope = {
   format: typeof ENCRYPTED_STATE_FORMAT;
@@ -13,6 +18,9 @@ type EncryptedStateEnvelope = {
   iv: string;
   tag: string;
   ciphertext: string;
+   kdf?: typeof ENCRYPTION_KEY_DERIVATION | typeof LEGACY_ENCRYPTION_KEY_DERIVATION;
+   salt?: string;
+   iterations?: number;
 };
 
 function hasConfiguredValue(value: string | undefined): boolean {
@@ -51,8 +59,28 @@ export function assertPersistedStateEncryptionRequirement(
   }
 }
 
-function deriveEncryptionKey(secret: string): Buffer {
+function deriveEncryptionKey(secret: string, salt: Buffer, iterations = ENCRYPTION_KEY_DERIVATION_ITERATIONS): Buffer {
+  return pbkdf2Sync(secret, salt, iterations, ENCRYPTION_KEY_LENGTH_BYTES, "sha256");
+}
+
+function deriveLegacyEncryptionKey(secret: string): Buffer {
   return createHash("sha256").update(secret, "utf8").digest();
+}
+
+function deriveEncryptionKeyForEnvelope(envelope: EncryptedStateEnvelope, secret: string): Buffer {
+  if (!envelope.kdf || envelope.kdf === LEGACY_ENCRYPTION_KEY_DERIVATION) {
+    return deriveLegacyEncryptionKey(secret);
+  }
+
+  if (envelope.kdf !== ENCRYPTION_KEY_DERIVATION || !envelope.salt) {
+    throw new Error("Unsupported persisted-state encryption key derivation function.");
+  }
+
+  const iterations =
+    Number.isSafeInteger(envelope.iterations) && (envelope.iterations ?? 0) > 0
+      ? envelope.iterations
+      : ENCRYPTION_KEY_DERIVATION_ITERATIONS;
+  return deriveEncryptionKey(secret, Buffer.from(envelope.salt, "base64"), iterations);
 }
 
 function isEncryptedStateEnvelope(value: unknown): value is EncryptedStateEnvelope {
@@ -72,7 +100,8 @@ function isEncryptedStateEnvelope(value: unknown): value is EncryptedStateEnvelo
 
 function encryptState(record: unknown, secret: string): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv(ENCRYPTION_ALGORITHM, deriveEncryptionKey(secret), iv);
+  const salt = randomBytes(ENCRYPTION_KEY_DERIVATION_SALT_BYTES);
+  const cipher = createCipheriv(ENCRYPTION_ALGORITHM, deriveEncryptionKey(secret, salt), iv);
   const ciphertext = Buffer.concat([
     cipher.update(JSON.stringify(record), "utf8"),
     cipher.final(),
@@ -83,6 +112,9 @@ function encryptState(record: unknown, secret: string): string {
     iv: iv.toString("base64"),
     tag: cipher.getAuthTag().toString("base64"),
     ciphertext: ciphertext.toString("base64"),
+    kdf: ENCRYPTION_KEY_DERIVATION,
+    salt: salt.toString("base64"),
+    iterations: ENCRYPTION_KEY_DERIVATION_ITERATIONS,
   };
   return `${JSON.stringify(envelope, null, 2)}\n`;
 }
@@ -90,7 +122,7 @@ function encryptState(record: unknown, secret: string): string {
 function decryptState(envelope: EncryptedStateEnvelope, secret: string): unknown {
   const decipher = createDecipheriv(
     ENCRYPTION_ALGORITHM,
-    deriveEncryptionKey(secret),
+    deriveEncryptionKeyForEnvelope(envelope, secret),
     Buffer.from(envelope.iv, "base64")
   );
   decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
