@@ -1,16 +1,51 @@
 # Notion MCP Backlog Desk
 
-Notionmcp is a **private, single-operator Notion backlog desk**. Notion is the workspace of record and backlog control plane, MCP is the default transport that pulls the next ready item, and the app is the reviewed execution layer for durable research runs and audited write-back. It is **not a multi-tenant SaaS**.
+**Claim the next Ready item from Notion, research it durably, review it, and write the approved packet back into the same row.**
+
+> **Default path:** Notion queue intake and reviewed writes run through local MCP.
+> **Alternate lane:** direct API is available only when you intentionally select it.
+
+![Same Notion row moves from Ready to Packet Ready](docs/architecture-overview.svg)
+
+Notionmcp is a **private, single-operator Notion backlog desk** built around one visible queue workflow:
+
+- **Notion is the queue**
+- **MCP is the intake path**
+- **the app is the reviewed execution layer**
+- **the same row gets enriched and advanced**
+
+The operator-visible outcomes are simple:
+
+- **The run survives disconnects**
+- **The row does not get rewritten blindly**
+- **You approve before the workspace changes**
+- **You can inspect what happened afterward**
+
+### Before / after on the same Notion row
+
+| Before | After |
+| --- | --- |
+| `Name` | `Name` |
+| `Research Prompt` | `Research Prompt` |
+| `Status = Ready` | `Status = Packet Ready` |
+| — | `Claimed At` |
+| — | `Claimed By` |
+| — | `Run ID` |
+| — | `Research Summary` |
+| — | `Recommended Direction` |
+| — | `Competitors` |
+| — | `Source Count` |
+| — | `Audit URL` |
 
 ## Repository profile
 
-- **Description**: Notion MCP backlog desk for durable reviewed research runs and audited Notion write-back.
+- **Description**: Notion MCP backlog desk for queue-based durable research runs and audited Notion write-back.
 - **Topics**: `nextjs`, `gemini`, `notion`, `mcp`, `playwright`, `web-research`, `human-in-the-loop`, `private-operator-tool`
 - **Release tags**: `v0.2.1` (worker path + remote encryption hardening), `v0.2.x` (stability and evidence hardening). Mirror these in GitHub releases/tags so operators can verify what build they are running, and keep `CHANGELOG.md` aligned with each tag.
 
 ## What this repository is
 
-This repository is a **small runnable Next.js app** for one sharp Notion-native workflow: **pull the next ready backlog item from the Notion queue via MCP, research it, review the result, and write the approved packet back into Notion**. It is built with **Next.js, Gemini, Playwright, and Notion provider adapters**, and it is intended as a **private operator tool, not a public SaaS offering**.
+This repository is a **small runnable Next.js app** for one sharp Notion-native workflow: **pull the next Ready backlog row from the Notion queue via MCP, move it into In Progress, research it, review the packet, and write the approved enrichment back into the same row until it reaches Packet Ready**. It is built with **Next.js, Gemini, Playwright, and Notion provider adapters**, and it is intended as a **private operator tool, not a public SaaS offering**.
 
 It contains the core application pieces:
 
@@ -22,7 +57,7 @@ It contains the core application pieces:
 - a Notion provider layer (`lib/notion/index.ts`)
 - a local Notion MCP transport (`lib/notion-mcp.ts`)
 
-The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The default Notion path now runs through the pinned local `@notionhq/notion-mcp-server` package so the visible workflow starts in Notion instead of treating MCP as compatibility plumbing. A direct Notion API lane remains available when you intentionally want that alternate execution path.
+The repository is laid out as a standard Next.js App Router project, so `npm install`, `npm run dev`, and `npm run build` work once your environment variables are configured. The default Notion path now runs through the pinned local `@notionhq/notion-mcp-server` package so the visible workflow starts in the Notion queue instead of treating MCP as compatibility plumbing. A direct Notion API lane remains available only when you intentionally want that alternate execution path.
 
 To quickly crawl the repository and print its current state, run:
 
@@ -34,12 +69,12 @@ Add `-- --json` if you want the same information as structured JSON.
 
 ## How it works
 
-1. **Notion is the control plane and queue**: the UI claims the next ready backlog item from a Notion database via the default local MCP transport (`Status=Ready`, `Research Prompt`, and `Name` by default), immediately moves it to `In Progress`, and records run metadata like `Claimed At`, `Claimed By`, and `Run ID`
-2. **A durable job** is created immediately for research or write work and persisted under `.notionmcp-data/jobs`
-3. **Gemini 2.0 Flash** plans the research, Playwright extracts normalized evidence documents, and a verifier synthesizes supported rows
-4. **The app validates and normalizes** the model payload before the approval UI ever renders it
-5. **You review** the structured data and proposed Notion schema
-6. **One click** writes the approved packet back into Notion, with continuous row checkpoints, resumable writes, and original-row enrichment that moves the backlog item through `Needs Review` and `Packet Ready`
+1. **Notion is the queue**: the UI claims the next Ready backlog row from a Notion database via the default local MCP transport (`Status=Ready`, `Research Prompt`, and `Name` by default), immediately moves it to `In Progress`, and records `Claimed At`, `Claimed By`, and `Run ID`
+2. **A durable run** is created immediately and persisted under `.notionmcp-data/jobs`, so the same backlog item can survive disconnects and resume cleanly
+3. **Gemini 2.0 Flash + Playwright** research the claimed row while planner, extractor, and verifier stay behind the scenes as support layers
+4. **The app validates the packet before review**, so the row is not rewritten blindly
+5. **You review the packet** while the backlog row sits in `Needs Review`
+6. **Approved write-back** enriches the same Notion row and advances it to `Packet Ready`
 
 The UI now exposes two reviewed research lanes:
 
@@ -63,7 +98,7 @@ can be opened in a browser or shared into the Notion app on Android.
 ### Using it effectively on Android
 
 1. Run your research normally and write the results to Notion.
-2. On the success screen, tap **Open in Notion** first.
+2. On the success screen, tap **Open updated row** first.
 3. If Android keeps the link in your browser instead of jumping into the app, use **Share link** or
    **Copy Android/web link**.
 4. Open that same `https://www.notion.so/...` link from the Notion app or from Android's share
@@ -85,24 +120,20 @@ Both `/api/research` and `/api/write` now create a persisted job record and stre
 windows. Closing the tab no longer discards the run. When the UI reconnects, it resumes from the same job ID and
 replays any missed events from the job log before continuing to stream live output.
 
-### Trust boundary
+### Visible trust outcomes
 
 ```text
-Operator prompt
-  ↓ trusted
-Planner model
+The run survives disconnects
   ↓
-Search results + browser extraction
-  ↓ untrusted web content boundary
-EvidenceDocument[]
-  ↓ constrained verifier prompt
-Validated research rows
-  ↓ operator review
-Notion provider
+The row does not get rewritten blindly
+  ↓
+You approve before the workspace changes
+  ↓
+You can inspect what happened afterward
 ```
 
-The browser layer now labels extracted fields as untrusted evidence, validates redirect hops, fails closed on
-non-HTML content types, and strips instruction-like text before the verifier sees it.
+Under the hood, the browser layer labels extracted fields as untrusted evidence, validates redirect hops,
+fails closed on non-HTML content types, and strips instruction-like text before the verifier sees it.
 
 ### Notion provider modes
 
@@ -276,31 +307,24 @@ Recommended backlog properties for the strongest demo are:
 
 ## Architecture
 
-![Architecture overview](docs/architecture-overview.png)
+![Queue-first architecture overview](docs/architecture-overview.svg)
 
 - [Architecture doc](docs/architecture.md)
 - [SVG source](docs/architecture-overview.svg)
 
 ```
-Notion backlog queue
+Notion backlog row
+    ↓ claim via local MCP
+Durable research run
+    ├── planner
+    ├── extractor
+    └── verifier
+    ↓ review + approve
+Approved packet
+    ↓ write-back
+Same Notion row enriched and advanced
     ↓
-Durable research job
-    ├── planner → search queries
-    ├── extractor → Search + Playwright → EvidenceDocument[]
-    └── verifier → supported rows + rejected row reasons
-    ↓
-Runtime validation + reconciliation
-    ↓
-Human approval UI ← YOU REVIEW HERE
-    ↓
-Durable write job
-    └── Notion provider layer
-        ├── local-mcp (default transport)
-        └── direct-api (alternate lane)
-           with deterministic operation keys, row retries, reconciliation, continuous row checkpoints,
-           and resumable job streaming
-    ↓
-Notion workspace ✅
+Ready → In Progress → Needs Review → Packet Ready
 ```
 
 ## Failure and resume walkthrough

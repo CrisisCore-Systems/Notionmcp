@@ -4,22 +4,43 @@ This repository is a **private operator tool, not a public SaaS product**.
 
 Primary references:
 
-- [Architecture overview PNG](./architecture-overview.png)
 - [Architecture overview SVG](./architecture-overview.svg)
 
 Operational flow:
 
-1. The operator submits a prompt in the Next.js UI.
-2. The research route runs Gemini with search and browse tools, then validates and reconciles the extracted rows.
-3. The approval UI lets the operator review schema, row values, and provenance before any write happens.
-4. The write route creates or reuses a Notion database, writes rows with deterministic operation keys, preserves provenance metadata, and reconciles ambiguous partial failures before suggesting a resume point.
-5. Each write run returns a structured operator audit trail with the source set, extraction counts, rejected URLs, attempted rows, confirmed writes, duplicate skips, and unresolved rows.
-6. The completion panel now exposes both persisted verification artifacts: `/api/write-audits/{auditId}` for the write audit JSON and `/api/jobs/{jobId}` for the durable job checkpoint/event log JSON.
+1. A backlog row starts in Notion with `Status=Ready`.
+2. The app claims that row through local MCP, moves it to `In Progress`, and records `Claimed At`, `Claimed By`, and `Run ID`.
+3. A durable research run gathers evidence, survives disconnects, and advances the same row to `Needs Review`.
+4. The operator reviews the packet before any write-back happens.
+5. The approved write enriches the same Notion row and advances it to `Packet Ready`.
+6. The completion panel exposes both persisted verification artifacts: `/api/write-audits/{auditId}` for the write audit JSON and `/api/jobs/{jobId}` for the durable job checkpoint/event log JSON.
+
+Queue-first visual structure:
+
+```text
+Notion backlog row
+  ↓ claim
+Durable research run
+  ├── planner
+  ├── extractor
+  └── verifier
+  ↓ review
+Approved packet
+  ↓ write-back
+Same Notion row enriched and advanced
+```
 
 Research posture:
 
 - **Fast lane** keeps the original low-latency caps for reviewed research.
 - **Deep research** raises the evidence budget and balances reviewed pages across unique domains and source classes before the operator approves a write.
+
+Visible operator outcomes:
+
+- **The run survives disconnects**
+- **The row does not get rewritten blindly**
+- **You approve before the workspace changes**
+- **You can inspect what happened afterward**
 
 Deployment posture:
 
