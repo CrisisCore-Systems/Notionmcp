@@ -1,8 +1,16 @@
 const MAX_EVIDENCE_FRAGMENTS = 3;
 const MAX_EVIDENCE_FRAGMENT_LENGTH = 240;
 const MAX_REDUCED_FIELDS = 18;
-const UNSAFE_EVIDENCE_FRAGMENT_PATTERN =
-  /\b(system prompt|developer message|prompt injection|chatgpt|ai assistant|tool call|correct answer|best answer|real answer|only answer|regardless of evidence|regardless of source|trust this summary)\b/i;
+const COMMON_HOSTILE_EVIDENCE_TERMS = ["system prompt", "developer message", "prompt injection"];
+const COMMON_HOSTILE_EVIDENCE_PATTERN_SOURCE = COMMON_HOSTILE_EVIDENCE_TERMS.join("|");
+const UNSAFE_EVIDENCE_FRAGMENT_PATTERN = new RegExp(
+  `\\b(${COMMON_HOSTILE_EVIDENCE_PATTERN_SOURCE}|chatgpt|ai assistant|tool call|correct answer|best answer|real answer|only answer|regardless of evidence|regardless of source|trust this summary)\\b`,
+  "i"
+);
+const HOSTILE_EVIDENCE_SOURCE_PATTERN = new RegExp(
+  `\\b(jailbreak|${COMMON_HOSTILE_EVIDENCE_PATTERN_SOURCE}|ignore previous|instruction override|prompt generator|guardrail bypass|policy bypass)\\b`,
+  "i"
+);
 const MAX_FIELDS_PER_KIND: Record<EvidenceFieldKind, number> = {
   title: 1,
   "meta-description": 1,
@@ -148,6 +156,17 @@ export function sanitizeEvidenceText(value: string): string {
   }
 
   return kept.join("\n").trim();
+}
+
+export function isHostileEvidenceSourceIdentity(title: string, url: string): boolean {
+  const normalizedTitle = title.trim().toLowerCase();
+  const normalizedUrl = url.trim().toLowerCase();
+
+  if (HOSTILE_EVIDENCE_SOURCE_PATTERN.test(normalizedTitle)) {
+    return true;
+  }
+
+  return HOSTILE_EVIDENCE_SOURCE_PATTERN.test(normalizedUrl);
 }
 
 export function reduceEvidenceFieldCandidates(

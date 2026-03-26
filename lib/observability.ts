@@ -10,6 +10,9 @@ export type OperatorMetricName =
   | "writeReconciliations"
   | "rateLimitRejects"
   | "rejectedUrls"
+  | "queueClaimContention"
+  | "queueClaimStaleLockRecovered"
+  | "queueClaimFreshnessMiss"
   | "backgroundCleanupRuns"
   | "backgroundCleanupFilesDeleted";
 
@@ -64,6 +67,9 @@ function createEmptyCounters(): OperatorMetricsCounters {
     writeReconciliations: 0,
     rateLimitRejects: 0,
     rejectedUrls: 0,
+    queueClaimContention: 0,
+    queueClaimStaleLockRecovered: 0,
+    queueClaimFreshnessMiss: 0,
     backgroundCleanupRuns: 0,
     backgroundCleanupFilesDeleted: 0,
     operatorSurfaceChecks: {

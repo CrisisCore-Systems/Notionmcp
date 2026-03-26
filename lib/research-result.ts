@@ -54,6 +54,7 @@ export interface ResearchNotionQueueMetadata {
   statusProperty: string;
   runId: string;
   claimedBy: string;
+  claimedAt?: string;
   propertyTypes?: Record<string, string>;
 }
 

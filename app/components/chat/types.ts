@@ -43,6 +43,23 @@ export type WriteSummary = {
   auditId?: string;
   auditUrl?: string;
   auditTrail?: WriteAuditTrail;
+  notionQueue?: {
+    databaseId: string;
+    pageId: string;
+    title: string;
+    claimedBy: string;
+    claimedAt?: string;
+    runId: string;
+  };
+  research?: {
+    mode?: "fast" | "deep";
+    degraded: boolean;
+    uniqueDomainCount: number;
+    sourceClassCount: number;
+    averageQualityScore?: number;
+    rejectedUrlCount: number;
+    usedProviders: string[];
+  };
 };
 
 export type StreamErrorPayload = {

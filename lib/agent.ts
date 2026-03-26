@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { browseAndExtract, getConfiguredSearchProviders, searchWebWithDiagnostics, type EvidenceDocument } from "./browser";
 import { mapWithConcurrencyLimit } from "./concurrency";
 import { assessCitationAgreement, type EvidenceCitationReference } from "./contradiction-check";
+import { isHostileEvidenceSourceIdentity } from "./evidence-reduction";
 import { incrementMetric } from "./observability";
 import { RESEARCH_RUN_METADATA_KEY, type ResearchResult } from "./research-result";
 import {
@@ -204,6 +205,10 @@ export function reviewEvidenceDocumentSource(
     /^(home|index|untitled|403|404|access denied|just a moment|loading(?:\.\.\.)?)$/i.test(title)
   ) {
     reasons.push("weak-page-identity");
+  }
+
+  if (isHostileEvidenceSourceIdentity(title, document.finalUrl)) {
+    reasons.push("hostile-instructional-source");
   }
 
   if (canonicalDomain && canonicalDomain !== finalDomain) {

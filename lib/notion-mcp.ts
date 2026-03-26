@@ -37,6 +37,7 @@ import {
   type ResearchNotionQueueMetadata,
   type ResearchResult,
 } from "@/lib/research-result";
+import { incrementMetric } from "@/lib/observability";
 import type { RowWriteMetadata } from "@/lib/write-audit";
 
 let mcpClient: Client | null = null;
@@ -49,6 +50,7 @@ const TOOL_NAME_ALIASES: Record<string, string[]> = {
   notion_create_page: ["post-page", "API-post-page", "notion_create_page"],
   notion_update_page: ["patch-page", "API-patch-page", "notion_update_page"],
   notion_retrieve_database: ["retrieve-a-database", "API-retrieve-a-database", "notion_retrieve_database"],
+  notion_retrieve_page: ["retrieve-a-page", "API-retrieve-a-page", "notion_retrieve_page"],
   notion_query_data_source: ["query-data-source", "API-query-data-source", "notion_query_data_source"],
 };
 
@@ -563,10 +565,12 @@ async function tryAcquireNotionQueueClaimLock(
     }
 
     if (allowStaleRetry && (await isStaleNotionQueueClaimLock(lockPath))) {
+      incrementMetric("queueClaimStaleLockRecovered");
       await removeNotionQueueClaimLock(lockPath);
       return await tryAcquireNotionQueueClaimLock(databaseId, pageId, false);
     }
 
+    incrementMetric("queueClaimContention");
     return null;
   }
 }
@@ -1287,6 +1291,37 @@ export async function loadNextNotionQueueEntry(input: NotionQueueConfig): Promis
   throw new Error("No ready Notion queue items with a usable research prompt were found.");
 }
 
+async function loadReadyNotionQueueRow(
+  pageId: string,
+  input: NotionQueueConfig
+): Promise<{ row: NotionRecordWithId; title: string; prompt: string } | null> {
+  const result = await callNotion("notion_retrieve_page", { page_id: pageId });
+  const row = extractStructuredPayload(result, isRecordWithId);
+
+  if (!row) {
+    return null;
+  }
+
+  const status = getPagePropertyText(row, input.statusProperty);
+  const expectedReadyValue = input.readyValue.trim().toLowerCase();
+
+  if (expectedReadyValue && status.trim().toLowerCase() !== expectedReadyValue) {
+    return null;
+  }
+
+  const title = getPagePropertyText(row, input.titleProperty);
+  const prompt = buildResearchPromptFromNotionQueueItem({
+    title,
+    prompt: getPagePropertyText(row, input.promptProperty),
+  });
+
+  if (!prompt) {
+    return null;
+  }
+
+  return { row, title, prompt };
+}
+
 export async function claimNextNotionQueueEntry(
   input: NotionQueueConfig,
   options: { runId: string; claimedBy: string }
@@ -1335,21 +1370,31 @@ export async function claimNextNotionQueueEntry(
       }
 
       try {
+        const freshReadyRow = await loadReadyNotionQueueRow(row.id, input);
+
+        if (!freshReadyRow) {
+          incrementMetric("queueClaimFreshnessMiss");
+          continue;
+        }
+
+        const claimedAt = new Date().toISOString();
         const entry: ClaimedNotionQueueEntry = {
           databaseId: input.databaseId,
-          pageId: row.id,
-          title,
-          prompt,
+          pageId: freshReadyRow.row.id,
+          title: freshReadyRow.title,
+          prompt: freshReadyRow.prompt,
           statusProperty: input.statusProperty,
           runId: options.runId,
           claimedBy: options.claimedBy,
-          propertyTypes: buildQueuePropertyTypeLookup(row, input.statusProperty),
+          claimedAt,
+          propertyTypes: buildQueuePropertyTypeLookup(freshReadyRow.row, input.statusProperty),
         };
 
         await updateNotionQueueLifecycle(entry, {
           stage: "in-progress",
           jobId: options.runId,
           message: DEFAULT_NOTION_QUEUE_IN_PROGRESS_VALUE,
+          occurredAt: claimedAt,
         });
 
         return entry;
