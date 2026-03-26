@@ -5,6 +5,7 @@ import { assessCitationAgreement, type EvidenceCitationReference } from "./contr
 import { isHostileEvidenceSourceIdentity } from "./evidence-reduction";
 import { incrementMetric } from "./observability";
 import { RESEARCH_RUN_METADATA_KEY, type ResearchResult } from "./research-result";
+import { isRetryableUpstreamError, runWithRetry } from "./retry";
 import {
   assessEvidenceDocumentQuality,
   classifySourceClass,
@@ -410,7 +411,9 @@ async function generateText(modelName: string, systemInstruction: string, prompt
     model: modelName,
     systemInstruction,
   });
-  const response = await model.generateContent(prompt);
+  const { value: response } = await runWithRetry(() => model.generateContent(prompt), {
+    shouldRetry: (error) => isRetryableUpstreamError(error),
+  });
   return response.response.text();
 }
 
