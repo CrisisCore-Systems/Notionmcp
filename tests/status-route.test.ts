@@ -99,6 +99,11 @@ test("status route reports ready deployment details and persisted runtime counts
       processStartedAt: string;
       persistenceReady: boolean;
       providerMode: string;
+      requestRateLimitCoordination: {
+        storage: string;
+        scope: string;
+        directory: string | null;
+      };
       probes: {
         firstStatusCheckAt: string | null;
       };
@@ -141,6 +146,9 @@ test("status route reports ready deployment details and persisted runtime counts
   assert.match(payload.diagnostics.processStartedAt, /\d{4}-\d{2}-\d{2}T/);
   assert.equal(payload.diagnostics.persistenceReady, true);
   assert.equal(payload.diagnostics.providerMode, "local-mcp");
+  assert.equal(payload.diagnostics.requestRateLimitCoordination.storage, "none");
+  assert.equal(payload.diagnostics.requestRateLimitCoordination.scope, "localhost-bypass");
+  assert.equal(payload.diagnostics.requestRateLimitCoordination.directory, null);
   assert.match(payload.diagnostics.probes.firstStatusCheckAt ?? "", /\d{4}-\d{2}-\d{2}T/);
   assert.equal(payload.metrics.counters.jobsCreated, 2);
   assert.equal(payload.metrics.counters.operatorSurfaceChecks.status, 1);
@@ -168,6 +176,13 @@ test("status route returns 503 with readiness details when deployment settings a
     deployment: {
       readinessError: string | null;
     };
+    diagnostics: {
+      requestRateLimitCoordination: {
+        storage: string;
+        scope: string;
+        directory: string | null;
+      };
+    };
     runtime: {
       jobs: {
         total: number;
@@ -183,6 +198,8 @@ test("status route returns 503 with readiness details when deployment settings a
   assert.equal(response.headers.get("x-notionmcp-provider-mode"), "local-mcp");
   assert.ok(response.headers.get("x-request-id"));
   assert.equal(payload.ready, false);
+  assert.equal(payload.diagnostics.requestRateLimitCoordination.storage, "filesystem");
+  assert.equal(payload.diagnostics.requestRateLimitCoordination.scope, "single-host");
   assert.match(payload.deployment.readinessError ?? "", /APP_ALLOWED_ORIGIN and APP_ACCESS_TOKEN/);
   assert.equal(payload.runtime.jobs.total, 0);
   assert.equal(payload.runtime.writeAudits.total, 0);

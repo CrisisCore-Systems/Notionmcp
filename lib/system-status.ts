@@ -13,6 +13,7 @@ import {
 } from "@/lib/job-store";
 import { getCurrentNotionProviderState } from "@/lib/notion";
 import { getOperatorMetricsSnapshot, getStartupDiagnosticsSnapshot } from "@/lib/observability";
+import { getRequestRateLimitCoordinationSnapshot } from "@/lib/request-security";
 import { listWriteAuditRecords } from "@/lib/write-audit-store";
 
 type CountMap<T extends string> = Record<T, number>;
@@ -50,6 +51,7 @@ export type SystemStatusSnapshot = {
     durableExecutionMode: ReturnType<typeof getDurableExecutionMode>;
     providerMode: ReturnType<typeof getCurrentNotionProviderState>["mode"];
     persistenceReady: boolean;
+    requestRateLimitCoordination: ReturnType<typeof getRequestRateLimitCoordinationSnapshot>;
     readinessError: string | null;
     warning: ReturnType<typeof getDurableJobsWarning>;
   };
@@ -99,6 +101,7 @@ export async function getSystemStatusSnapshot(
       durableExecutionMode: getDurableExecutionMode(env),
       providerMode: providerArchitecture.mode,
       persistenceReady,
+      requestRateLimitCoordination: getRequestRateLimitCoordinationSnapshot(env),
       readinessError: deploymentReadinessError,
       warning: getDurableJobsWarning(env),
     },

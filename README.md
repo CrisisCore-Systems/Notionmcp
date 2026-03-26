@@ -192,6 +192,7 @@ Fill in `.env.local`:
 | `WRITE_AUDIT_RETENTION_DAYS` | Optional retention window before old write-audit JSON files are removed. Defaults to 30 |
 | `JOB_STATE_DIR` | Optional server-side directory for persisted research/write job state |
 | `JOB_STATE_RETENTION_DAYS` | Optional retention window before old durable-job JSON files are removed. Defaults to 30 |
+| `OPERATOR_METRICS_PATH` | Optional file path for persisted operator metrics so counters survive worker restarts |
 | `PERSISTED_STATE_ENCRYPTION_KEY` | Optional for localhost, required for any remote private deployment so persisted job/audit state is encrypted at rest |
 | `NOTIONMCP_RUN_JOBS_INLINE` | Optional escape hatch for inline debugging. Leave unset for the default detached durable-job mode |
 | `NOTIONMCP_HOST_DURABILITY` | Optional host declaration. Set `inline-only` on ephemeral/stateless hosts so localhost mode degrades intentionally and remote private-host mode refuses to boot |
@@ -225,8 +226,9 @@ Every write now also persists a server-side JSON audit record outside transient 
 download link from the completion panel. The same completion panel now also links to the persisted durable
 job JSON so operators can inspect checkpoints, replayable event history, and the final result/error record as
 a first-class verification surface. By default those records live under `.notionmcp-data/write-audits` and
-`.notionmcp-data/jobs` in the project root, or you can redirect them with `WRITE_AUDIT_DIR` and
-`JOB_STATE_DIR`. The matching API verification endpoints are `/api/write-audits/{auditId}` and `/api/jobs/{jobId}`.
+`.notionmcp-data/jobs` in the project root, while operator metrics persist to
+`.notionmcp-data/operator-metrics.json`; you can redirect them with `WRITE_AUDIT_DIR`, `JOB_STATE_DIR`, and
+`OPERATOR_METRICS_PATH`. The matching API verification endpoints are `/api/write-audits/{auditId}` and `/api/jobs/{jobId}`.
 Those verification endpoints now return their own verification contracts in the JSON payload and response headers
 so audit artifacts remain inspectable even outside the UI. Remote private-host request rate limiting now also persists
 state under `.notionmcp-data/request-rate-limits` by default (or `REMOTE_RATE_LIMIT_DIR`) so it no longer
