@@ -43,9 +43,10 @@ test("CompletionPanel surfaces queue lifecycle and research quality context", ()
     })
   );
 
-  assert.match(html, /Queue lifecycle/);
+  assert.match(html, /Updated row metadata/);
   assert.match(html, /Acme backlog row/);
-  assert.match(html, /In Progress → Needs Review → Packet Ready/);
+  assert.match(html, /Ready → In Progress → Needs Review → Packet Ready/);
+  assert.match(html, /Packet Ready/);
   assert.match(html, /Research lane: deep/);
   assert.match(html, /average source quality score of 86.5/);
 });

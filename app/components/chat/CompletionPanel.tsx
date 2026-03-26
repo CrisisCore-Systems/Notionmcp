@@ -32,7 +32,7 @@ export function CompletionPanel({
       }}
       >
         <div style={{ fontSize: "1rem", fontWeight: 600, color: "#166534", marginBottom: "0.5rem" }}>
-          ✅ Packet Ready in Notion!
+          ✅ Same Notion row is Packet Ready
         </div>
       {writeSummary && (
         <div
@@ -43,33 +43,73 @@ export function CompletionPanel({
             borderRadius: 8,
             color: "#166534",
             fontSize: "0.88rem",
-          }}
-        >
-          {writeSummary.notionQueue && (
-            <div
-              style={{
+            }}
+          >
+            {writeSummary.notionQueue && (
+              <div
+                style={{
                 marginBottom: "0.75rem",
                 paddingBottom: "0.75rem",
                 borderBottom: "1px solid rgba(22, 101, 52, 0.18)",
                 display: "grid",
-                gap: "0.25rem",
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>Queue lifecycle</div>
-              <div>
-                Backlog row: <strong>{writeSummary.notionQueue.title || writeSummary.notionQueue.pageId}</strong>
+                  gap: "0.25rem",
+                }}
+              >
+                <div style={{ fontWeight: 600 }}>Updated row metadata</div>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: "0.5rem",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  }}
+                >
+                  <div>
+                    <strong>Backlog row</strong>
+                    <br />
+                    {writeSummary.notionQueue.title || writeSummary.notionQueue.pageId}
+                  </div>
+                  <div>
+                    <strong>Current stage</strong>
+                    <br />
+                    Packet Ready
+                  </div>
+                  <div>
+                    <strong>Claimed by</strong>
+                    <br />
+                    {writeSummary.notionQueue.claimedBy}
+                  </div>
+                  <div>
+                    <strong>Claimed at</strong>
+                    <br />
+                    {writeSummary.notionQueue.claimedAt
+                      ? new Date(writeSummary.notionQueue.claimedAt).toLocaleString()
+                      : "Not recorded"}
+                  </div>
+                  <div style={{ wordBreak: "break-all" }}>
+                    <strong>Run ID</strong>
+                    <br />
+                    {writeSummary.notionQueue.runId}
+                  </div>
+                  <div>
+                    <strong>Research mode</strong>
+                    <br />
+                    {writeSummary.research?.mode ?? "fast"}
+                  </div>
+                  <div>
+                    <strong>Source count</strong>
+                    <br />
+                    {writeSummary.auditTrail?.sourceSet.length ?? 0}
+                  </div>
+                  <div>
+                    <strong>Rejected URLs</strong>
+                    <br />
+                    {writeSummary.research?.rejectedUrlCount ?? writeSummary.auditTrail?.rejectedUrls.length ?? 0}
+                  </div>
+                </div>
+                <div>Run path: Ready → In Progress → Needs Review → Packet Ready</div>
               </div>
-              <div>
-                Claimed by {writeSummary.notionQueue.claimedBy}
-                {writeSummary.notionQueue.claimedAt
-                  ? ` at ${new Date(writeSummary.notionQueue.claimedAt).toLocaleString()}`
-                  : ""}
-              </div>
-              <div>Run path: In Progress → Needs Review → Packet Ready</div>
-              <div>Claim run ID: {writeSummary.notionQueue.runId}</div>
-            </div>
-          )}
-          <div>
+            )}
+            <div>
             Database mode: {writeSummary.usedExistingDatabase ? "existing database" : "new database"}
           </div>
           <div>Rows written: {writeSummary.itemsWritten}</div>
@@ -161,7 +201,7 @@ export function CompletionPanel({
               color: "#166534",
             }}
           >
-            1. Tap <strong>Open in Notion</strong>.
+            1. Tap <strong>Open updated row</strong>.
             <br />
             2. If Android opens the browser instead of the app, tap{" "}
             <strong>Share link</strong> or <strong>Copy Android/web link</strong>.
@@ -175,7 +215,7 @@ export function CompletionPanel({
               rel="noopener noreferrer"
               style={{ color: "#166534", fontSize: "0.9rem" }}
             >
-              Open in Notion →
+              Open updated row →
             </a>
             {canShare && (
               <button
@@ -229,7 +269,7 @@ export function CompletionPanel({
           fontSize: "0.9rem",
         }}
       >
-        Process another item
+        Process another backlog item
       </button>
     </div>
   );

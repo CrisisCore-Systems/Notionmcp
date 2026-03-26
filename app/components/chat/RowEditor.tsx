@@ -195,7 +195,7 @@ export function RowEditor({
                     color: "#666",
                   }}
                 >
-                  All rows removed. Use the “Start over” button below to regenerate results.
+                  All rows removed. Use the “Reset packet” button below to regenerate results.
                 </td>
               </tr>
             ) : (

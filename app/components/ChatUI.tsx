@@ -127,6 +127,8 @@ export default function ChatUI() {
   const reviewedProfile = runMetadata?.search?.profile;
   const reviewedUniqueDomainCount = runMetadata?.search?.uniqueDomains?.length ?? 0;
   const reviewedSourceClassCount = runMetadata?.search?.sourceClasses?.length ?? 0;
+  const reviewedSourceCount = runMetadata?.sourceSet?.length ?? 0;
+  const reviewedRejectedUrlCount = runMetadata?.rejectedUrls?.length ?? 0;
   const isStartActionEnabled = Boolean(
     prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim())
   );
@@ -733,8 +735,8 @@ export default function ChatUI() {
 
     try {
       await navigator.share({
-        title: "Open in Notion",
-        text: "Open this Notion database",
+        title: "Open updated row",
+        text: "Open this updated Notion row",
         url: notionUrl,
       });
       setLinkActionMessage("Shared the Notion link. Choose the Notion app on Android if it appears");
@@ -794,7 +796,8 @@ export default function ChatUI() {
           🔍 Notion MCP Backlog Desk
         </h1>
         <p style={{ color: "#666", marginTop: "0.5rem", fontSize: "0.9rem" }}>
-          Ready Item → Reviewed Packet: claim the next backlog row, research it, review it, and write the approved packet back into Notion
+          Claim the next Ready item from Notion, research it durably, review it, and write the approved packet back
+          into the same row.
         </p>
       </div>
 
@@ -1153,12 +1156,12 @@ export default function ChatUI() {
                cursor: isStartActionEnabled ? "pointer" : "default",
                fontSize: "0.95rem",
                fontWeight: 500,
-             }}
-           >
-             {useNotionQueue ? "Process next ready item" : "Start research"}
-           </button>
-        </div>
-      )}
+            }}
+          >
+              {useNotionQueue ? "Claim next Ready item" : "Process backlog item"}
+            </button>
+         </div>
+       )}
 
       {logs.length > 0 && (
         <div
@@ -1212,7 +1215,7 @@ export default function ChatUI() {
       {phase === "approving" && editedResult && (
         <div style={{ marginTop: "1.5rem" }}>
           <h2 style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: "0.5rem" }}>
-            Review before writing to Notion
+            Review packet before write-back
           </h2>
 
           {isDegradedSearchMode && (
@@ -1275,14 +1278,61 @@ export default function ChatUI() {
                 lineHeight: 1.45,
               }}
             >
-              <strong>Backlog lifecycle</strong> claimed{" "}
-              <strong>{runMetadata.notionQueue.title || runMetadata.notionQueue.pageId}</strong> from Notion as{" "}
-              <strong>In Progress</strong>
-              {runMetadata.notionQueue.claimedAt
-                ? ` at ${new Date(runMetadata.notionQueue.claimedAt).toLocaleString()}`
-                : ""}
-              . After your review, the same row will advance through <strong>Needs Review</strong> and{" "}
-              <strong>Packet Ready</strong>. Claim owner: <strong>{runMetadata.notionQueue.claimedBy}</strong>.
+              <div style={{ fontWeight: 600, marginBottom: "0.65rem" }}>Backlog item metadata</div>
+              <div
+                style={{
+                  display: "grid",
+                  gap: "0.5rem",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                }}
+              >
+                <div>
+                  <strong>Backlog row</strong>
+                  <br />
+                  {runMetadata.notionQueue.title || runMetadata.notionQueue.pageId}
+                </div>
+                <div>
+                  <strong>Current stage</strong>
+                  <br />
+                  Needs Review
+                </div>
+                <div>
+                  <strong>Claimed by</strong>
+                  <br />
+                  {runMetadata.notionQueue.claimedBy}
+                </div>
+                <div>
+                  <strong>Claimed at</strong>
+                  <br />
+                  {runMetadata.notionQueue.claimedAt
+                    ? new Date(runMetadata.notionQueue.claimedAt).toLocaleString()
+                    : "Not recorded"}
+                </div>
+                <div style={{ wordBreak: "break-all" }}>
+                  <strong>Run ID</strong>
+                  <br />
+                  {runMetadata.notionQueue.runId}
+                </div>
+                <div>
+                  <strong>Research mode</strong>
+                  <br />
+                  {reviewedResearchMode}
+                </div>
+                <div>
+                  <strong>Source count</strong>
+                  <br />
+                  {reviewedSourceCount}
+                </div>
+                <div>
+                  <strong>Rejected URLs</strong>
+                  <br />
+                  {reviewedRejectedUrlCount}
+                </div>
+              </div>
+              <div style={{ marginTop: "0.65rem" }}>
+                Ready → In Progress → <strong>Needs Review</strong> → Packet Ready. You approve before the same row is
+                written back to Notion.
+              </div>
             </div>
           )}
 
@@ -1497,7 +1547,7 @@ export default function ChatUI() {
               }}
               disabled={!canWrite}
               aria-disabled={!canWrite}
-              title={!canWrite ? approvalHint ?? "Complete the review before writing to Notion." : undefined}
+              title={!canWrite ? approvalHint ?? "Complete the review before write-back to Notion." : undefined}
               style={{
                 padding: "0.75rem 1.5rem",
                 background: canWrite ? "#000" : "#ccc",
@@ -1509,7 +1559,7 @@ export default function ChatUI() {
                 fontWeight: 500,
               }}
             >
-              {pendingWriteResume ? "Resume write" : useExistingDatabase ? "➕ Add to Notion" : "✍️ Write to Notion"} ({editedResult.items.length} rows)
+              {pendingWriteResume ? "Resume write-back" : "Write back to Notion"} ({editedResult.items.length} rows)
             </button>
             <button
               onClick={reset}
@@ -1523,7 +1573,7 @@ export default function ChatUI() {
                 color: "#555",
               }}
             >
-              Start over
+              {useNotionQueue ? "Claim a different item" : "Reset packet"}
             </button>
           </div>
         </div>
@@ -1598,7 +1648,7 @@ export default function ChatUI() {
                 fontSize: "0.9rem",
               }}
             >
-              {pendingWriteResume ? "Resume write" : "Retry last step"}
+              {pendingWriteResume ? "Resume write-back" : "Retry last step"}
             </button>
             <button
               onClick={reset}
@@ -1611,7 +1661,7 @@ export default function ChatUI() {
                 fontSize: "0.9rem",
               }}
             >
-              Start over
+              {useNotionQueue ? "Claim a different item" : "Reset packet"}
             </button>
           </div>
         </div>

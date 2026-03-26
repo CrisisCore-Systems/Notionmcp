@@ -1,39 +1,66 @@
-<svg width="1400" height="860" viewBox="0 0 1400 860" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1400" height="860" fill="#F7F7FB"/>
-  <text x="80" y="90" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="700" fill="#111827">Notion Research Agent architecture</text>
-  <text x="80" y="130" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#4B5563">Structured extraction now combines JSON-LD, Open Graph, schema hints, and readable page text before approval.</text>
+<svg width="1400" height="900" viewBox="0 0 1400 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1400" height="900" fill="#F8FAFC"/>
+  <text x="80" y="84" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="700" fill="#0F172A">Same Notion row, claimed, reviewed, enriched, and advanced</text>
+  <text x="80" y="124" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#475569">Ready → In Progress → Needs Review → Packet Ready</text>
 
-  <rect x="100" y="190" width="1180" height="110" rx="24" fill="#111827"/>
-  <text x="150" y="238" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">1. Prompt + orchestration</text>
-  <text x="150" y="278" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#E5E7EB">User prompt enters the Gemini agent loop with search_web and browse_url tools.</text>
+  <rect x="80" y="160" width="1240" height="92" rx="24" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+  <text x="120" y="214" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#1D4ED8">Default path: local MCP claims the next Ready row and reviewed write-back updates that same row</text>
 
-  <rect x="100" y="340" width="560" height="180" rx="24" fill="#2563EB"/>
-  <text x="140" y="390" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">2. Search + browse</text>
-  <text x="140" y="430" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#DBEAFE">Serper or DuckDuckGo finds candidate URLs.</text>
-  <text x="140" y="466" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#DBEAFE">Playwright opens isolated pages with public-network guards.</text>
-  <text x="140" y="502" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#DBEAFE">Page extraction keeps prose, tables, and notable links.</text>
+  <rect x="80" y="300" width="340" height="440" rx="28" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="3"/>
+  <text x="110" y="350" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#0F172A">1. Notion row before</text>
+  <text x="110" y="390" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#475569">The queue starts in Notion.</text>
 
-  <rect x="720" y="340" width="560" height="180" rx="24" fill="#0F766E"/>
-  <text x="760" y="390" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">3. Structured extraction</text>
-  <text x="760" y="430" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#CCFBF1">JSON-LD nodes summarized into typed facts.</text>
-  <text x="760" y="466" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#CCFBF1">Open Graph + canonical metadata captured explicitly.</text>
-  <text x="760" y="502" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#CCFBF1">Common schema/itemprop fields become evidence-ready signals.</text>
+  <rect x="110" y="430" width="280" height="260" rx="20" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="2"/>
+  <text x="138" y="478" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#0F172A">Name</text>
+  <text x="138" y="510" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#334155">AI meeting notes assistant</text>
+  <text x="138" y="558" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#0F172A">Research Prompt</text>
+  <text x="138" y="590" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#334155">Research the best launch</text>
+  <text x="138" y="618" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#334155">angle for product teams.</text>
+  <text x="138" y="666" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#0F172A">Status</text>
+  <rect x="228" y="639" width="116" height="40" rx="20" fill="#DCFCE7"/>
+  <text x="258" y="665" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#166534">Ready</text>
 
-  <path d="M690 430 L720 430" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
-  <polygon points="712,416 740,430 712,444" fill="#6B7280"/>
+  <rect x="530" y="300" width="340" height="440" rx="28" fill="#EFF6FF" stroke="#93C5FD" stroke-width="3"/>
+  <text x="560" y="350" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#1D4ED8">2. Durable research run</text>
+  <text x="560" y="390" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#1E40AF">Claim next Ready item via MCP</text>
 
-  <rect x="100" y="570" width="1180" height="110" rx="24" fill="#7C3AED"/>
-  <text x="150" y="618" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">4. Validation + approval</text>
-  <text x="150" y="658" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#EDE9FE">Results are normalized, reconciled, and blocked unless rows contain complete provenance and adequate evidence density.</text>
+  <rect x="560" y="430" width="280" height="82" rx="18" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="2"/>
+  <text x="584" y="468" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#0F172A">Row state</text>
+  <text x="584" y="496" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#334155">In Progress → Needs Review</text>
 
-  <rect x="100" y="720" width="1180" height="90" rx="24" fill="#DC2626"/>
-  <text x="150" y="772" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">5. Notion write path</text>
-  <text x="150" y="804" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#FEE2E2">Only transient upstream failures are retried; validated rows are written via the pinned Notion MCP server.</text>
+  <rect x="560" y="530" width="280" height="158" rx="18" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="2"/>
+  <text x="584" y="568" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#0F172A">Operational metadata</text>
+  <text x="584" y="600" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#334155">Claimed By: Notion MCP Backlog Desk</text>
+  <text x="584" y="628" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#334155">Claimed At: 2026-03-26 02:29 UTC</text>
+  <text x="584" y="656" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#334155">Run ID: run_01HQ3Q9M2P</text>
 
-  <path d="M690 300 L690 330" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
-  <polygon points="676,322 690,350 704,322" fill="#6B7280"/>
-  <path d="M690 520 L690 560" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
-  <polygon points="676,552 690,580 704,552" fill="#6B7280"/>
-  <path d="M690 680 L690 710" stroke="#6B7280" stroke-width="8" stroke-linecap="round"/>
-  <polygon points="676,702 690,730 704,702" fill="#6B7280"/>
+  <text x="560" y="728" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#1E40AF">planner / extractor / verifier stay behind the scenes</text>
+  <text x="560" y="756" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#1E40AF">The run survives disconnects and waits for approval.</text>
+
+  <rect x="980" y="300" width="340" height="440" rx="28" fill="#F0FDF4" stroke="#86EFAC" stroke-width="3"/>
+  <text x="1010" y="350" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#166534">3. Same row after</text>
+  <text x="1010" y="390" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#15803D">Approved packet writes back to Notion</text>
+
+  <rect x="1010" y="430" width="280" height="268" rx="20" fill="#FFFFFF" stroke="#BBF7D0" stroke-width="2"/>
+  <text x="1038" y="470" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#0F172A">Status</text>
+  <text x="1158" y="470" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#166534">Packet Ready</text>
+  <text x="1038" y="510" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#0F172A">Research Summary</text>
+  <text x="1038" y="538" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#334155">Best wedge: product teams that</text>
+  <text x="1038" y="564" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#334155">already live in Slack + Notion.</text>
+  <text x="1038" y="604" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#0F172A">Recommended Direction</text>
+  <text x="1038" y="632" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#334155">Lead with searchable action items.</text>
+  <text x="1038" y="672" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#0F172A">Competitors / Source Count</text>
+  <text x="1038" y="700" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#334155">Otter, Granola, Fireflies / 12</text>
+
+  <text x="1010" y="728" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#166534">Audit URL and run metadata stay inspectable afterward.</text>
+
+  <path d="M430 520 L510 520" stroke="#64748B" stroke-width="8" stroke-linecap="round"/>
+  <polygon points="498,504 530,520 498,536" fill="#64748B"/>
+  <text x="436" y="486" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#334155">Claim</text>
+  <text x="436" y="548" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#475569">Ready → In Progress</text>
+
+  <path d="M870 520 L950 520" stroke="#64748B" stroke-width="8" stroke-linecap="round"/>
+  <polygon points="938,504 970,520 938,536" fill="#64748B"/>
+  <text x="874" y="486" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#334155">Review + write-back</text>
+  <text x="874" y="548" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#475569">Needs Review → Packet Ready</text>
 </svg>
