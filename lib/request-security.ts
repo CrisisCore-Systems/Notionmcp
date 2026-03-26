@@ -10,6 +10,12 @@ type RateLimitEntry = {
   resetAt: number;
 };
 
+export type RequestRateLimitCoordinationSnapshot = {
+  storage: "none" | "filesystem";
+  scope: "localhost-bypass" | "single-host";
+  directory: string | null;
+};
+
 const remoteRequestRateLimit = new Map<string, RateLimitEntry>();
 const REMOTE_RATE_LIMIT_RETENTION_ENV_VAR = "REMOTE_RATE_LIMIT_RETENTION_DAYS";
 
@@ -117,6 +123,23 @@ function getRateLimitMaxRequests(): number {
 
 function shouldPersistRemoteRateLimitState(env: NodeJS.ProcessEnv = process.env): boolean {
   return getDeploymentMode(env) === "remote-private-host";
+}
+
+export function getRequestRateLimitCoordinationSnapshot(
+  env: NodeJS.ProcessEnv = process.env
+): RequestRateLimitCoordinationSnapshot {
+  if (getDeploymentMode(env) !== "remote-private-host") {
+    return {
+      storage: "none",
+      scope: "localhost-bypass",
+      directory: null,
+    };
+  }
+  return {
+    storage: "filesystem",
+    scope: "single-host",
+    directory: getRemoteRateLimitDirectory(),
+  };
 }
 
 function getRemoteRateLimitDirectory(): string {

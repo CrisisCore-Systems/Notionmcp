@@ -15,7 +15,7 @@ import {
   type EvidenceFieldKind,
 } from "@/lib/evidence-reduction";
 
-let browser: Browser | null = null;
+const activeBrowsers = new Set<Browser>();
 const MAX_SEARCH_RESULTS = 6;
 const MAX_EXTRACTED_CHARACTERS = 8000;
 const MAX_EVIDENCE_SNIPPETS = 8;
@@ -27,6 +27,7 @@ const SIGNAL_EXIT_CODES: Record<"SIGINT" | "SIGTERM", number> = {
 const blockedUrlValidationCache = new Map<string, Promise<void>>();
 let browserShutdownHandlersRegistered = false;
 let browserShutdownInProgress = false;
+let launchChromiumBrowser = () => chromium.launch({ headless: true });
 
 export interface SearchResult {
   title: string;
@@ -572,19 +573,26 @@ function setBlockedUrlValidation(target: string, validation: Promise<void>): voi
   }
 }
 
-async function closeSharedBrowser(): Promise<void> {
-  if (!browser) {
-    return;
-  }
-
-  const activeBrowser = browser;
-  browser = null;
+async function closeTrackedBrowser(activeBrowser: Browser): Promise<void> {
+  activeBrowsers.delete(activeBrowser);
 
   if (!activeBrowser.isConnected()) {
     return;
   }
 
   await activeBrowser.close();
+}
+
+async function closeAllBrowsers(): Promise<void> {
+  const browsers = Array.from(activeBrowsers);
+  activeBrowsers.clear();
+  await Promise.allSettled(
+    browsers.map(async (activeBrowser) => {
+      if (activeBrowser.isConnected()) {
+        await activeBrowser.close();
+      }
+    })
+  );
 }
 
 function registerBrowserShutdownHandlers(): void {
@@ -600,7 +608,7 @@ function registerBrowserShutdownHandlers(): void {
       }
 
       browserShutdownInProgress = true;
-      void closeSharedBrowser().finally(() => {
+      void closeAllBrowsers().finally(() => {
         process.exit(SIGNAL_EXIT_CODES[signal]);
       });
     });
@@ -610,11 +618,10 @@ function registerBrowserShutdownHandlers(): void {
   registerSignalHandler("SIGTERM");
 }
 
-async function getBrowser(): Promise<Browser> {
-  if (!browser || !browser.isConnected()) {
-    browser = await chromium.launch({ headless: true });
-    registerBrowserShutdownHandlers();
-  }
+async function launchIsolatedBrowser(): Promise<Browser> {
+  const browser = await launchChromiumBrowser();
+  activeBrowsers.add(browser);
+  registerBrowserShutdownHandlers();
   return browser;
 }
 
@@ -635,18 +642,23 @@ async function allowOnlyPublicRequests(route: Route): Promise<void> {
   }
 }
 
-async function createIsolatedPage(): Promise<{ context: BrowserContext; page: Page }> {
-  const b = await getBrowser();
-  const context = await b.newContext({
+async function createIsolatedPage(): Promise<{ browser: Browser; context: BrowserContext; page: Page }> {
+  const browser = await launchIsolatedBrowser();
+  const context = await browser.newContext({
     serviceWorkers: "block",
   });
 
   await context.route("**/*", allowOnlyPublicRequests);
 
   return {
+    browser,
     context,
     page: await context.newPage(),
   };
+}
+
+async function closeIsolatedBrowserSession(browser: Browser, context: BrowserContext): Promise<void> {
+  await Promise.allSettled([context.close(), closeTrackedBrowser(browser)]);
 }
 
 function normalizeIpAddress(value: string): string {
@@ -918,7 +930,7 @@ async function searchWithBrave(query: string): Promise<SearchResult[]> {
 }
 
 async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
-  const { context, page } = await createIsolatedPage();
+  const { browser, context, page } = await createIsolatedPage();
 
   try {
     await page.goto(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
@@ -948,7 +960,7 @@ async function searchWithDuckDuckGo(query: string): Promise<SearchResult[]> {
 
     return normalizeSearchResults(results);
   } finally {
-    await context.close();
+    await closeIsolatedBrowserSession(browser, context);
   }
 }
 
@@ -988,7 +1000,7 @@ export function isDegradedSearchProvider(provider: SearchProviderName): boolean 
 
 /** Navigate to a URL and extract readable text content */
 export async function browseAndExtract(url: string): Promise<BrowseResult> {
-  const { context, page } = await createIsolatedPage();
+  const { browser, context, page } = await createIsolatedPage();
 
   try {
     await validatePublicHttpUrl(url);
@@ -1211,9 +1223,19 @@ export async function browseAndExtract(url: string): Promise<BrowseResult> {
       ...(structuredData ? { structuredData } : {}),
     };
   } finally {
-    await context.close();
+    await closeIsolatedBrowserSession(browser, context);
   }
 }
+
+export const browserTestOverrides = {
+  setLaunchBrowser(launchBrowser: typeof launchChromiumBrowser): void {
+    launchChromiumBrowser = launchBrowser;
+  },
+  reset(): void {
+    launchChromiumBrowser = () => chromium.launch({ headless: true });
+    activeBrowsers.clear();
+  },
+};
 
 /** Search the configured provider and return top result URLs + snippets */
 export async function searchWeb(

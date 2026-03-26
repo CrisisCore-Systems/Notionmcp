@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { NextRequest } from "next/server";
 
 export type ObservabilityLogLevel = "debug" | "info" | "warn" | "error";
@@ -55,6 +57,21 @@ export type StartupDiagnosticsSnapshot = {
   };
 };
 
+const OPERATOR_METRIC_NAMES = [
+  "jobsCreated",
+  "jobsResumed",
+  "jobFailures",
+  "writeReconciliations",
+  "rateLimitRejects",
+  "rejectedUrls",
+  "queueClaimContention",
+  "queueClaimStaleLockRecovered",
+  "queueClaimFreshnessMiss",
+  "backgroundCleanupRuns",
+  "backgroundCleanupFilesDeleted",
+] as const satisfies readonly OperatorMetricName[];
+const OPERATOR_SURFACE_NAMES = ["health", "ready", "status"] as const satisfies readonly OperatorSurfaceKind[];
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -81,6 +98,7 @@ function createEmptyCounters(): OperatorMetricsCounters {
 }
 
 let processStartedAt = nowIso();
+let metricsStartedAt = processStartedAt;
 let metricsUpdatedAt = processStartedAt;
 let metricsCounters = createEmptyCounters();
 let probeTimestamps: StartupDiagnosticsSnapshot["probes"] = {
@@ -92,6 +110,112 @@ let probeTimestamps: StartupDiagnosticsSnapshot["probes"] = {
   firstStatusCheckAt: null,
   lastStatusCheckAt: null,
 };
+
+function getOperatorMetricsPath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const configured = env.OPERATOR_METRICS_PATH?.trim();
+
+  if (configured) {
+    return configured;
+  }
+
+  if (env.NODE_ENV === "test") {
+    return null;
+  }
+
+  return path.join(process.cwd(), ".notionmcp-data", "operator-metrics.json");
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+function normalizePersistedCounters(value: unknown): OperatorMetricsCounters | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const nextCounters = createEmptyCounters();
+
+  for (const metric of OPERATOR_METRIC_NAMES) {
+    const persistedValue = candidate[metric];
+
+    if (typeof persistedValue !== "number" || !Number.isFinite(persistedValue) || persistedValue < 0) {
+      return null;
+    }
+
+    nextCounters[metric] = persistedValue;
+  }
+
+  const surfaceChecks = candidate.operatorSurfaceChecks;
+
+  if (!surfaceChecks || typeof surfaceChecks !== "object" || Array.isArray(surfaceChecks)) {
+    return null;
+  }
+
+  const surfaceCandidate = surfaceChecks as Record<string, unknown>;
+
+  for (const surface of OPERATOR_SURFACE_NAMES) {
+    const persistedValue = surfaceCandidate[surface];
+
+    if (typeof persistedValue !== "number" || !Number.isFinite(persistedValue) || persistedValue < 0) {
+      return null;
+    }
+
+    nextCounters.operatorSurfaceChecks[surface] = persistedValue;
+  }
+
+  return nextCounters;
+}
+
+function restorePersistedMetrics(env: NodeJS.ProcessEnv = process.env): void {
+  const metricsPath = getOperatorMetricsPath(env);
+
+  if (!metricsPath) {
+    return;
+  }
+
+  try {
+    const raw = readFileSync(metricsPath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return;
+    }
+
+    const candidate = parsed as Partial<OperatorMetricsSnapshot>;
+    const normalizedCounters = normalizePersistedCounters(candidate.counters);
+
+    if (!normalizedCounters) {
+      return;
+    }
+
+    metricsStartedAt = isIsoTimestamp(candidate.startedAt) ? candidate.startedAt : metricsStartedAt;
+    metricsUpdatedAt = isIsoTimestamp(candidate.updatedAt) ? candidate.updatedAt : metricsStartedAt;
+    metricsCounters = normalizedCounters;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn("Failed to restore persisted operator metrics.", error);
+    }
+  }
+}
+
+function persistOperatorMetrics(env: NodeJS.ProcessEnv = process.env): void {
+  const metricsPath = getOperatorMetricsPath(env);
+
+  if (!metricsPath) {
+    return;
+  }
+
+  try {
+    mkdirSync(path.dirname(metricsPath), { recursive: true });
+    writeFileSync(metricsPath, `${JSON.stringify(getOperatorMetricsSnapshot(), null, 2)}\n`, "utf8");
+  } catch (error) {
+    console.warn("Failed to persist operator metrics.", error);
+  }
+}
+
+restorePersistedMetrics();
 
 function touchMetricsUpdatedAt(): void {
   metricsUpdatedAt = nowIso();
@@ -137,6 +261,7 @@ export function incrementMetric(metric: OperatorMetricName, amount = 1): void {
 
   metricsCounters[metric] += amount;
   touchMetricsUpdatedAt();
+  persistOperatorMetrics();
 }
 
 export function recordOperatorSurfaceCheck(
@@ -150,6 +275,7 @@ export function recordOperatorSurfaceCheck(
   if (surface === "health") {
     probeTimestamps.firstHealthCheckAt ??= timestamp;
     probeTimestamps.lastHealthCheckAt = timestamp;
+    persistOperatorMetrics();
     return;
   }
 
@@ -161,16 +287,18 @@ export function recordOperatorSurfaceCheck(
       probeTimestamps.firstSuccessfulReadyAt ??= timestamp;
     }
 
+    persistOperatorMetrics();
     return;
   }
 
   probeTimestamps.firstStatusCheckAt ??= timestamp;
   probeTimestamps.lastStatusCheckAt = timestamp;
+  persistOperatorMetrics();
 }
 
 export function getOperatorMetricsSnapshot(): OperatorMetricsSnapshot {
   return {
-    startedAt: processStartedAt,
+    startedAt: metricsStartedAt,
     updatedAt: metricsUpdatedAt,
     counters: {
       ...metricsCounters,
@@ -226,8 +354,9 @@ export function errorLog(scope: string, message: string, context: ObservabilityC
 }
 
 export const observabilityTestOverrides = {
-  reset(): void {
+  reset(options: { clearPersistedMetrics?: boolean } = {}): void {
     processStartedAt = nowIso();
+    metricsStartedAt = processStartedAt;
     metricsUpdatedAt = processStartedAt;
     metricsCounters = createEmptyCounters();
     probeTimestamps = {
@@ -239,5 +368,29 @@ export const observabilityTestOverrides = {
       firstStatusCheckAt: null,
       lastStatusCheckAt: null,
     };
+
+    if (options.clearPersistedMetrics) {
+      const metricsPath = getOperatorMetricsPath();
+
+      if (metricsPath) {
+        rmSync(metricsPath, { force: true });
+      }
+    }
+  },
+  reloadPersistedMetrics(): void {
+    processStartedAt = nowIso();
+    metricsStartedAt = processStartedAt;
+    metricsUpdatedAt = processStartedAt;
+    metricsCounters = createEmptyCounters();
+    probeTimestamps = {
+      firstHealthCheckAt: null,
+      lastHealthCheckAt: null,
+      firstReadyCheckAt: null,
+      lastReadyCheckAt: null,
+      firstSuccessfulReadyAt: null,
+      firstStatusCheckAt: null,
+      lastStatusCheckAt: null,
+    };
+    restorePersistedMetrics();
   },
 };
