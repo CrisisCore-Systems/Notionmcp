@@ -171,6 +171,7 @@ See [docs/security-model.md](docs/security-model.md) for the boundary definition
 - [docs/decisions/0001-local-mcp-default.md](docs/decisions/0001-local-mcp-default.md) records why `local-mcp` is the canonical queue path.
 - [docs/notion-native-integration.md](docs/notion-native-integration.md) lays out the migration from one configured integration token to real Notion OAuth, workspace linking, and sync.
 - [docs/operator-runbook.md](docs/operator-runbook.md) covers run, review, recovery, and verification steps.
+- [docs/remote-private-host-deploy.md](docs/remote-private-host-deploy.md) gives a concrete VPS deployment path for the supported `remote-private-host` model.
 - [docs/security-model.md](docs/security-model.md) documents browser and request boundary guarantees.
 
 ## Stack
