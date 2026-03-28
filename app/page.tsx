@@ -206,6 +206,14 @@ export default async function HomePage() {
           </div>
           <ChatUI />
         </section>
+
+        <footer className="landing-footer">
+          <span>Operator-facing Notion research and write-back.</span>
+          <div className="landing-footer-links">
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/terms">Terms of Use</a>
+          </div>
+        </footer>
       </div>
     </main>
   );
