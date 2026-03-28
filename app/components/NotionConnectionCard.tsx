@@ -48,7 +48,7 @@ export function NotionConnectionCard({
         <>
           <p className="card-copy">
             Connect your Notion workspace with OAuth.
-          </div>
+          </p>
           <div className="operator-card__actions" style={{ marginTop: 0 }}>
             <a className="operator-button" href="/api/notion/connect">
               Connect with Notion

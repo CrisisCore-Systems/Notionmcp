@@ -37,7 +37,7 @@ export default async function HomePage() {
             <div className="hero-kicker">Notion Queue Operations</div>
             <h1 className="hero-title">Run a reviewed Notion backlog.</h1>
             <p className="hero-copy">
-              Claim the next <code>Ready</code> row, run research, pause at review, and move it to <code>Packet Ready</code>
+              Claim the next <code>Ready</code>{" "}row, run research, pause at review, and move it to <code>Packet Ready</code>{" "}
               after approval.
             </p>
             <div className="hero-actions">
