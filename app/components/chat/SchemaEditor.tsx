@@ -29,53 +29,29 @@ export function SchemaEditor({
   onDeleteColumn,
 }: SchemaEditorProps) {
   return (
-    <div style={{ marginBottom: "1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", marginBottom: "0.5rem", flexWrap: "wrap" }}>
-        <div style={{ fontSize: "0.85rem", color: "#555" }}>
+    <div className="editor-panel">
+      <div className="editor-toolbar">
+        <div className="editor-toolbar__title">
           Schema ({schemaEntries.length} properties)
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <div className="editor-toolbar__actions">
           <button
             onClick={onUndo}
             disabled={historyIndex <= 0}
-            style={{
-              padding: "0.45rem 0.8rem",
-              background: historyIndex <= 0 ? "#f3f4f6" : "none",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              cursor: historyIndex <= 0 ? "default" : "pointer",
-              fontSize: "0.8rem",
-              color: "#333",
-            }}
+            className="operator-button-secondary"
           >
             Undo
           </button>
           <button
             onClick={onRedo}
             disabled={historyIndex >= historyLength - 1}
-            style={{
-              padding: "0.45rem 0.8rem",
-              background: historyIndex >= historyLength - 1 ? "#f3f4f6" : "none",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              cursor: historyIndex >= historyLength - 1 ? "default" : "pointer",
-              fontSize: "0.8rem",
-              color: "#333",
-            }}
+            className="operator-button-secondary"
           >
             Redo
           </button>
           <button
             onClick={onAddColumn}
-            style={{
-              padding: "0.45rem 0.8rem",
-              background: "none",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: "0.8rem",
-              color: "#333",
-            }}
+            className="operator-button"
           >
             + Add column
           </button>
@@ -96,25 +72,13 @@ export function SchemaEditor({
               aria-label={`Column name ${index + 1}`}
               value={name}
               onChange={(e) => onRenameColumn(name, e.target.value)}
-              style={{
-                padding: "0.5rem",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                width: "100%",
-                boxSizing: "border-box",
-              }}
+              className="editor-input"
             />
             <select
               aria-label={`Column type for ${name}`}
               value={type}
               onChange={(e) => onUpdateColumnType(name, e.target.value as PropertyType)}
-              style={{
-                padding: "0.5rem",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                width: "100%",
-                boxSizing: "border-box",
-              }}
+              className="editor-select"
             >
               {propertyTypes.map((propertyType) => (
                 <option key={propertyType} value={propertyType}>
@@ -125,15 +89,7 @@ export function SchemaEditor({
             <button
               onClick={() => onDeleteColumn(name)}
               aria-label={`Delete column ${name}`}
-              style={{
-                padding: "0.45rem 0.8rem",
-                background: "none",
-                border: "1px solid #f5c2c7",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontSize: "0.8rem",
-                color: "#b42318",
-              }}
+              className="operator-button-secondary"
             >
               Remove
             </button>

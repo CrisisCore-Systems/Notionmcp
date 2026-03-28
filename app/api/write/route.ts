@@ -8,8 +8,14 @@ import {
   assertDurabilityExecutionReadiness,
   warnIfDurableJobsNeedLongLivedHost,
 } from "@/lib/deployment-boundary";
+import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME } from "@/lib/notion-oauth";
 import { validateApiRequest } from "@/lib/request-security";
-import { isValidDatabaseId, parseResearchResult } from "@/lib/write-payload";
+import { RESEARCH_RUN_METADATA_KEY } from "@/lib/research-result";
+import {
+  isValidDatabaseId,
+  normalizeOptionalNotionParentPageId,
+  parseResearchResult,
+} from "@/lib/write-payload";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -67,6 +73,7 @@ export async function POST(req: NextRequest) {
   } else {
     const targetDatabaseId =
       typeof body.targetDatabaseId === "string" ? body.targetDatabaseId.trim() : "";
+    const notionParentPageId = normalizeOptionalNotionParentPageId(body.notionParentPageId);
     const resumeFromIndex =
       typeof body.resumeFromIndex === "number" ? body.resumeFromIndex : 0;
 
@@ -100,7 +107,17 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (notionParentPageId && !isValidDatabaseId(notionParentPageId)) {
+      return new Response(JSON.stringify({ error: "A valid Notion parent page ID is required" }), {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     let normalizedBody: ReturnType<typeof parseResearchResult>;
+    const activeConnectionId = req.cookies.get(ACTIVE_NOTION_CONNECTION_COOKIE_NAME)?.value?.trim() || "";
 
     try {
       normalizedBody = parseResearchResult(body);
@@ -116,6 +133,30 @@ export async function POST(req: NextRequest) {
           },
         }
       );
+    }
+
+    if (activeConnectionId && !normalizedBody[RESEARCH_RUN_METADATA_KEY]?.notionConnectionId) {
+      normalizedBody = {
+        ...normalizedBody,
+        [RESEARCH_RUN_METADATA_KEY]: {
+          sourceSet: normalizedBody[RESEARCH_RUN_METADATA_KEY]?.sourceSet ?? [],
+          extractionCounts:
+            normalizedBody[RESEARCH_RUN_METADATA_KEY]?.extractionCounts ?? {
+              searchQueries: 0,
+              candidateSources: 0,
+              pagesBrowsed: 0,
+              rowsExtracted: normalizedBody.items.length,
+            },
+          rejectedUrls: normalizedBody[RESEARCH_RUN_METADATA_KEY]?.rejectedUrls ?? [],
+          ...(normalizedBody[RESEARCH_RUN_METADATA_KEY]?.search
+            ? { search: normalizedBody[RESEARCH_RUN_METADATA_KEY]?.search }
+            : {}),
+          ...(normalizedBody[RESEARCH_RUN_METADATA_KEY]?.notionQueue
+            ? { notionQueue: normalizedBody[RESEARCH_RUN_METADATA_KEY]?.notionQueue }
+            : {}),
+          notionConnectionId: activeConnectionId,
+        },
+      };
     }
 
     if (resumeFromIndex > normalizedBody.items.length) {
@@ -134,6 +175,7 @@ export async function POST(req: NextRequest) {
     const job = await createDurableJob("write", {
       ...normalizedBody,
       ...(targetDatabaseId ? { targetDatabaseId } : {}),
+      ...(!targetDatabaseId && notionParentPageId ? { notionParentPageId } : {}),
       ...(resumeFromIndex > 0 ? { resumeFromIndex } : {}),
     });
     jobId = job.id;

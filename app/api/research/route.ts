@@ -5,6 +5,7 @@ import { parseResearchMode } from "@/lib/agent";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
+import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME } from "@/lib/notion-oauth";
 import {
   getNotionQueueConfigValidationError,
   normalizeNotionQueueConfig,
@@ -71,6 +72,7 @@ export async function POST(req: NextRequest) {
       });
     }
   } else {
+    const activeConnectionId = req.cookies.get(ACTIVE_NOTION_CONNECTION_COOKIE_NAME)?.value?.trim() || "";
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     const requestedResearchMode = typeof body.researchMode === "string" ? body.researchMode.trim() : undefined;
     const researchMode = parseResearchMode(requestedResearchMode);
@@ -146,6 +148,7 @@ export async function POST(req: NextRequest) {
         const queueEntry = await claimNextNotionQueueEntry(notionQueue, {
           runId,
           claimedBy,
+          ...(activeConnectionId ? { connectionId: activeConnectionId } : {}),
         });
         resolvedPrompt = queueEntry.prompt;
         resolvedNotionQueue = {
@@ -155,6 +158,7 @@ export async function POST(req: NextRequest) {
           statusProperty: notionQueue.statusProperty,
           runId: queueEntry.runId,
           claimedBy: queueEntry.claimedBy,
+          ...(activeConnectionId ? { connectionId: activeConnectionId } : {}),
           propertyTypes: queueEntry.propertyTypes,
         };
       } catch (error) {
@@ -182,6 +186,7 @@ export async function POST(req: NextRequest) {
         {
           prompt: resolvedPrompt,
           researchMode,
+          ...(activeConnectionId ? { notionConnectionId: activeConnectionId } : {}),
           ...(resolvedNotionQueue ? { notionQueue: resolvedNotionQueue } : {}),
         },
         resolvedNotionQueue?.runId

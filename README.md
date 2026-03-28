@@ -7,7 +7,9 @@
 
 ![Same Notion row moves from Ready to Packet Ready](docs/architecture-overview.svg)
 
-Notionmcp is a **private, single-operator Notion backlog desk** built around one visible queue workflow:
+This repository is a **public reference implementation for a private operator workflow**. The source is visible, the package stays `private: true`, and the shipped deployment posture is a single-operator workstation or tightly controlled private host rather than a public SaaS service.
+
+Notion MCP Backlog Desk is built around one visible queue workflow:
 
 - **Notion is the queue**
 - **MCP is the intake path**
@@ -20,6 +22,38 @@ The operator-visible outcomes are simple:
 - **The row does not get rewritten blindly**
 - **You approve before the workspace changes**
 - **You can inspect what happened afterward**
+
+## Why this exists
+
+This app is not trying to be general-purpose agent chat. It exists to make one queue-first workflow reliable: claim the next backlog row, research it with bounded evidence gathering, pause for operator review, and write the approved packet back into the same row with durable verification artifacts.
+
+The strongest product promise in this repo is not just "research in Notion." It is **durable, reviewed, inspectable Notion backlog execution**. Every completed or failed run leaves behind operator-facing proof surfaces:
+
+- `/api/jobs/{jobId}` exposes the durable job record, checkpoints, and replayable event history
+- `/api/write-audits/{auditId}` exposes the write audit record and resulting write metadata
+
+Inspect the job artifact when you need to understand execution flow or resume state. Inspect the write audit when you need to verify what was approved, what write path executed, and what record was updated.
+
+## At a glance
+
+| Topic | Summary |
+| --- | --- |
+| Product stance | Public reference implementation for a private operator workflow |
+| Canonical queue path | `local-mcp` |
+| Alternate write lane | `direct-api` |
+| Notion-native link state | OAuth workspace binding plus linked database discovery |
+| Durable execution | Persisted durable jobs with reconnectable SSE replay |
+| Verification artifacts | `/api/jobs/{jobId}` and `/api/write-audits/{auditId}` |
+| Supported remote posture | Single long-lived private host with writable local persistence |
+
+## Operator workflow
+
+1. Claim the next `Ready` row from Notion through local MCP.
+2. Start a durable job that persists checkpoints and stream events under `.notionmcp-data/jobs`.
+3. Choose a research lane: fast for bounded latency, deep for broader evidence gathering.
+4. Review the packet while the row sits in `Needs Review`.
+5. Approve the write and enrich the same row.
+6. Inspect the durable job or write audit record if you need proof, replay, or recovery context.
 
 ### Before / after on the same Notion row
 
@@ -45,7 +79,7 @@ The operator-visible outcomes are simple:
 
 ## What this repository is
 
-This repository is a **small runnable Next.js app** for one sharp Notion-native workflow: **pull the next Ready backlog row from the Notion queue via MCP, move it into In Progress, research it, review the packet, and write the approved enrichment back into the same row until it reaches Packet Ready**. It is built with **Next.js, Gemini, Playwright, and Notion provider adapters**, and it is intended as a **private operator tool, not a public SaaS offering**.
+This repository is a **small runnable Next.js app** for one sharp Notion-native workflow: **pull the next Ready backlog row from the Notion queue via MCP, move it into In Progress, research it, review the packet, and write the approved enrichment back into the same row until it reaches Packet Ready**. It is built with **Next.js, Gemini, Playwright, and Notion provider adapters**.
 
 It contains the core application pieces:
 
@@ -67,42 +101,77 @@ npm run status
 
 Add `-- --json` if you want the same information as structured JSON.
 
-## How it works
+## Deployment modes
 
-1. **Notion is the queue**: the UI claims the next Ready backlog row from a Notion database via the default local MCP transport (`Status=Ready`, `Research Prompt`, and `Name` by default), immediately moves it to `In Progress`, and records `Claimed At`, `Claimed By`, and `Run ID`
-2. **A durable run** is created immediately and persisted under `.notionmcp-data/jobs`, so the same backlog item can survive disconnects and resume cleanly
-3. **Gemini 2.0 Flash + Playwright** research the claimed row while planner, extractor, and verifier stay behind the scenes as support layers
-4. **The app validates the packet before review**, so the row is not rewritten blindly
-5. **You review the packet** while the backlog row sits in `Needs Review`
-6. **Approved write-back** enriches the same Notion row and advances it to `Packet Ready`
+| Mode | Intended host type | Required env vars | Execution mode | Persistence requirement | Encryption requirement | Supported |
+| --- | --- | --- | --- | --- | --- | --- |
+| `localhost-operator` | Single trusted workstation | baseline app env only | Detached durable jobs by default, inline only as an explicit fallback | Writable local `.notionmcp-data` if you want resumable behavior | Optional | Yes |
+| `remote-private-host` | Single long-lived private Node host | `NOTIONMCP_DEPLOYMENT_MODE`, `APP_ALLOWED_ORIGIN`, `APP_ACCESS_TOKEN`, `PERSISTED_STATE_ENCRYPTION_KEY` | Detached durable jobs only | Writable persisted local storage for jobs, audits, metrics, and request coordination | Required | Yes |
 
-The UI now exposes two reviewed research lanes:
+## Unsupported deployment targets
 
-- **Fast lane** — the current default path with the existing low-latency evidence budget
-- **Deep research** — a reviewed mode with higher evidence caps, domain-diversity minimums, and source-class balancing before approval
+Do not treat this repo as a stateless hobby deploy. The shipped coordination model is not designed for:
 
-`/api/research` now also publishes a machine-readable route contract on `GET` so the repo surface and runtime
-surface both spell out that fast is the bounded default lane while deep is the explicit wider-source lane.
+- ephemeral serverless hosts that cannot keep detached workers alive
+- multi-instance deployments without a shared persistence surface
+- remote hosts without writable local state for jobs, audits, and request coordination
+- public internet exposure without additional containment, monitoring, and network controls
 
-The write path clamps Notion `title`, `rich_text`, and `url` values to Notion-safe lengths before page
-creation so oversized model output cannot fail the whole write.
+If your host is intentionally inline-only, set `NOTIONMCP_HOST_DURABILITY=inline-only` and treat that as a reduced-guarantee workstation mode rather than a hidden degraded deployment.
 
-Each Notion write now uses a deterministic per-row operation key, persists row-level provenance metadata
-when the database supports the operator columns, performs a reconciliation pass after ambiguous partial
-failures before telling the operator where to resume, and checkpoints the active row pointer continuously
-inside the durable job record so reconnects do not restart the append.
+## Research lanes
 
-After the write completes, the UI gives you a standard `https://www.notion.so/...` link. That link
-can be opened in a browser or shared into the Notion app on Android.
+| Lane | Latency target | Evidence budget | Domain diversity | Source-class balancing | Intended use |
+| --- | --- | --- | --- | --- | --- |
+| Fast | Lowest latency | Bounded default cap | Best effort within cap | Lightweight | Normal backlog throughput |
+| Deep | Higher latency | Expanded cap | Explicit minimums before approval | Enforced more aggressively | High-stakes or ambiguous items |
 
-### Using it effectively on Android
+## Supported queue schema
 
-1. Run your research normally and write the results to Notion.
-2. On the success screen, tap **Open updated row** first.
-3. If Android keeps the link in your browser instead of jumping into the app, use **Share link** or
-   **Copy Android/web link**.
-4. Open that same `https://www.notion.so/...` link from the Notion app or from Android's share
-   sheet.
+Required properties:
+
+- `Name`
+- `Research Prompt`
+- `Status`
+
+Recommended operator fields:
+
+- `Claimed At`
+- `Claimed By`
+- `Run ID`
+- `Last Researched At`
+- `Research Summary`
+- `Recommended Direction`
+- `Competitors`
+- `Source Count`
+- `Last Run Status`
+- `Audit URL`
+- `Evidence Block`
+- `Confidence Note`
+
+Status values used by the reviewed workflow:
+
+- `Ready`
+- `In Progress`
+- `Needs Review`
+- `Packet Ready`
+- `Error`
+
+If optional output fields are missing, the workflow can still run but the write-back surface becomes less inspectable. If required queue fields are missing or incompatible, the route should fail fast and leave a visible operator error rather than silently inventing schema.
+
+## Security boundary
+
+The browser and request layers are a hard part of the product boundary, not a hidden implementation detail. The browser layer only accepts public `http(s)` targets, rejects credentialed URLs, and blocks localhost, private-network, and link-local resolution targets after DNS resolution. The request layer treats remote-private-host mode as opt-in and fails closed unless origin and token controls are configured.
+
+See [docs/security-model.md](docs/security-model.md) for the boundary definition and [docs/operator-runbook.md](docs/operator-runbook.md) for the operator recovery flow.
+
+## File map
+
+- [docs/architecture.md](docs/architecture.md) explains the control plane, persistence model, review/write model, and trust boundaries.
+- [docs/decisions/0001-local-mcp-default.md](docs/decisions/0001-local-mcp-default.md) records why `local-mcp` is the canonical queue path.
+- [docs/notion-native-integration.md](docs/notion-native-integration.md) lays out the migration from one configured integration token to real Notion OAuth, workspace linking, and sync.
+- [docs/operator-runbook.md](docs/operator-runbook.md) covers run, review, recovery, and verification steps.
+- [docs/security-model.md](docs/security-model.md) documents browser and request boundary guarantees.
 
 ## Stack
 
@@ -111,45 +180,7 @@ can be opened in a browser or shared into the Notion app on Android.
 - **Notion integration**: Local Notion MCP by default, optional direct API alternate lane
 - **Frontend**: Next.js 15 with streaming SSE
 
-When the app falls back to DuckDuckGo HTML search, the UI now labels that run as degraded mode instead of
-silently pretending it still has API-backed search quality.
-
-### Durable job behavior
-
-Both `/api/research` and `/api/write` now create a persisted job record and stream job events in reconnectable
-windows. Closing the tab no longer discards the run. When the UI reconnects, it resumes from the same job ID and
-replays any missed events from the job log before continuing to stream live output.
-
-### Visible trust outcomes
-
-```text
-The run survives disconnects
-  ↓
-The row does not get rewritten blindly
-  ↓
-You approve before the workspace changes
-  ↓
-You can inspect what happened afterward
-```
-
-Under the hood, the browser layer labels extracted fields as untrusted evidence, validates redirect hops,
-fails closed on non-HTML content types, and strips instruction-like text before the verifier sees it.
-
-### Notion provider modes
-
-`app/api/write/route.ts` now talks to a provider layer under `lib/notion/` instead of binding directly
-to the local subprocess transport.
-
-- **`local-mcp` (default)** — use the bundled `@notionhq/notion-mcp-server` subprocess as the default transport for queue intake and reviewed writes
-- **`direct-api`** — use the configured operator token against Notion's official REST API when you intentionally want an alternate write lane
-
-The local MCP path is the default because this repo is optimized for a Notion-first operator workflow where the next
-unit of work starts in the Notion queue instead of in a blank prompt box. The direct API path stays available, but it
-is an alternate lane rather than the architectural spine.
-
-Both `/api/research` and `/api/write` now expose `GET` contracts that mirror this architecture story, while
-`/api/jobs/{jobId}` and `/api/write-audits/{auditId}` return persisted verification artifacts plus the contract
-metadata that explains what each record contains for operator review and replay.
+When the app falls back to DuckDuckGo HTML search, the UI labels that run as degraded mode instead of pretending it still has API-backed search quality.
 
 ## Setup
 
@@ -173,7 +204,7 @@ cp .env.example .env.local
 Fill in `.env.local`:
 
 | Variable | Where to get it |
-|---|---|
+| --- | --- |
 | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — free, no credit card |
 | `SERPER_API_KEY` | Optional. [serper.dev](https://serper.dev) — enables one stable API-backed search provider |
 | `BRAVE_SEARCH_API_KEY` | Optional. [search.brave.com](https://search.brave.com/) — enables a second API-backed search provider path |
@@ -187,6 +218,9 @@ Fill in `.env.local`:
 | `NOTION_PARENT_PAGE_ID` | Open a Notion page → copy the 32-char ID from the URL |
 | `NOTION_API_VERSION` | Optional override. Defaults to the pinned `2025-09-03` Notion API version used by both provider modes |
 | `NOTION_PROVIDER` | Optional provider mode. `local-mcp` is the default control-plane path; set `direct-api` only when you intentionally want the alternate write lane |
+| `NOTION_CLIENT_ID` / `NOTION_CLIENT_SECRET` / `NOTION_OAUTH_REDIRECT_URI` | Optional Notion public-integration OAuth settings for the linked-workspace flow |
+| `NOTION_CONNECTION_DIR` / `NOTION_CONNECTION_RETENTION_DAYS` | Optional persisted directory and retention window for encrypted Notion workspace connection records |
+| `NOTION_QUEUE_BINDING_DIR` / `NOTION_QUEUE_BINDING_RETENTION_DAYS` | Optional persisted directory and retention window for encrypted linked-workspace queue bindings |
 | `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` | Optional local MCP replacement command and JSON-array args |
 | `WRITE_AUDIT_DIR` | Optional server-side directory for persisted write audit JSON records |
 | `WRITE_AUDIT_RETENTION_DAYS` | Optional retention window before old write-audit JSON files are removed. Defaults to 30 |
@@ -196,6 +230,8 @@ Fill in `.env.local`:
 | `PERSISTED_STATE_ENCRYPTION_KEY` | Optional for localhost, required for any remote private deployment so persisted job/audit state is encrypted at rest |
 | `NOTIONMCP_RUN_JOBS_INLINE` | Optional escape hatch for inline debugging. Leave unset for the default detached durable-job mode |
 | `NOTIONMCP_HOST_DURABILITY` | Optional host declaration. Set `inline-only` on ephemeral/stateless hosts so localhost mode degrades intentionally and remote private-host mode refuses to boot |
+
+Deployment note: `remote-private-host` is only supported on a long-lived Node host with writable persisted local storage and detached durable jobs enabled. Do not use it on stateless serverless or multi-instance hosts without shared persistence.
 
 **Important**: Your Notion integration must have access to the parent page.
 Go to the page in Notion → `...` menu → `Connect to` → select your integration.
@@ -221,6 +257,13 @@ silently drift with ambient API defaults. If you intentionally test a newer Noti
 `NOTION_API_VERSION` explicitly in `.env.local`. Leave `NOTION_PROVIDER` unset for the default MCP
 control-plane mode, or set `NOTION_PROVIDER=direct-api` only if you intentionally want the alternate
 REST write lane.
+
+If you also configure `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, and `NOTION_OAUTH_REDIRECT_URI`, the landing
+page exposes a linked-workspace flow through Notion OAuth. That flow persists an encrypted workspace connection
+record, shows the linked workspace in the app shell, and lets the operator browse accessible Notion databases when
+setting up the queue. Queue preview, queue claim metadata, backlog lifecycle updates, linked-workspace write
+execution, and saved queue bindings now preserve the active connection ID through durable jobs. Creating a brand new
+database still depends on the configured `NOTION_PARENT_PAGE_ID` until workspace-scoped parent selection lands.
 
 Every write now also persists a server-side JSON audit record outside transient UI state and returns a
 download link from the completion panel. The same completion panel now also links to the persisted durable
@@ -273,44 +316,7 @@ The automated tests cover request-security rules, durable job persistence, write
 boundary validation, duplicate fingerprinting, retry helpers, the reconnectable SSE stream parser, browser
 URL blocking guards, and smoke-level 400-path checks for both API routes.
 
-## Deployment boundary and risk profile
-
-This app is designed first as a **local or tightly controlled private operator tool**, not as an
-open public SaaS endpoint. The current guards around request origin, shared-token access, browser
-URL vetting, and resumable writes make that local/private mode much safer, but they are not a full
-substitute for production-grade containment.
-
-If you choose to deploy it beyond localhost, treat that as a private environment with additional
-hardening requirements. The app now models that as an explicit deployment boundary:
-
-- **`localhost-operator`** — local workstation mode; fastest path for a single trusted operator
-- **`remote-private-host`** — remote private-host mode; fails closed unless remote access controls,
-  persisted-state encryption, and detached durable jobs are all configured
-
-Remote private-host mode still requires these operational controls:
-
-- run it on a long-lived Node host with persistent local storage whenever detached durable jobs are enabled
-- keep `APP_ALLOWED_ORIGIN` and `APP_ACCESS_TOKEN` configured together
-- add your own edge/network rate limiting, request logging, and operational monitoring
-- keep all app instances behind a single shared persistence surface if you rely on the built-in durable jobs
-  and request-rate-limit coordination; the shipped coordination remains single-host/private-host oriented
-- isolate browser automation so arbitrary page ingestion cannot reach sensitive internal systems
-- scope the Notion integration to the smallest practical permission set and parent page
-
-Until those controls exist, the recommended stance is: **local/private tool first, public
-deployment only after additional hardening**.
-
-The app now also renders a runtime banner when detached durable jobs are enabled so operators do not mistake
-the default deployment posture for a stateless hobby deploy.
-
 ## Example queue items / fallback prompts
-
-Recommended backlog properties for the strongest demo are:
-
-- `Status` with `Ready`, `In Progress`, `Needs Review`, `Packet Ready`, and `Error`
-- `Claimed At`, `Claimed By`, `Run ID`, and `Last Researched At`
-- `Research Summary`, `Recommended Direction`, `Competitors`, `Source Count`, `Last Run Status`, `Audit URL or Job ID`
-- `Evidence Block` and `Confidence Note`
 
 - "Research this backlog item: AI meeting notes assistant for product teams"
 - "Research this backlog item: lightweight CRM for solo consultants"
@@ -318,39 +324,13 @@ Recommended backlog properties for the strongest demo are:
 - "Research this backlog item: customer interview repository with semantic search"
 - "Research this backlog item: procurement workspace for growing finance teams"
 
-## Architecture
+## Architecture and operations
 
-![Queue-first architecture overview](docs/architecture-overview.svg)
-
-- [Architecture doc](docs/architecture.md)
-- [SVG source](docs/architecture-overview.svg)
-
-```
-Notion backlog row
-    ↓ claim via local MCP
-Durable research run
-    ├── planner
-    ├── extractor
-    └── verifier
-    ↓ review + approve
-Approved packet
-    ↓ write-back
-Same Notion row enriched and advanced
-    ↓
-Ready → In Progress → Needs Review → Packet Ready
-```
-
-## Failure and resume walkthrough
-
-1. Start a research or write run.
-2. The route creates a persisted job ID immediately.
-3. If the browser tab closes or the SSE window rotates, the detached worker keeps running.
-4. Re-open the UI and it reconnects to the active job, replaying missed updates from the persisted event log.
-5. For writes, the job checkpoint stores the last confirmed row index, so the next worker resume starts from the
-   next unresolved row instead of replaying the whole append.
-
-After completion, the UI exposes both the write-audit JSON and the durable-job JSON so the operator can prove
-what evidence was used, what rows were attempted, and where the resumable worker checkpoint ended.
+- [docs/architecture.md](docs/architecture.md)
+- [docs/decisions/0001-local-mcp-default.md](docs/decisions/0001-local-mcp-default.md)
+- [docs/operator-runbook.md](docs/operator-runbook.md)
+- [docs/security-model.md](docs/security-model.md)
+- [docs/architecture-overview.svg](docs/architecture-overview.svg)
 
 ## Example write audit shape
 

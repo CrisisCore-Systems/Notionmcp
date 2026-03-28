@@ -230,6 +230,58 @@ test("ready item to reviewed packet claims the backlog row and writes lifecycle 
   assert.ok((lifecycleUpdates.at(-1)?.auditUrl ?? "").includes("/api/write-audits/"));
 });
 
+test("research queue claims preserve the active linked workspace connection ID through completion", async () => {
+  let claimedConnectionId: string | undefined;
+
+  notionQueueTestOverrides.claimNextNotionQueueEntry = async (_input, { runId, claimedBy, connectionId }) => {
+    claimedConnectionId = connectionId;
+
+    return {
+      databaseId: "11111111111111111111111111111111",
+      pageId: "33333333333333333333333333333333",
+      title: "Linked workspace row",
+      prompt: "Research the next linked workspace item",
+      statusProperty: "Status",
+      runId,
+      claimedBy,
+      ...(connectionId ? { connectionId } : {}),
+      propertyTypes: {
+        Status: "status",
+      },
+    };
+  };
+
+  jobRunnerTestOverrides.runResearchAgent = async () => ({
+    suggestedDbTitle: "Linked Workspace Research",
+    summary: "Linked workspace research completed.",
+    schema: {
+      Name: "title",
+    },
+    items: [{ Name: "Alpha" }],
+  });
+
+  const response = await postResearch(
+    createPostRequest(
+      "http://localhost:3000/api/research",
+      {
+        notionQueue: {
+          databaseId: "11111111111111111111111111111111",
+        },
+      },
+      {
+        cookie: "notionmcp-active-notion-connection=workspace-123",
+      }
+    )
+  );
+  const stream = await collectSseResponse(response);
+  const completed = stream.complete as ResearchResult | undefined;
+
+  assert.equal(response.status, 200);
+  assert.equal(claimedConnectionId, "workspace-123");
+  assert.equal(completed?.[RESEARCH_RUN_METADATA_KEY]?.notionConnectionId, "workspace-123");
+  assert.equal(completed?.[RESEARCH_RUN_METADATA_KEY]?.notionQueue?.connectionId, "workspace-123");
+});
+
 test("claimNextNotionQueueEntry only allows one concurrent claimant per queue row on the same host", async () => {
   const readyRow = {
     id: "page-ready-1",

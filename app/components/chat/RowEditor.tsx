@@ -42,50 +42,26 @@ export function RowEditor({
 }: RowEditorProps) {
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", marginBottom: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ fontSize: "0.85rem", color: "#555" }}>
+      <div className="editor-toolbar">
+        <div className="editor-toolbar__title">
           Rows ({editedResult.items.length})
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <div className="editor-toolbar__actions">
           <button
             onClick={onToggleFindReplace}
-            style={{
-              padding: "0.45rem 0.8rem",
-              background: "none",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: "0.8rem",
-              color: "#333",
-            }}
+            className="operator-button-secondary"
           >
             {showFindReplace ? "Hide replace" : "Find & replace"}
           </button>
           <button
             onClick={onExportJson}
-            style={{
-              padding: "0.45rem 0.8rem",
-              background: "none",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: "0.8rem",
-              color: "#333",
-            }}
+            className="operator-button-secondary"
           >
             Download JSON
           </button>
           <button
             onClick={onExportCsv}
-            style={{
-              padding: "0.45rem 0.8rem",
-              background: "none",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: "0.8rem",
-              color: "#333",
-            }}
+            className="operator-button-secondary"
           >
             Download CSV
           </button>
@@ -93,15 +69,7 @@ export function RowEditor({
       </div>
 
       {showFindReplace && (
-        <div
-          style={{
-            marginBottom: "0.75rem",
-            padding: "0.85rem",
-            border: "1px solid #e5e7eb",
-            borderRadius: 8,
-            background: "#fafafa",
-          }}
-        >
+        <div className="editor-panel">
           <div
             style={{
               display: "grid",
@@ -114,38 +82,18 @@ export function RowEditor({
               value={findText}
               onChange={(e) => onFindTextChange(e.target.value)}
               placeholder="Find text"
-              style={{
-                padding: "0.5rem",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                width: "100%",
-                boxSizing: "border-box",
-              }}
+              className="editor-input"
             />
             <input
               value={replaceText}
               onChange={(e) => onReplaceTextChange(e.target.value)}
               placeholder="Replace with"
-              style={{
-                padding: "0.5rem",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                width: "100%",
-                boxSizing: "border-box",
-              }}
+              className="editor-input"
             />
             <button
               onClick={onReplaceAcrossRows}
               disabled={!findText}
-              style={{
-                padding: "0.5rem 0.85rem",
-                background: findText ? "#111827" : "#d1d5db",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: findText ? "pointer" : "default",
-                fontSize: "0.8rem",
-              }}
+              className="operator-button"
             >
               Replace all
             </button>
@@ -153,33 +101,18 @@ export function RowEditor({
         </div>
       )}
 
-      <div style={{ overflowX: "auto", marginBottom: "1.25rem" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+      <div className="editor-table-shell">
+        <table className="editor-table">
           <thead>
-            <tr style={{ background: "#f3f4f6" }}>
+            <tr>
               {schemaEntries.map(([columnName]) => (
                 <th
                   key={columnName}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    textAlign: "left",
-                    fontWeight: 500,
-                    border: "1px solid #e5e7eb",
-                    whiteSpace: "nowrap",
-                  }}
                 >
                   {columnName}
                 </th>
               ))}
-              <th
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  textAlign: "left",
-                  fontWeight: 500,
-                  border: "1px solid #e5e7eb",
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <th>
                 Actions
               </th>
             </tr>
@@ -189,11 +122,7 @@ export function RowEditor({
               <tr>
                 <td
                   colSpan={schemaEntries.length + 1}
-                  style={{
-                    padding: "0.75rem",
-                    border: "1px solid #e5e7eb",
-                    color: "#666",
-                  }}
+                  style={{ color: "#666" }}
                 >
                   All rows removed. Use the “Reset packet” button below to regenerate results.
                 </td>
@@ -203,62 +132,36 @@ export function RowEditor({
                 const provenance = getItemProvenance(item);
 
                 return (
-                  <tr key={rowIndex} style={{ borderBottom: "1px solid #e5e7eb" }}>
+                  <tr key={rowIndex}>
                     {schemaEntries.map(([columnName, columnType]) => (
                       <td
                         key={columnName}
-                        style={{
-                          padding: "0.5rem 0.75rem",
-                          border: "1px solid #e5e7eb",
-                          minWidth: 180,
-                          verticalAlign: "top",
-                        }}
+                        style={{ minWidth: 180 }}
                       >
                         <textarea
                           aria-label={`${columnName} for row ${rowIndex + 1}`}
                           value={getItemTextValue(item, columnName)}
                           onChange={(e) => onUpdateItemValue(rowIndex, columnName, e.target.value)}
                           rows={columnType === "rich_text" ? 3 : 2}
+                          className="editor-textarea"
                           style={{
-                            width: "100%",
-                            border: invalidCellLookup.has(`${rowIndex}:${columnName}`)
-                              ? "1px solid #f59e0b"
-                              : "1px solid #ddd",
-                            borderRadius: 6,
-                            padding: "0.45rem 0.5rem",
-                            fontSize: "0.85rem",
-                            fontFamily: "inherit",
-                            boxSizing: "border-box",
+                            borderColor: invalidCellLookup.has(`${rowIndex}:${columnName}`)
+                              ? "#f59e0b"
+                              : undefined,
                             background: invalidCellLookup.has(`${rowIndex}:${columnName}`)
                               ? "#fffbeb"
-                              : "#fff",
-                            resize: "vertical",
+                              : undefined,
                           }}
                         />
                       </td>
                     ))}
-                    <td
-                      style={{
-                        padding: "0.5rem 0.75rem",
-                        border: "1px solid #e5e7eb",
-                        verticalAlign: "top",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
+                    <td style={{ whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
                         <button
                           onClick={() => onMoveItem(rowIndex, -1)}
                           disabled={rowIndex === 0}
                           aria-label={`Move row ${rowIndex + 1} up`}
-                          style={{
-                            padding: "0.45rem 0.7rem",
-                            background: rowIndex === 0 ? "#f3f4f6" : "none",
-                            border: "1px solid #ddd",
-                            borderRadius: 6,
-                            cursor: rowIndex === 0 ? "default" : "pointer",
-                            fontSize: "0.8rem",
-                            color: "#333",
-                          }}
+                          className="operator-button-secondary"
                         >
                           ↑
                         </button>
@@ -266,54 +169,28 @@ export function RowEditor({
                           onClick={() => onMoveItem(rowIndex, 1)}
                           disabled={rowIndex === editedResult.items.length - 1}
                           aria-label={`Move row ${rowIndex + 1} down`}
-                          style={{
-                            padding: "0.45rem 0.7rem",
-                            background:
-                              rowIndex === editedResult.items.length - 1 ? "#f3f4f6" : "none",
-                            border: "1px solid #ddd",
-                            borderRadius: 6,
-                            cursor:
-                              rowIndex === editedResult.items.length - 1 ? "default" : "pointer",
-                            fontSize: "0.8rem",
-                            color: "#333",
-                          }}
+                          className="operator-button-secondary"
                         >
                           ↓
                         </button>
                         <button
                           onClick={() => onDuplicateItem(rowIndex)}
                           aria-label={`Duplicate row ${rowIndex + 1}`}
-                          style={{
-                            padding: "0.45rem 0.7rem",
-                            background: "none",
-                            border: "1px solid #ddd",
-                            borderRadius: 6,
-                            cursor: "pointer",
-                            fontSize: "0.8rem",
-                            color: "#333",
-                          }}
+                          className="operator-button-secondary"
                         >
                           Copy
                         </button>
                         <button
                           onClick={() => onRemoveItem(rowIndex)}
                           aria-label={`Remove row ${rowIndex + 1}`}
-                          style={{
-                            padding: "0.45rem 0.7rem",
-                            background: "none",
-                            border: "1px solid #f5c2c7",
-                            borderRadius: 6,
-                            cursor: "pointer",
-                            fontSize: "0.8rem",
-                            color: "#b42318",
-                          }}
+                          className="operator-button-secondary"
                         >
                           Remove
                         </button>
                       </div>
                       {provenance && (
-                        <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.35rem", maxWidth: 260 }}>
-                          <div style={{ fontSize: "0.75rem", color: "#475569", whiteSpace: "normal" }}>
+                        <div className="editor-provenance">
+                          <div>
                             Sources:{" "}
                             {provenance.sourceUrls.map((sourceUrl, sourceIndex) => (
                               <span key={sourceUrl}>
@@ -321,7 +198,6 @@ export function RowEditor({
                                   href={sourceUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  style={{ color: "#475569", wordBreak: "break-all" }}
                                 >
                                   {sourceUrl}
                                 </a>
@@ -330,7 +206,7 @@ export function RowEditor({
                             ))}
                           </div>
                           {provenance.evidenceByField && (
-                            <div style={{ fontSize: "0.75rem", color: "#64748b", whiteSpace: "normal" }}>
+                            <div>
                               Evidence: {Object.keys(provenance.evidenceByField).join(", ")}
                             </div>
                           )}

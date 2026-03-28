@@ -1,4 +1,5 @@
 import { buildOperationalSchema } from "@/lib/notion/domain";
+import { loadNotionConnection } from "@/lib/notion-oauth";
 import type { NotionProvider } from "@/lib/notion/provider";
 import { createDirectApiNotionProvider } from "@/lib/notion/providers/direct-api";
 import { createLocalMcpNotionProvider } from "@/lib/notion/providers/local-mcp";
@@ -15,6 +16,10 @@ export type {
 } from "@/lib/notion/provider";
 
 export type NotionProviderMode = "direct-api" | "local-mcp";
+
+export type NotionExecutionContext = {
+  connectionId?: string | null;
+};
 
 function normalizeProviderMode(value: string | undefined): NotionProviderMode {
   const normalized = value?.trim().toLowerCase();
@@ -69,6 +74,57 @@ export function createNotionProvider(env: NodeJS.ProcessEnv = process.env): Noti
     : createDirectApiNotionProvider({ env });
 }
 
+export async function createNotionProviderForExecution(
+  context: NotionExecutionContext = {},
+  env: NodeJS.ProcessEnv = process.env
+): Promise<NotionProvider> {
+  const connectionId = context.connectionId?.trim();
+
+  if (!connectionId) {
+    return getNotionProvider(env);
+  }
+
+  const connection = await loadNotionConnection(connectionId, env);
+
+  if (!connection) {
+    throw new Error(`No saved Notion connection was found for connection "${connectionId}".`);
+  }
+
+  return createDirectApiNotionProvider({
+    env,
+    accessToken: connection.accessToken,
+  });
+}
+
+export async function getNotionProviderStateForExecution(
+  context: NotionExecutionContext = {},
+  env: NodeJS.ProcessEnv = process.env
+): Promise<{
+  mode: NotionProviderMode;
+  health: "configured";
+  posture: "default-transport" | "alternate-transport";
+  description: string;
+}> {
+  const connectionId = context.connectionId?.trim();
+
+  if (!connectionId) {
+    return getCurrentNotionProviderState(env);
+  }
+
+  const connection = await loadNotionConnection(connectionId, env);
+
+  if (!connection) {
+    throw new Error(`No saved Notion connection was found for connection "${connectionId}".`);
+  }
+
+  return {
+    mode: "direct-api",
+    health: "configured",
+    posture: "alternate-transport",
+    description: `Linked Notion workspace \"${connection.workspaceName}\" is driving execution through the direct API lane.`,
+  };
+}
+
 let cachedProvider: NotionProvider | null = null;
 let cachedProviderMode: NotionProviderMode | null = null;
 export const notionTestOverrides: {
@@ -94,20 +150,32 @@ export function getNotionProvider(env: NodeJS.ProcessEnv = process.env): NotionP
   return cachedProvider;
 }
 
-export async function createDatabase(title: string, schema: import("@/lib/notion/provider").NotionSchema) {
-  return (await getNotionProvider().createDatabase({ title, schema })).databaseId;
+export async function createDatabase(
+  title: string,
+  schema: import("@/lib/notion/provider").NotionSchema,
+  context?: NotionExecutionContext,
+  options?: { parentPageId?: string }
+) {
+  return (
+    await (await createNotionProviderForExecution(context)).createDatabase({
+      title,
+      schema,
+      ...(options?.parentPageId ? { parentPageId: options.parentPageId } : {}),
+    })
+  ).databaseId;
 }
 
-export async function getDatabaseMetadataSupport(databaseId: string) {
-  return await getNotionProvider().getDatabaseMetadataSupport(databaseId);
+export async function getDatabaseMetadataSupport(databaseId: string, context?: NotionExecutionContext) {
+  return await (await createNotionProviderForExecution(context)).getDatabaseMetadataSupport(databaseId);
 }
 
 export async function createDuplicateTracker(
   databaseId: string,
   schema: import("@/lib/notion/provider").NotionSchema,
-  options?: import("@/lib/notion/provider").QueryExistingRowsInput["options"]
+  options?: import("@/lib/notion/provider").QueryExistingRowsInput["options"],
+  context?: NotionExecutionContext
 ) {
-  return await getNotionProvider().queryExistingRows({ databaseId, schema, options });
+  return await (await createNotionProviderForExecution(context)).queryExistingRows({ databaseId, schema, options });
 }
 
 export async function addRow(
@@ -116,9 +184,10 @@ export async function addRow(
   schema: import("@/lib/notion/provider").NotionSchema,
   duplicateTracker?: import("@/lib/notion/provider").DuplicateTracker,
   writeMetadata?: import("@/lib/write-audit").RowWriteMetadata,
-  metadataSupport?: import("@/lib/notion/provider").NotionWriteMetadataSupport
+  metadataSupport?: import("@/lib/notion/provider").NotionWriteMetadataSupport,
+  context?: NotionExecutionContext
 ) {
-  return await getNotionProvider().createPage({
+  return await (await createNotionProviderForExecution(context)).createPage({
     databaseId,
     data,
     schema,

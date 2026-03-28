@@ -54,6 +54,7 @@ function createDraft(): StoredDraft {
     },
     useExistingDatabase: false,
     targetDatabaseId: "",
+    notionParentPageId: "",
     pendingWriteResume: null,
   };
 }

@@ -16,6 +16,7 @@ const OPERATION_KEY_LOOKUP_BATCH_SIZE = 25;
 
 type DirectApiProviderConfig = {
   apiBaseUrl?: string;
+  accessToken?: string;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
 };
@@ -86,7 +87,13 @@ function parseOpenApiHeaders(value: string | undefined): Record<string, string> 
 }
 
 function getNotionApiHeaders(env: NodeJS.ProcessEnv): Record<string, string> {
-  const notionToken = getRequiredEnv(env, "NOTION_TOKEN");
+  return getNotionApiHeadersWithToken(getRequiredEnv(env, "NOTION_TOKEN"), env);
+}
+
+function getNotionApiHeadersWithToken(
+  notionToken: string,
+  env: NodeJS.ProcessEnv
+): Record<string, string> {
   const headers = parseOpenApiHeaders(env.OPENAPI_MCP_HEADERS);
   const notionApiVersion =
     env.NOTION_API_VERSION?.trim() ||
@@ -224,6 +231,7 @@ export function createDirectApiNotionProvider(
 ): NotionProvider {
   const env = config.env ?? process.env;
   const fetchImpl = config.fetchImpl ?? fetch;
+  const accessToken = config.accessToken?.trim() || null;
   const apiBaseUrl = (config.apiBaseUrl ?? DEFAULT_NOTION_API_BASE_URL).replace(/\/+$/, "");
   const dataSourceIdCache = new Map<string, string>();
 
@@ -231,7 +239,7 @@ export function createDirectApiNotionProvider(
     const response = await fetchImpl(`${apiBaseUrl}${path}`, {
       ...init,
       headers: {
-        ...getNotionApiHeaders(env),
+        ...(accessToken ? getNotionApiHeadersWithToken(accessToken, env) : getNotionApiHeaders(env)),
         ...(init?.headers ?? {}),
       },
     });
@@ -340,7 +348,7 @@ export function createDirectApiNotionProvider(
 
   return {
     async createDatabase(input) {
-      const parentPageId = getRequiredEnv(env, "NOTION_PARENT_PAGE_ID");
+      const parentPageId = input.parentPageId?.trim() || getRequiredEnv(env, "NOTION_PARENT_PAGE_ID");
       const database = await notionRequest<{ id?: string }>("/databases", {
         method: "POST",
         body: JSON.stringify({

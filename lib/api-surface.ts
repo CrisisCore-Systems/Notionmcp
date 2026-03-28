@@ -16,6 +16,10 @@ import {
 export type ApiSurfaceKind =
   | "research-control"
   | "write-control"
+  | "queue-introspection"
+  | "notion-connection"
+  | "notion-discovery"
+  | "notion-binding"
   | "health-check"
   | "readiness-check"
   | "system-status"
@@ -143,6 +147,101 @@ export function getWriteRouteContract(env: NodeJS.ProcessEnv = process.env) {
       "Writes are resumable with row checkpoints and deterministic operation keys.",
       "Write audits persist as first-class verification artifacts outside transient UI state.",
     ],
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getQueuePreviewRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+
+  return {
+    route: "/api/notion-queue/preview",
+    kind: "queue-introspection",
+    transport: "local-mcp",
+    previewLimit: 25,
+    defaults: {
+      promptProperty: DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY,
+      titleProperty: DEFAULT_NOTION_QUEUE_TITLE_PROPERTY,
+      statusProperty: DEFAULT_NOTION_QUEUE_STATUS_PROPERTY,
+      readyValue: DEFAULT_NOTION_QUEUE_READY_VALUE,
+    },
+    returns: [
+      "row-level backlog preview before claim",
+      "status counts across the configured database",
+      "usable prompt counts for Ready rows",
+      "property presence checks for the configured field names",
+    ],
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getNotionConnectionRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+
+  return {
+    route: "/api/notion/connection",
+    kind: "notion-connection",
+    reports: [
+      "oauth configuration status",
+      "active linked workspace for this browser session",
+      "saved encrypted workspace connections on this host",
+    ],
+    phaseBoundary:
+      "Phase 1 exposes OAuth workspace binding and status only. Provider execution still follows the existing Notion transport path until connection-threading lands.",
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getNotionDatabaseDiscoveryRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+
+  return {
+    route: "/api/notion/databases",
+    kind: "notion-discovery",
+    readsFrom: "active linked workspace for this browser session",
+    returns: [
+      "accessible databases from the connected Notion workspace",
+      "database property names and types",
+      "suggested queue property mappings inferred from schema names",
+    ],
+    phaseBoundary:
+      "Phase 2 begins with workspace discovery and operator-assisted binding. Durable execution still needs connection-threading before linked workspaces drive end-to-end research and write jobs.",
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getNotionParentDiscoveryRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+
+  return {
+    route: "/api/notion/parents",
+    kind: "notion-discovery",
+    readsFrom: "active linked workspace for this browser session",
+    returns: [
+      "candidate parent pages from the connected Notion workspace",
+      "page titles and URLs for new database placement",
+      "last edited timestamps to help the operator choose the correct location",
+    ],
+    phaseBoundary:
+      "Parent discovery lets linked workspaces create new databases inside the connected workspace model instead of relying only on a configured parent page.",
+    deploymentBoundary: getDeploymentBoundaryContract(context),
+  };
+}
+
+export function getNotionQueueBindingRouteContract(env: NodeJS.ProcessEnv = process.env) {
+  const context = getApiSurfaceContext(env);
+
+  return {
+    route: "/api/notion/queue-binding",
+    kind: "notion-binding",
+    readsFrom: "active linked workspace for this browser session",
+    stores: [
+      "selected queue database ID",
+      "selected prompt, title, status, and ready-value mappings",
+      "last updated timestamp for the saved workspace queue binding",
+    ],
+    phaseBoundary:
+      "Saved queue bindings make linked-workspace queue setup durable, but parent-page selection and full workspace-scoped creation still land separately.",
     deploymentBoundary: getDeploymentBoundaryContract(context),
   };
 }

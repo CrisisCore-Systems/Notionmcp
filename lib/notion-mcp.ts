@@ -5,6 +5,7 @@ import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { loadNotionConnection } from "@/lib/notion-oauth";
 import {
   DEFAULT_NOTION_QUEUE_AUDIT_LOCATOR_PROPERTY,
   DEFAULT_NOTION_QUEUE_CLAIMED_AT_PROPERTY,
@@ -94,6 +95,32 @@ type ClaimedNotionQueueEntry = ResearchNotionQueueMetadata & {
   prompt: string;
 };
 
+export type NotionQueuePreviewEntry = {
+  pageId: string;
+  title: string;
+  status: string;
+  prompt: string;
+  hasUsablePrompt: boolean;
+  isReady: boolean;
+  promptSource: "prompt-property" | "title-fallback" | "missing";
+};
+
+export type NotionQueuePreview = {
+  databaseId: string;
+  totalEntries: number;
+  readyEntries: number;
+  usablePromptEntries: number;
+  readyWithUsablePromptEntries: number;
+  truncated: boolean;
+  entries: NotionQueuePreviewEntry[];
+  statusCounts: Array<{ status: string; count: number }>;
+  propertyChecks: {
+    promptProperty: { name: string; exists: boolean; type: string | null };
+    titleProperty: { name: string; exists: boolean; type: string | null };
+    statusProperty: { name: string; exists: boolean; type: string | null };
+  };
+};
+
 type QueueLifecycleStage = "in-progress" | "needs-review" | "packet-ready" | "error";
 
 type QueueLifecycleUpdateInput = {
@@ -109,6 +136,10 @@ type NotionTransportFactory = () => Transport;
 type NotionMcpLaunchSpec = {
   command: string;
   args: string[];
+};
+
+type NotionRequestContext = {
+  connectionId?: string | null;
 };
 
 export const NOTION_ROW_METADATA_PROPERTIES = {
@@ -139,7 +170,7 @@ export const notionQueueTestOverrides: {
   callNotion?: (tool: string, args: Record<string, unknown>) => Promise<NotionToolResponse>;
   claimNextNotionQueueEntry?: (
     input: NotionQueueConfig,
-    options: { runId: string; claimedBy: string }
+    options: { runId: string; claimedBy: string; connectionId?: string }
   ) => Promise<ClaimedNotionQueueEntry>;
   updateNotionQueueLifecycle?: (
     entry: ResearchNotionQueueMetadata,
@@ -237,8 +268,7 @@ export function buildNotionMcpEnv(notionToken: string): Record<string, string> {
   );
 }
 
-const notionTransportFactory: NotionTransportFactory = () => {
-  const notionToken = getRequiredEnv("NOTION_TOKEN");
+function buildTransportForToken(notionToken: string): Transport {
   const launchSpec = getNotionMcpLaunchSpec();
 
   return new StdioClientTransport({
@@ -246,6 +276,11 @@ const notionTransportFactory: NotionTransportFactory = () => {
     args: launchSpec.args,
     env: buildNotionMcpEnv(notionToken),
   });
+}
+
+const notionTransportFactory: NotionTransportFactory = () => {
+  const notionToken = getRequiredEnv("NOTION_TOKEN");
+  return buildTransportForToken(notionToken);
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -346,7 +381,7 @@ async function getClient(): Promise<Client> {
   const transport = notionTransportFactory();
 
   mcpClient = new Client(
-    { name: "notion-research-agent", version: "1.0.0" },
+    { name: "notion-mcp-backlog-desk", version: "1.0.0" },
     { capabilities: {} }
   );
   mcpTransport = transport;
@@ -419,13 +454,82 @@ async function callNotionToolOnce(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+async function callNotionToolWithToken(
+  tool: string,
+  args: Record<string, unknown>,
+  notionToken: string
+): Promise<NotionToolResponse> {
+  const transport = buildTransportForToken(notionToken);
+  const client = new Client(
+    { name: "notion-mcp-backlog-desk", version: "1.0.0" },
+    { capabilities: {} }
+  );
+
+  try {
+    await client.connect(transport);
+    let lastError: unknown;
+
+    for (const candidate of getToolCandidates(tool)) {
+      try {
+        const result = await client.callTool({ name: candidate, arguments: args });
+
+        if (result.isError) {
+          throw new Error(`Notion MCP error on "${candidate}": ${JSON.stringify(result.content)}`);
+        }
+
+        return {
+          content: result.content,
+          structuredContent: "structuredContent" in result ? result.structuredContent : undefined,
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  } finally {
+    await Promise.allSettled([
+      typeof client.close === "function" ? client.close() : Promise.resolve(),
+      typeof transport.close === "function" ? transport.close() : Promise.resolve(),
+    ]);
+  }
+}
+
+async function getContextNotionToken(context?: NotionRequestContext): Promise<string | null> {
+  const connectionId = context?.connectionId?.trim();
+
+  if (!connectionId) {
+    return null;
+  }
+
+  const connection = await loadNotionConnection(connectionId);
+
+  if (!connection) {
+    throw new Error(`No saved Notion connection was found for connection "${connectionId}".`);
+  }
+
+  return connection.accessToken;
+}
+
+function getDataSourceCacheKey(databaseId: string, context?: NotionRequestContext): string {
+  const connectionId = context?.connectionId?.trim();
+  return connectionId ? `${connectionId}:${databaseId}` : databaseId;
+}
+
 /** Call any Notion MCP tool by name */
 export async function callNotion(
   tool: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  context?: NotionRequestContext
 ): Promise<NotionToolResponse> {
   if (notionQueueTestOverrides.callNotion) {
     return await notionQueueTestOverrides.callNotion(tool, args);
+  }
+
+  const contextToken = await getContextNotionToken(context);
+
+  if (contextToken) {
+    return await callNotionToolWithToken(tool, args, contextToken);
   }
 
   try {
@@ -453,9 +557,11 @@ export function buildOperationalSchema(schema: NotionSchema): NotionSchema {
 /** Create a new Notion database under the configured parent page */
 export async function createDatabase(
   title: string,
-  schema: NotionSchema
+  schema: NotionSchema,
+  context?: NotionRequestContext,
+  parentPageIdOverride?: string
 ): Promise<string> {
-  const parentPageId = getRequiredEnv("NOTION_PARENT_PAGE_ID");
+  const parentPageId = parentPageIdOverride?.trim() || getRequiredEnv("NOTION_PARENT_PAGE_ID");
 
   // Build Notion property definitions from our simple schema
   const properties: Record<string, unknown> = {};
@@ -478,7 +584,7 @@ export async function createDatabase(
     parent: { page_id: parentPageId },
     title: [{ type: "text", text: { content: title } }],
     properties,
-  });
+  }, context);
   const database = extractStructuredPayload(result, isRecordWithId);
 
   if (database) {
@@ -488,14 +594,15 @@ export async function createDatabase(
   throw new Error("Could not extract database ID from Notion response");
 }
 
-async function getDataSourceId(databaseId: string): Promise<string> {
-  const cached = dataSourceIdCache.get(databaseId);
+async function getDataSourceId(databaseId: string, context?: NotionRequestContext): Promise<string> {
+  const cacheKey = getDataSourceCacheKey(databaseId, context);
+  const cached = dataSourceIdCache.get(cacheKey);
 
   if (cached) {
     return cached;
   }
 
-  const result = await callNotion("notion_retrieve_database", { database_id: databaseId });
+  const result = await callNotion("notion_retrieve_database", { database_id: databaseId }, context);
   const database = extractStructuredPayload(result, isDatabaseWithDataSources);
   const dataSourceId = database?.data_sources[0]?.id;
 
@@ -503,8 +610,61 @@ async function getDataSourceId(databaseId: string): Promise<string> {
     throw new Error(`Could not resolve a data source ID for database "${databaseId}".`);
   }
 
-  dataSourceIdCache.set(databaseId, dataSourceId);
+  dataSourceIdCache.set(cacheKey, dataSourceId);
   return dataSourceId;
+}
+
+function getDatabasePropertyCheck(
+  database: NotionDatabaseRecord,
+  propertyName: string
+): { name: string; exists: boolean; type: string | null } {
+  const property = database.properties?.[propertyName];
+
+  return {
+    name: propertyName,
+    exists: Boolean(property),
+    type: property?.type ?? null,
+  };
+}
+
+function getQueuePromptSource(title: string, promptPropertyValue: string): NotionQueuePreviewEntry["promptSource"] {
+  if (promptPropertyValue.trim()) {
+    return "prompt-property";
+  }
+
+  if (title.trim()) {
+    return "title-fallback";
+  }
+
+  return "missing";
+}
+
+function buildQueuePreviewEntry(
+  row: NotionRecordWithId,
+  input: NotionQueueConfig,
+  expectedReadyValue: string
+): NotionQueuePreviewEntry {
+  const title = getPagePropertyText(row, input.titleProperty);
+  const status = getPagePropertyText(row, input.statusProperty);
+  const promptPropertyValue = getPagePropertyText(row, input.promptProperty);
+  const prompt = buildResearchPromptFromNotionQueueItem({
+    title,
+    prompt: promptPropertyValue,
+  });
+
+  return {
+    pageId: row.id,
+    title,
+    status,
+    prompt,
+    hasUsablePrompt: Boolean(prompt),
+    isReady: expectedReadyValue ? status.trim().toLowerCase() === expectedReadyValue : true,
+    promptSource: getQueuePromptSource(title, promptPropertyValue),
+  };
+}
+
+function incrementQueueStatusCount(statusCounts: Map<string, number>, status: string): void {
+  statusCounts.set(status, (statusCounts.get(status) ?? 0) + 1);
 }
 
 function getNotionQueueClaimLockDirectory(env: NodeJS.ProcessEnv = process.env): string {
@@ -576,9 +736,10 @@ async function tryAcquireNotionQueueClaimLock(
 }
 
 export async function getDatabaseMetadataSupport(
-  databaseId: string
+  databaseId: string,
+  context?: NotionRequestContext
 ): Promise<NotionWriteMetadataSupport> {
-  const result = await callNotion("notion_retrieve_database", { database_id: databaseId });
+  const result = await callNotion("notion_retrieve_database", { database_id: databaseId }, context);
   const database = extractStructuredPayload(result, isDatabaseRecord);
   const properties = database?.properties ?? {};
 
@@ -1126,9 +1287,10 @@ function getOperationKeyFromPage(page: unknown): string {
 
 async function getExistingDuplicateRecords(
   databaseId: string,
-  schema: NotionSchema
+  schema: NotionSchema,
+  context?: NotionRequestContext
 ): Promise<{ fingerprints: Set<string>; operationKeys: Set<string> }> {
-  const dataSourceId = await getDataSourceId(databaseId);
+  const dataSourceId = await getDataSourceId(databaseId, context);
   const fingerprints = new Set<string>();
   const operationKeys = new Set<string>();
   let nextCursor: string | null | undefined = undefined;
@@ -1138,7 +1300,7 @@ async function getExistingDuplicateRecords(
       data_source_id: dataSourceId,
       page_size: 100,
       ...(nextCursor ? { start_cursor: nextCursor } : {}),
-    });
+    }, context);
     const queryResult = extractStructuredPayload(result, isQueryResult);
 
     for (const row of queryResult?.results ?? []) {
@@ -1163,9 +1325,10 @@ const OPERATION_KEY_LOOKUP_BATCH_SIZE = 25;
 
 async function getExistingOperationKeys(
   databaseId: string,
-  operationKeys: string[]
+  operationKeys: string[],
+  context?: NotionRequestContext
 ): Promise<Set<string>> {
-  const dataSourceId = await getDataSourceId(databaseId);
+  const dataSourceId = await getDataSourceId(databaseId, context);
   const uniqueOperationKeys = Array.from(
     new Set(operationKeys.map((operationKey) => operationKey.trim()).filter(Boolean))
   );
@@ -1184,7 +1347,7 @@ async function getExistingOperationKeys(
           },
         })),
       },
-    });
+    }, context);
     const queryResult = extractStructuredPayload(result, isQueryResult);
 
     for (const row of queryResult?.results ?? []) {
@@ -1202,15 +1365,16 @@ async function getExistingOperationKeys(
 export async function createDuplicateTracker(
   databaseId: string,
   schema: NotionSchema,
-  options?: { prefetchExisting?: boolean; useOperationKeyLookup?: boolean; operationKeys?: string[] }
+  options?: { prefetchExisting?: boolean; useOperationKeyLookup?: boolean; operationKeys?: string[] },
+  context?: NotionRequestContext
 ): Promise<DuplicateTracker> {
   const records =
     options?.prefetchExisting === false
       ? { fingerprints: new Set<string>(), operationKeys: new Set<string>() }
-      : await getExistingDuplicateRecords(databaseId, schema);
+      : await getExistingDuplicateRecords(databaseId, schema, context);
 
   if (options?.useOperationKeyLookup) {
-    const existingOperationKeys = await getExistingOperationKeys(databaseId, options.operationKeys ?? []);
+    const existingOperationKeys = await getExistingOperationKeys(databaseId, options.operationKeys ?? [], context);
 
     for (const operationKey of existingOperationKeys) {
       records.operationKeys.add(operationKey);
@@ -1291,11 +1455,96 @@ export async function loadNextNotionQueueEntry(input: NotionQueueConfig): Promis
   throw new Error("No ready Notion queue items with a usable research prompt were found.");
 }
 
+export async function previewNotionQueueEntries(
+  input: NotionQueueConfig,
+  options?: { limit?: number; connectionId?: string }
+): Promise<NotionQueuePreview> {
+  const context = { connectionId: options?.connectionId };
+  const result = await callNotion("notion_retrieve_database", { database_id: input.databaseId }, context);
+  const database = extractStructuredPayload(result, isDatabaseRecord);
+  const dataSourceId = database?.data_sources[0]?.id;
+
+  if (!database || !dataSourceId) {
+    throw new Error(`Could not resolve a data source ID for database "${input.databaseId}".`);
+  }
+
+  dataSourceIdCache.set(getDataSourceCacheKey(input.databaseId, context), dataSourceId);
+
+  const expectedReadyValue = input.readyValue.trim().toLowerCase();
+  const entryLimit = Math.min(Math.max(options?.limit ?? 25, 1), 100);
+  const entries: NotionQueuePreviewEntry[] = [];
+  const statusCounts = new Map<string, number>();
+  let nextCursor: string | null | undefined = undefined;
+  let totalEntries = 0;
+  let readyEntries = 0;
+  let usablePromptEntries = 0;
+  let readyWithUsablePromptEntries = 0;
+
+  do {
+    const queryResult: NotionQueryResult | null = extractStructuredPayload(
+      await callNotion("notion_query_data_source", {
+        data_source_id: dataSourceId,
+        page_size: 100,
+        ...(nextCursor ? { start_cursor: nextCursor } : {}),
+      }, context),
+      isQueryResult
+    );
+
+    for (const row of queryResult?.results ?? []) {
+      if (!isRecordWithId(row)) {
+        continue;
+      }
+
+      totalEntries += 1;
+
+      const entry = buildQueuePreviewEntry(row, input, expectedReadyValue);
+      incrementQueueStatusCount(statusCounts, entry.status || "Unspecified");
+
+      if (entry.isReady) {
+        readyEntries += 1;
+      }
+
+      if (entry.hasUsablePrompt) {
+        usablePromptEntries += 1;
+      }
+
+      if (entry.isReady && entry.hasUsablePrompt) {
+        readyWithUsablePromptEntries += 1;
+      }
+
+      if (entries.length < entryLimit) {
+        entries.push(entry);
+      }
+    }
+
+    nextCursor = queryResult?.has_more ? queryResult.next_cursor ?? null : null;
+  } while (nextCursor);
+
+  return {
+    databaseId: input.databaseId,
+    totalEntries,
+    readyEntries,
+    usablePromptEntries,
+    readyWithUsablePromptEntries,
+    truncated: totalEntries > entries.length,
+    entries,
+    statusCounts: [...statusCounts.entries()]
+      .map(([status, count]) => ({ status, count }))
+      .sort((left, right) => right.count - left.count || left.status.localeCompare(right.status)),
+    propertyChecks: {
+      promptProperty: getDatabasePropertyCheck(database, input.promptProperty),
+      titleProperty: getDatabasePropertyCheck(database, input.titleProperty),
+      statusProperty: getDatabasePropertyCheck(database, input.statusProperty),
+    },
+  };
+}
+
 async function loadReadyNotionQueueRow(
   pageId: string,
-  input: NotionQueueConfig
+  input: NotionQueueConfig,
+  context?: NotionRequestContext
 ): Promise<{ row: NotionRecordWithId; title: string; prompt: string } | null> {
-  const result = await callNotion("notion_retrieve_page", { page_id: pageId });
+  const result = await callNotion("notion_retrieve_page", { page_id: pageId }, context);
   const row = extractStructuredPayload(result, isRecordWithId);
 
   if (!row) {
@@ -1324,13 +1573,14 @@ async function loadReadyNotionQueueRow(
 
 export async function claimNextNotionQueueEntry(
   input: NotionQueueConfig,
-  options: { runId: string; claimedBy: string }
+  options: { runId: string; claimedBy: string; connectionId?: string }
 ): Promise<ClaimedNotionQueueEntry> {
   if (notionQueueTestOverrides.claimNextNotionQueueEntry) {
     return await notionQueueTestOverrides.claimNextNotionQueueEntry(input, options);
   }
 
-  const dataSourceId = await getDataSourceId(input.databaseId);
+  const context = { connectionId: options.connectionId };
+  const dataSourceId = await getDataSourceId(input.databaseId, context);
   const expectedReadyValue = input.readyValue.trim().toLowerCase();
   let nextCursor: string | null | undefined = undefined;
 
@@ -1339,7 +1589,7 @@ export async function claimNextNotionQueueEntry(
       data_source_id: dataSourceId,
       page_size: 25,
       ...(nextCursor ? { start_cursor: nextCursor } : {}),
-    });
+    }, context);
     const queryResult = extractStructuredPayload(result, isQueryResult);
 
     for (const row of queryResult?.results ?? []) {
@@ -1370,7 +1620,7 @@ export async function claimNextNotionQueueEntry(
       }
 
       try {
-        const freshReadyRow = await loadReadyNotionQueueRow(row.id, input);
+        const freshReadyRow = await loadReadyNotionQueueRow(row.id, input, context);
 
         if (!freshReadyRow) {
           incrementMetric("queueClaimFreshnessMiss");
@@ -1386,6 +1636,7 @@ export async function claimNextNotionQueueEntry(
           statusProperty: input.statusProperty,
           runId: options.runId,
           claimedBy: options.claimedBy,
+          ...(options.connectionId ? { connectionId: options.connectionId } : {}),
           claimedAt,
           propertyTypes: buildQueuePropertyTypeLookup(freshReadyRow.row, input.statusProperty),
         };
@@ -1427,7 +1678,7 @@ export async function updateNotionQueueLifecycle(
   await callNotion("notion_update_page", {
     page_id: entry.pageId,
     properties,
-  });
+  }, { connectionId: entry.connectionId });
 }
 
 export async function addRow(
@@ -1436,7 +1687,8 @@ export async function addRow(
   schema: NotionSchema,
   duplicateTracker?: DuplicateTracker,
   writeMetadata?: RowWriteMetadata,
-  metadataSupport: NotionWriteMetadataSupport = FULL_NOTION_WRITE_METADATA_SUPPORT
+  metadataSupport: NotionWriteMetadataSupport = FULL_NOTION_WRITE_METADATA_SUPPORT,
+  context?: NotionRequestContext
 ): Promise<{ created: boolean }> {
   if (duplicateTracker?.has(data, writeMetadata?.operationKey)) {
     return { created: false };
@@ -1447,7 +1699,7 @@ export async function addRow(
   await callNotion("notion_create_page", {
     parent: { database_id: databaseId },
     properties,
-  });
+  }, context);
 
   duplicateTracker?.remember(data, writeMetadata?.operationKey);
   return { created: true };

@@ -3,15 +3,15 @@ import {
   buildOperationalSchema,
   createDatabase,
   createDuplicateTracker,
-  getCurrentNotionProviderState,
   getConfiguredNotionProviderMode,
   getDatabaseMetadataSupport,
+  getNotionProviderStateForExecution,
   type DuplicateTracker,
   type NotionSchema,
   type NotionWriteMetadataSupport,
 } from "@/lib/notion";
 import { isRetryableUpstreamError, runWithRetry } from "@/lib/retry";
-import type { ResearchItem, ResearchResult } from "@/lib/research-result";
+import { RESEARCH_RUN_METADATA_KEY, type ResearchItem, type ResearchResult } from "@/lib/research-result";
 import {
   buildRowWriteMetadata,
   buildWriteAuditTrail,
@@ -36,6 +36,7 @@ const ROW_WRITE_RETRY_DELAY_MS = 750;
 export type WriteExecutionInput = ResearchResult & {
   targetDatabaseId?: string;
   resumeFromIndex?: number;
+  notionParentPageId?: string;
 };
 
 export type WriteExecutionSuccess = {
@@ -94,11 +95,12 @@ async function addRowWithRetry(
   rowIndex: number,
   duplicateTracker: DuplicateTracker,
   writeMetadata: RowWriteMetadata,
-  metadataSupport: NotionWriteMetadataSupport
+  metadataSupport: NotionWriteMetadataSupport,
+  connectionId?: string
 ): Promise<{ attempt: number; duplicate: boolean }> {
   try {
     const { attempt, value } = await runWithRetry(
-      () => addRow(databaseId, data, schema, duplicateTracker, writeMetadata, metadataSupport),
+      () => addRow(databaseId, data, schema, duplicateTracker, writeMetadata, metadataSupport, { connectionId }),
       {
         maxAttempts: ROW_WRITE_MAX_ATTEMPTS,
         retryDelayMs: ROW_WRITE_RETRY_DELAY_MS,
@@ -166,9 +168,11 @@ export async function executeWriteJob(
   }
 ): Promise<WriteExecutionSuccess> {
   const startedAtMs = Date.now();
-  const providerMode = getConfiguredNotionProviderMode();
-  const providerState = getCurrentNotionProviderState();
+  const connectionId = payload[RESEARCH_RUN_METADATA_KEY]?.notionConnectionId?.trim() || undefined;
+  const providerState = await getNotionProviderStateForExecution({ connectionId });
+  const providerMode = providerState.mode ?? getConfiguredNotionProviderMode();
   const targetDatabaseId = payload.targetDatabaseId?.trim() || "";
+  const notionParentPageId = payload.notionParentPageId?.trim() || undefined;
   const resumeFromIndex = payload.resumeFromIndex ?? 0;
   const suggestedDbTitle = payload.suggestedDbTitle;
   const schema = payload.schema;
@@ -228,12 +232,17 @@ export async function executeWriteJob(
         databaseId,
         nextRowIndex,
       });
-      metadataSupport = await getDatabaseMetadataSupport(databaseId);
+      metadataSupport = await getDatabaseMetadataSupport(databaseId, { connectionId });
     } else {
       await callbacks.onUpdate(`Creating Notion database "${suggestedDbTitle}"...`, {
         nextRowIndex,
       });
-      databaseId = await createDatabase(suggestedDbTitle, buildOperationalSchema(schema));
+      databaseId = await createDatabase(
+        suggestedDbTitle,
+        buildOperationalSchema(schema),
+        { connectionId },
+        { parentPageId: notionParentPageId }
+      );
       metadataSupport = {
         operationKey: true,
         sourceSet: true,
@@ -246,13 +255,18 @@ export async function executeWriteJob(
       });
     }
 
-    duplicateTracker = await createDuplicateTracker(databaseId, schema, {
-      ...buildDuplicateTrackerOptions(
-        metadataSupport.operationKey,
-        operationKeys.slice(resumeFromIndex),
-        !!targetDatabaseId
-      ),
-    });
+    duplicateTracker = await createDuplicateTracker(
+      databaseId,
+      schema,
+      {
+        ...buildDuplicateTrackerOptions(
+          metadataSupport.operationKey,
+          operationKeys.slice(resumeFromIndex),
+          !!targetDatabaseId
+        ),
+      },
+      { connectionId }
+    );
 
     if (resumeFromIndex > 0) {
       await callbacks.onUpdate(
@@ -274,7 +288,8 @@ export async function executeWriteJob(
         index,
         duplicateTracker,
         rowWriteMetadata[index] as RowWriteMetadata,
-        metadataSupport
+        metadataSupport,
+        connectionId
       );
 
       if (duplicate) {
@@ -360,13 +375,18 @@ export async function executeWriteJob(
 
     if (databaseId && nextRowIndex < items.length) {
       try {
-        const reconciliationTracker = await createDuplicateTracker(databaseId, schema, {
-          ...buildDuplicateTrackerOptions(
-            metadataSupport.operationKey,
-            [operationKeys[nextRowIndex] ?? ""],
-            true
-          ),
-        });
+        const reconciliationTracker = await createDuplicateTracker(
+          databaseId,
+          schema,
+          {
+            ...buildDuplicateTrackerOptions(
+              metadataSupport.operationKey,
+              [operationKeys[nextRowIndex] ?? ""],
+              true
+            ),
+          },
+          { connectionId }
+        );
 
         if (reconciliationTracker.has(items[nextRowIndex] as ResearchItem, operationKeys[nextRowIndex])) {
           confirmedWrittenRows.add(nextRowIndex);

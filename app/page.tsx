@@ -1,4 +1,6 @@
+import { cookies } from "next/headers";
 import ChatUI from "./components/ChatUI";
+import { NotionConnectionCard } from "./components/NotionConnectionCard";
 import {
   getDeploymentMode,
   getDeploymentReadinessError,
@@ -6,6 +8,10 @@ import {
   warnIfDurableJobsNeedLongLivedHost,
 } from "@/lib/deployment-boundary";
 import { getCurrentNotionProviderState } from "@/lib/notion";
+import {
+  ACTIVE_NOTION_CONNECTION_COOKIE_NAME,
+  getNotionConnectionStatus,
+} from "@/lib/notion-oauth";
 
 const ENVIRONMENT_VARIABLES = [
   "GEMINI_API_KEY",
@@ -13,153 +19,194 @@ const ENVIRONMENT_VARIABLES = [
   "NOTION_PARENT_PAGE_ID",
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
   warnIfDurableJobsNeedLongLivedHost();
   const durableJobsWarning = getDurableJobsWarning();
   const deploymentMode = getDeploymentMode();
   const deploymentReadinessError = getDeploymentReadinessError();
   const notionProviderState = getCurrentNotionProviderState();
+  const cookieStore = await cookies();
+  const activeConnectionId = cookieStore.get(ACTIVE_NOTION_CONNECTION_COOKIE_NAME)?.value?.trim() ?? null;
+  const notionConnectionStatus = await getNotionConnectionStatus(activeConnectionId);
 
   return (
-    <main style={{ minHeight: "100vh", padding: "2rem 1rem 3rem" }}>
-      {deploymentReadinessError && (
-        <div
-          style={{
-            maxWidth: 800,
-            margin: "0 auto 1rem",
-            background: "#fef2f2",
-            border: "1px solid #fca5a5",
-            borderRadius: 12,
-            padding: "1rem 1.25rem",
-            boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-          }}
-        >
-          <h2 style={{ fontSize: "1rem", margin: "0 0 0.5rem", color: "#991b1b" }}>
-            Deployment boundary mismatch
-          </h2>
-          <p style={{ margin: 0, color: "#991b1b", lineHeight: 1.6, fontSize: "0.92rem" }}>
-            {deploymentReadinessError}
-          </p>
+    <main className="landing-root">
+      <div className="landing-shell">
+        <section className="landing-hero">
+          <div className="hero-panel">
+            <div className="hero-kicker">Notion Queue Operations</div>
+            <h1 className="hero-title">Run a reviewed Notion backlog.</h1>
+            <p className="hero-copy">
+              Claim the next <code>Ready</code> row, run research, pause at review, and move it to <code>Packet Ready</code>
+              after approval.
+            </p>
+            <div className="hero-actions">
+              <a className="hero-primary" href="#operator-console">
+                Open operator console
+              </a>
+              <a className="hero-secondary" href="/api/status" target="_blank" rel="noopener noreferrer">
+                Inspect system status
+              </a>
+            </div>
+            <div className="hero-metrics">
+              <div className="metric-card">
+                <span className="metric-value">4-stage</span>
+                <span className="metric-label">Ready to Packet Ready with review in the middle.</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">Durable</span>
+                <span className="metric-label">Jobs persist and reconnect.</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">Audited</span>
+                <span className="metric-label">Completed writes leave proof artifacts.</span>
+              </div>
+            </div>
+          </div>
+
+          <aside className="hero-side">
+            <div>
+              <div className="side-overline">Workflow shape</div>
+              <h2 className="side-title">Reviewed execution.</h2>
+            </div>
+            <div className="workflow-list">
+              <div className="workflow-step">
+                <div className="workflow-badge">1</div>
+                <div>
+                  <strong>Claim queue item</strong>
+                  <span>Move the next eligible row into active work.</span>
+                </div>
+              </div>
+              <div className="workflow-step">
+                <div className="workflow-badge">2</div>
+                <div>
+                  <strong>Research durably</strong>
+                  <span>Run research with reconnectable history.</span>
+                </div>
+              </div>
+              <div className="workflow-step">
+                <div className="workflow-badge">3</div>
+                <div>
+                  <strong>Review the packet</strong>
+                  <span>Pause at <code>Needs Review</code> for operator edits.</span>
+                </div>
+              </div>
+              <div className="workflow-step">
+                <div className="workflow-badge">4</div>
+                <div>
+                  <strong>Write with proof</strong>
+                  <span>Write the approved packet and keep the audit trail.</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <div className="banner-grid">
+          {deploymentReadinessError && (
+            <div className="banner banner-error">
+              <h2>Deployment boundary mismatch</h2>
+              <p>{deploymentReadinessError}</p>
+            </div>
+          )}
+          {durableJobsWarning && (
+            <div className="banner banner-warning">
+              <h2>{durableJobsWarning.title}</h2>
+              <p>
+                {durableJobsWarning.message} For short-lived debugging, set <code>NOTIONMCP_RUN_JOBS_INLINE=true</code>.
+                If the host is intentionally inline-only, set <code>NOTIONMCP_HOST_DURABILITY=inline-only</code>.
+              </p>
+            </div>
+          )}
         </div>
-      )}
-      {durableJobsWarning && (
-        <div
-          style={{
-            maxWidth: 800,
-            margin: "0 auto 1rem",
-            background: "#fff7ed",
-            border: "1px solid #fdba74",
-            borderRadius: 12,
-            padding: "1rem 1.25rem",
-            boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-          }}
-        >
-          <h2 style={{ fontSize: "1rem", margin: "0 0 0.5rem", color: "#9a3412" }}>
-            {durableJobsWarning.title}
-          </h2>
-          <p style={{ margin: 0, color: "#9a3412", lineHeight: 1.6, fontSize: "0.92rem" }}>
-            {durableJobsWarning.message} If you only want short-lived debugging behavior, explicitly set{" "}
-            <code>NOTIONMCP_RUN_JOBS_INLINE=true</code> and accept that detached recovery guarantees are reduced. If
-            your host is intentionally inline-only, set <code>NOTIONMCP_HOST_DURABILITY=inline-only</code> so the app
-            degrades honestly instead of pretending detached workers are durable.
-          </p>
-        </div>
-      )}
-      <div
-        style={{
-          maxWidth: 800,
-          margin: "0 auto 1.5rem",
-          background: "#eff6ff",
-          border: "1px solid #bfdbfe",
-          borderRadius: 12,
-          padding: "1rem 1.25rem",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-          display: "grid",
-          gap: "0.55rem",
-        }}
-      >
-        <h2 style={{ fontSize: "1rem", margin: 0 }}>Queue-first workflow</h2>
-        <p style={{ margin: 0, color: "#1e3a8a", lineHeight: 1.6, fontSize: "0.92rem" }}>
-          Claim the next Ready item from Notion, research it durably, review it, and write the approved packet back
-          into the same row.
-        </p>
-        <div style={{ fontSize: "0.9rem", color: "#1d4ed8", lineHeight: 1.6 }}>
-          <strong>Lifecycle:</strong> Ready → In Progress → Needs Review → Packet Ready
-        </div>
-        <div style={{ fontSize: "0.9rem", color: "#1d4ed8", lineHeight: 1.6 }}>
-          <strong>Default path:</strong> local MCP handles queue intake and reviewed write-back.
-        </div>
-        <div style={{ fontSize: "0.9rem", color: "#1d4ed8", lineHeight: 1.6 }}>
-          <strong>Alternate lane:</strong> <code>direct-api</code> is available only when intentionally selected.
-        </div>
+
+        <section className="landing-grid">
+          <div className="card-stack">
+            <article className="info-card">
+              <h2 className="card-heading">Queue-first by default</h2>
+              <p className="card-copy">
+                Local MCP handles queue intake and reviewed write-back. <code>direct-api</code> stays an explicit
+                alternate lane.
+              </p>
+              <div className="status-chip-row" style={{ marginTop: "1rem" }}>
+                <span className="status-chip ready">Ready</span>
+                <span className="status-chip progress">In Progress</span>
+                <span className="status-chip review">Needs Review</span>
+                <span className="status-chip done">Packet Ready</span>
+                <span className="status-chip error">Error</span>
+              </div>
+              <div className="feature-grid">
+                <div className="feature-tile">
+                  <strong>Default lane</strong>
+                  <span><code>{notionProviderState.mode}</code>: {notionProviderState.description}.</span>
+                </div>
+                <div className="feature-tile">
+                  <strong>Reconnectable runs</strong>
+                  <span>Durable jobs keep enough history for resume.</span>
+                </div>
+                <div className="feature-tile">
+                  <strong>Human review</strong>
+                  <span>Rows pause before write-back.</span>
+                </div>
+                <div className="feature-tile">
+                  <strong>Traceable writes</strong>
+                  <span>Each completion leaves job and audit artifacts.</span>
+                </div>
+              </div>
+            </article>
+
+            <article className="callout-card">
+              <h2 className="card-heading">Quick setup</h2>
+              <p className="card-copy">
+                Fill the core variables and keep deployment mode at <code>{deploymentMode}</code>.
+              </p>
+              <div className="env-list" style={{ marginTop: "1rem" }}>
+                {ENVIRONMENT_VARIABLES.map((name) => (
+                  <span key={name} className="env-pill">
+                    {name}
+                  </span>
+                ))}
+              </div>
+            </article>
+          </div>
+
+          <aside className="card-rail">
+            <NotionConnectionCard
+              oauthConfigured={notionConnectionStatus.oauth.configured}
+              missingEnvVars={notionConnectionStatus.oauth.missingEnvVars}
+              activeConnection={notionConnectionStatus.activeConnection}
+              savedConnectionCount={notionConnectionStatus.savedConnections.length}
+            />
+            <article className="status-card">
+              <h2 className="card-heading">What the operator sees</h2>
+              <p className="card-copy">
+                Runs survive disconnects, edits happen before write-back, and artifacts remain available after completion.
+              </p>
+              <div className="feature-tile">
+                <strong>Execution artifact</strong>
+                <span>Inspect <code>/api/jobs/{"{jobId}"}</code> for checkpoints and terminal state.</span>
+              </div>
+              <div className="feature-tile">
+                <strong>Write artifact</strong>
+                <span>Inspect <code>/api/write-audits/{"{auditId}"}</code> for approved payloads and write metadata.</span>
+              </div>
+            </article>
+          </aside>
+        </section>
+
+        <section id="operator-console" className="console-frame">
+          <div className="console-caption">
+            <div>
+              <div className="console-label">Operator Console</div>
+              <h2 className="console-title">Run the queue.</h2>
+            </div>
+            <p className="console-copy">
+              Claim, research, review, and write back.
+            </p>
+          </div>
+          <ChatUI />
+        </section>
       </div>
-      <div
-        style={{
-          maxWidth: 800,
-          margin: "0 auto 1.5rem",
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: "1rem 1.25rem",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-        }}
-      >
-        <h2 style={{ fontSize: "1rem", margin: "0 0 0.75rem" }}>Quick setup</h2>
-        <ol style={{ margin: 0, paddingLeft: "1.25rem", color: "#4b5563", lineHeight: 1.6 }}>
-          <li>Copy <code>.env.example</code> to <code>.env.local</code>.</li>
-          <li>Set the following variables before pulling your next Notion queue item:</li>
-        </ol>
-        <ul style={{ margin: "0.75rem 0 0", paddingLeft: "1.25rem", color: "#111827" }}>
-          {ENVIRONMENT_VARIABLES.map((name) => (
-            <li key={name}>
-              <code>{name}</code>
-            </li>
-          ))}
-        </ul>
-        <p style={{ margin: "0.75rem 0 0", color: "#4b5563", lineHeight: 1.6, fontSize: "0.92rem" }}>
-          Deployment mode: <strong>{deploymentMode}</strong>. Localhost API use works with just those variables. The
-          default queue loop is: claim the next Ready row in Notion, move it to In Progress, review the packet, then
-          write the approved enrichment back into the same row. If
-          you intentionally expose the app for a tightly controlled private deployment, also set{" "}
-          <code>APP_ALLOWED_ORIGIN</code> and <code>APP_ACCESS_TOKEN</code>. Remote private-host mode also requires
-          durable detached jobs plus <code>PERSISTED_STATE_ENCRYPTION_KEY</code>, then enter that access token in the
-          UI before starting a run.
-        </p>
-      </div>
-      <div
-        style={{
-          maxWidth: 800,
-          margin: "0 auto 1.5rem",
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: "1rem 1.25rem",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-          display: "grid",
-          gap: "0.75rem",
-        }}
-      >
-        <h2 style={{ fontSize: "1rem", margin: 0 }}>Operator-visible outcomes</h2>
-        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
-          <strong>The run survives disconnects:</strong> durable jobs keep processing and reconnect to the same backlog
-          item instead of restarting from a blank prompt.
-        </div>
-        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
-          <strong>The row does not get rewritten blindly:</strong> the queue row pauses in review before the workspace
-          changes, whether you use the fast lane or the deeper research lane.
-        </div>
-        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
-          <strong>You approve before the workspace changes:</strong> local MCP is the default control-plane path
-          (<code>{notionProviderState.mode}</code>, {notionProviderState.description}), while direct API stays an
-          intentionally selected alternate lane.
-        </div>
-        <div style={{ fontSize: "0.92rem", color: "#111827", lineHeight: 1.6 }}>
-          <strong>You can inspect what happened afterward:</strong> every durable run can be inspected via{" "}
-          <code>/api/jobs/{"{jobId}"}</code>, and completed writes also persist row-level audit evidence at{" "}
-          <code>/api/write-audits/{"{auditId}"}</code>.
-        </div>
-      </div>
-      <ChatUI />
     </main>
   );
 }

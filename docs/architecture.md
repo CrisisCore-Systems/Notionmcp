@@ -1,5 +1,97 @@
 # Architecture overview
 
+This repository is a public reference implementation for a private operator workflow. The control plane is queue-first, the runtime is durable by default, and the write surface is reviewed before the backlog row changes.
+
+## System shape
+
+1. A Notion backlog row starts in `Status=Ready`.
+2. The app claims the row through `local-mcp`, moves it to `In Progress`, and records operator metadata.
+3. A durable job performs research and streams reconnectable progress events.
+4. The operator reviews the packet in `Needs Review`.
+5. An approved write enriches the same row and advances it to `Packet Ready`.
+6. Verification artifacts remain available after completion through `/api/jobs/{jobId}` and `/api/write-audits/{auditId}`.
+
+## Control plane
+
+The canonical control plane is the local Notion MCP transport.
+
+- `local-mcp` is the default queue intake and reviewed write path.
+- `direct-api` exists as an alternate lane for intentional operator use, not as the architectural default.
+- The repo exposes route contracts on `GET` so the runtime surface and docs describe the same provider posture.
+
+See [docs/decisions/0001-local-mcp-default.md](./decisions/0001-local-mcp-default.md) for the decision record behind that split.
+
+## Durable job model
+
+This repo uses `durable job` as the canonical term for the persisted execution subsystem.
+
+- Research and write routes create durable job records immediately.
+- The job log stores replayable events so reconnecting clients can resume the same execution stream.
+- Checkpoints prevent writes from replaying already confirmed work after disconnects or worker restarts.
+- Detached durable jobs are the default execution mode on supported hosts.
+
+Operator-facing consequence: the run can survive browser disconnects without pretending a stateless request is enough.
+
+## Persistence model
+
+Persisted state lives under `.notionmcp-data/` by default:
+
+- `.notionmcp-data/jobs` for durable job records
+- `.notionmcp-data/write-audits` for write verification artifacts
+- `.notionmcp-data/request-rate-limits` for remote private-host coordination state
+- `.notionmcp-data/operator-metrics.json` for operator metrics
+
+Retention defaults to 30 days for jobs, write audits, and remote rate-limit state. Remote private-host mode requires `PERSISTED_STATE_ENCRYPTION_KEY` so persisted JSON is encrypted at rest.
+
+See [docs/operator-runbook.md](./operator-runbook.md) for backup, restore, migration, and incident guidance.
+
+## Review and write model
+
+The review boundary is explicit.
+
+- Research produces a packet for operator review before write-back.
+- The write path clamps Notion field payloads to Notion-safe lengths.
+- Row-level provenance metadata is persisted when the database supports the operator fields.
+- Ambiguous partial write failures trigger reconciliation before the UI tells the operator where to resume.
+
+Operator-facing consequence: the same row is enriched and advanced, but not rewritten blindly.
+
+## Failure semantics
+
+Expected failure and recovery behavior:
+
+1. Routes allocate a durable job ID before long-running work begins.
+2. If the browser tab closes, detached execution continues on supported hosts.
+3. Reconnecting clients replay missed events from the durable job log.
+4. Write resumes start from the next unresolved checkpoint, not from the beginning.
+5. When ambiguity remains, the operator inspects the write audit or durable job artifact before retrying.
+
+## Deployment boundary
+
+Supported modes:
+
+- `localhost-operator`: trusted workstation mode, detached durable jobs by default, inline fallback only when declared explicitly
+- `remote-private-host`: single long-lived private host with explicit origin control, access token, persisted-state encryption, writable local state, and detached durable jobs
+
+Unsupported shapes:
+
+- ephemeral serverless hosts that cannot keep detached workers alive
+- multi-instance deployments without shared persistence
+- public internet exposure without additional containment and monitoring
+
+The runtime banner for detached durable jobs is part of the expected healthy posture. Operators should treat its presence as confirmation that the app is running in durable mode rather than as a decorative UI flourish.
+
+## Trust boundaries
+
+The main trust boundaries are:
+
+- browser isolation and URL eligibility checks before page fetches
+- request origin and token validation for remote private-host mode
+- explicit review before write-back
+- persisted verification artifacts after execution
+
+See [docs/security-model.md](./security-model.md) for the concrete boundary guarantees and limitations.# Architecture overview
+
 This repository is a **private operator tool, not a public SaaS product**.
 
 Primary references:

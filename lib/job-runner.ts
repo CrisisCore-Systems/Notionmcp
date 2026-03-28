@@ -35,6 +35,7 @@ export const jobRunnerTestOverrides: {
 
 function getResearchQueueMetadata(
   payload: {
+    notionConnectionId?: string;
     notionQueue?: ResearchNotionQueueMetadata;
   }
 ): ResearchNotionQueueMetadata | undefined {
@@ -48,9 +49,10 @@ function getWriteQueueMetadata(payload: WriteExecutionInput): ResearchNotionQueu
 
 function attachQueueMetadataToResult(
   result: ResearchResult,
+  notionConnectionId: string | undefined,
   notionQueue?: ResearchNotionQueueMetadata
 ): ResearchResult {
-  if (!notionQueue) {
+  if (!notionQueue && !notionConnectionId) {
     return result;
   }
 
@@ -68,6 +70,7 @@ function attachQueueMetadataToResult(
         },
       rejectedUrls: existingRunMetadata?.rejectedUrls ?? [],
       ...(existingRunMetadata?.search ? { search: existingRunMetadata.search } : {}),
+      ...(notionConnectionId ? { notionConnectionId } : {}),
       notionQueue,
     },
   };
@@ -146,6 +149,7 @@ export async function processJob(jobId: string): Promise<void> {
       const payload = record.payload as {
         prompt?: string;
         researchMode?: string;
+        notionConnectionId?: string;
         notionQueue?: ResearchNotionQueueMetadata;
       };
       const notionQueue = getResearchQueueMetadata(payload);
@@ -178,7 +182,7 @@ export async function processJob(jobId: string): Promise<void> {
         },
         { researchMode: payload.researchMode }
       );
-      const enrichedResult = attachQueueMetadataToResult(result, notionQueue);
+      const enrichedResult = attachQueueMetadataToResult(result, payload.notionConnectionId, notionQueue);
 
       await syncQueueLifecycleUpdate(
         jobId,

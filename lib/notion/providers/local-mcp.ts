@@ -10,7 +10,7 @@ export function createLocalMcpNotionProvider(): NotionProvider {
   return {
     async createDatabase(input) {
       return {
-        databaseId: await createDatabase(input.title, input.schema),
+        databaseId: await createDatabase(input.title, input.schema, undefined, input.parentPageId),
       };
     },
     async getDatabaseMetadataSupport(databaseId) {

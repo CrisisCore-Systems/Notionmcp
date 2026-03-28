@@ -131,6 +131,7 @@ function normalizeResearchRunMetadata(value: unknown): ResearchRunMetadata | und
       ? Math.floor(extractionCounts.rowsExtracted)
       : 0;
   const search = isRecord(value.search) ? value.search : undefined;
+  const notionConnectionId = normalizeTextValue(value.notionConnectionId);
   const normalizedMode =
     search?.mode === "fast" || search?.mode === "deep" ? (search.mode as "fast" | "deep") : undefined;
   const normalizedSearch =
@@ -251,6 +252,7 @@ function normalizeResearchRunMetadata(value: unknown): ResearchRunMetadata | und
       rowsExtracted,
     },
     rejectedUrls,
+    ...(notionConnectionId ? { notionConnectionId } : {}),
     ...(normalizedSearch ? { search: normalizedSearch } : {}),
     ...(notionQueue ? { notionQueue } : {}),
   };
@@ -267,6 +269,7 @@ function normalizeResearchNotionQueueMetadata(value: unknown): ResearchNotionQue
   const statusProperty = normalizeTextValue(value.statusProperty);
   const runId = normalizeTextValue(value.runId);
   const claimedBy = normalizeTextValue(value.claimedBy);
+  const connectionId = normalizeTextValue(value.connectionId);
   const claimedAt = normalizeTextValue(value.claimedAt);
 
   if (!databaseId || !pageId || !statusProperty || !runId || !claimedBy) {
@@ -294,6 +297,7 @@ function normalizeResearchNotionQueueMetadata(value: unknown): ResearchNotionQue
     statusProperty,
     runId,
     claimedBy,
+    ...(connectionId ? { connectionId } : {}),
     ...(claimedAt ? { claimedAt } : {}),
     ...(propertyTypes && Object.keys(propertyTypes).length > 0 ? { propertyTypes } : {}),
   };
@@ -423,6 +427,10 @@ export function parseResearchResult(
   }
 
   return normalizeResearchResult(value);
+}
+
+export function normalizeOptionalNotionParentPageId(value: unknown): string {
+  return normalizeTextValue(value);
 }
 
 export function isResearchResult(value: unknown): value is ResearchResult {

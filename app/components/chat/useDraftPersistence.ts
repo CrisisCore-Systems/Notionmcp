@@ -8,6 +8,7 @@ type UseDraftPersistenceOptions = {
   editedResult: EditableResult | null;
   useExistingDatabase: boolean;
   targetDatabaseId: string;
+  notionParentPageId: string;
   pendingWriteResume: PendingWriteResume | null;
   persistenceEnabled: boolean;
 };
@@ -20,6 +21,7 @@ export function useDraftPersistence({
   editedResult,
   useExistingDatabase,
   targetDatabaseId,
+  notionParentPageId,
   pendingWriteResume,
   persistenceEnabled,
 }: UseDraftPersistenceOptions) {
@@ -53,6 +55,7 @@ export function useDraftPersistence({
       editedResult,
       useExistingDatabase,
       targetDatabaseId,
+      notionParentPageId,
       pendingWriteResume,
     };
 
@@ -69,6 +72,7 @@ export function useDraftPersistence({
     persistenceEnabled,
     phase,
     prompt,
+    notionParentPageId,
     targetDatabaseId,
     useExistingDatabase,
   ]);

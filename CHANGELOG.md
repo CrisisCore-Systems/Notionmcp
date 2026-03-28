@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+This changelog tracks more than code deltas. Each release entry should explain operator-visible behavior changes, deployment implications, migration implications, and verification surface changes when they exist.
+
+## Release discipline
+
+- Keep `package.json`, `CHANGELOG.md`, git tags, and GitHub releases aligned.
+- Summarize operator-visible consequences, not just internal implementation details.
+- Call out migration or deployment actions whenever a release changes persistence, security posture, or execution guarantees.
+
+## Unreleased
+
+### Documentation
+- align the package and product naming around `notion-mcp-backlog-desk`
+- split product promise, deployment posture, and operator runbook material across dedicated docs
+- add an architecture decision record for the `local-mcp` default path
+- document the browser and request boundaries as first-class security surfaces
+
 ## [0.2.1] - 2026-03-24
 
 ### Fixed

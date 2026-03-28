@@ -54,6 +54,7 @@ export interface ResearchNotionQueueMetadata {
   statusProperty: string;
   runId: string;
   claimedBy: string;
+  connectionId?: string;
   claimedAt?: string;
   propertyTypes?: Record<string, string>;
 }
@@ -63,6 +64,7 @@ export interface ResearchRunMetadata {
   extractionCounts: ResearchExtractionCounts;
   rejectedUrls: string[];
   search?: ResearchSearchMetadata;
+  notionConnectionId?: string;
   notionQueue?: ResearchNotionQueueMetadata;
 }
 

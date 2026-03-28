@@ -22,29 +22,12 @@ export function CompletionPanel({
   onReset,
 }: CompletionPanelProps) {
   return (
-    <div
-      style={{
-        marginTop: "1.5rem",
-        background: "#f0fdf4",
-        border: "1px solid #bbf7d0",
-        borderRadius: 8,
-        padding: "1.25rem",
-      }}
-      >
-        <div style={{ fontSize: "1rem", fontWeight: 600, color: "#166534", marginBottom: "0.5rem" }}>
+    <div className="completion-shell">
+        <div className="completion-title">
           ✅ Same Notion row is Packet Ready
         </div>
       {writeSummary && (
-        <div
-          style={{
-            marginBottom: "0.9rem",
-            padding: "0.75rem 0.9rem",
-            background: "#dcfce7",
-            borderRadius: 8,
-            color: "#166534",
-            fontSize: "0.88rem",
-            }}
-          >
+        <div className="completion-panel">
             {writeSummary.notionQueue && (
               <div
                 style={{
@@ -57,11 +40,7 @@ export function CompletionPanel({
               >
                 <div style={{ fontWeight: 600 }}>Updated row metadata</div>
                 <div
-                  style={{
-                    display: "grid",
-                    gap: "0.5rem",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                  }}
+                  className="completion-grid"
                 >
                   <div>
                     <strong>Backlog row</strong>
@@ -208,7 +187,7 @@ export function CompletionPanel({
             <br />
             3. Open the shared or copied link in the Notion app.
           </div>
-          <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap", alignItems: "center" }}>
+          <div className="completion-links">
             <a
               href={notionUrl}
               target="_blank"
@@ -220,30 +199,14 @@ export function CompletionPanel({
             {canShare && (
               <button
                 onClick={onShare}
-                style={{
-                  padding: "0.45rem 0.8rem",
-                  background: "none",
-                  border: "1px solid #86efac",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontSize: "0.85rem",
-                  color: "#166534",
-                }}
+                className="operator-button-secondary"
               >
                 Share link
               </button>
             )}
             <button
               onClick={onCopy}
-              style={{
-                padding: "0.45rem 0.8rem",
-                background: "none",
-                border: "1px solid #86efac",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontSize: "0.85rem",
-                color: "#166534",
-              }}
+              className="operator-button-secondary"
             >
               Copy Android/web link
             </button>
@@ -259,15 +222,8 @@ export function CompletionPanel({
       <br />
       <button
         onClick={onReset}
-        style={{
-          marginTop: "1rem",
-          padding: "0.6rem 1.25rem",
-          background: "none",
-          border: "1px solid #ddd",
-          borderRadius: 8,
-          cursor: "pointer",
-          fontSize: "0.9rem",
-        }}
+        className="operator-button-secondary"
+        style={{ marginTop: "1rem" }}
       >
         Process another backlog item
       </button>

@@ -15,6 +15,24 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function toRequestUrl(input: string | URL | Request): string {
+  if (input instanceof Request) {
+    return input.url;
+  }
+
+  return typeof input === "string" ? input : input.toString();
+}
+
+function readJsonBody(init?: RequestInit): Record<string, unknown> {
+  const body = init?.body;
+
+  if (typeof body !== "string") {
+    throw new Error("Expected a JSON string request body.");
+  }
+
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 test("direct API provider creates databases through the official REST endpoint by default", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const provider = createDirectApiNotionProvider({
@@ -24,7 +42,7 @@ test("direct API provider creates databases through the official REST endpoint b
       NOTION_API_VERSION: "2025-09-03",
     }),
     fetchImpl: (async (input, init) => {
-      calls.push({ url: String(input), init });
+      calls.push({ url: toRequestUrl(input), init });
       return jsonResponse({ id: "db_123" });
     }) as typeof fetch,
   });
@@ -42,7 +60,7 @@ test("direct API provider creates databases through the official REST endpoint b
   assert.equal(calls[0]?.url, "https://api.notion.com/v1/databases");
 
   const headers = calls[0]?.init?.headers as Record<string, string>;
-  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  const body = readJsonBody(calls[0]?.init);
 
   assert.equal(headers.Authorization, "Bearer ntn_test_token");
   assert.equal(headers["Notion-Version"], "2025-09-03");
@@ -58,6 +76,37 @@ test("direct API provider creates databases through the official REST endpoint b
   });
 });
 
+test("direct API provider honors an explicit parent page for linked-workspace creation", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const provider = createDirectApiNotionProvider({
+    env: createEnv({
+      NOTION_TOKEN: "ntn_test_token",
+      NOTION_API_VERSION: "2025-09-03",
+    }),
+    fetchImpl: (async (input, init) => {
+      calls.push({ url: toRequestUrl(input), init });
+      return jsonResponse({ id: "db_linked_parent" });
+    }) as typeof fetch,
+  });
+
+  const result = await provider.createDatabase({
+    title: "Linked Workspace Database",
+    schema: {
+      Name: "title",
+    },
+    parentPageId: "linked-parent-page-id",
+  });
+
+  assert.equal(result.databaseId, "db_linked_parent");
+  assert.equal(calls.length, 1);
+
+  const body = readJsonBody(calls[0]?.init);
+  assert.deepEqual(body.parent, {
+    type: "page_id",
+    page_id: "linked-parent-page-id",
+  });
+});
+
 test("direct API provider resolves data source metadata and uses data_source_id for writes", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const provider = createDirectApiNotionProvider({
@@ -67,16 +116,17 @@ test("direct API provider resolves data source metadata and uses data_source_id 
       NOTION_API_VERSION: "2025-09-03",
     }),
     fetchImpl: (async (input, init) => {
-      calls.push({ url: String(input), init });
+      const url = toRequestUrl(input);
+      calls.push({ url, init });
 
-      if (String(input).endsWith("/databases/db_123")) {
+      if (url.endsWith("/databases/db_123")) {
         return jsonResponse({
           id: "db_123",
           data_sources: [{ id: "ds_456" }],
         });
       }
 
-      if (String(input).endsWith("/data_sources/ds_456")) {
+      if (url.endsWith("/data_sources/ds_456")) {
         return jsonResponse({
           id: "ds_456",
           properties: {
@@ -88,11 +138,11 @@ test("direct API provider resolves data source metadata and uses data_source_id 
         });
       }
 
-      if (String(input).endsWith("/pages")) {
+      if (url.endsWith("/pages")) {
         return jsonResponse({ id: "page_789" });
       }
 
-      throw new Error(`Unexpected fetch: ${String(input)}`);
+      throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch,
   });
 
@@ -140,7 +190,7 @@ test("direct API provider resolves data source metadata and uses data_source_id 
   assert.equal(calls[1]?.url, "https://api.notion.com/v1/data_sources/ds_456");
   assert.equal(calls[2]?.url, "https://api.notion.com/v1/pages");
 
-  const body = JSON.parse(String(calls[2]?.init?.body)) as Record<string, unknown>;
+  const body = readJsonBody(calls[2]?.init);
   const properties = body.properties as Record<string, unknown>;
 
   assert.deepEqual(body.parent, {

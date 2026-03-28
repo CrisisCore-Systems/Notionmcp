@@ -20,6 +20,7 @@ export type NotionWriteMetadataSupport = {
 export type CreateDatabaseInput = {
   title: string;
   schema: NotionSchema;
+  parentPageId?: string;
 };
 
 export type QueryExistingRowsInput = {

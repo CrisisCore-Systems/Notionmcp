@@ -25,6 +25,7 @@ import {
 import { CompletionPanel } from "./chat/CompletionPanel";
 import { RowEditor } from "./chat/RowEditor";
 import { SchemaEditor } from "./chat/SchemaEditor";
+import { ActivityStatus } from "./chat/ActivityStatus";
 import { DRAFT_PERSISTENCE_PREFERENCE_KEY } from "./chat/draft-storage";
 import { useApprovalValidation } from "./chat/useApprovalValidation";
 import { streamSSE } from "./chat/stream";
@@ -42,6 +43,76 @@ import { usePhaseState } from "./chat/usePhaseState";
 
 type ResearchMode = "fast" | "deep";
 
+type ActivitySnapshot = {
+  kind: "research" | "write";
+  title: string;
+  detail: string;
+  stage: string;
+  percent: number;
+  stats: string[];
+};
+
+type NotionQueuePreviewEntry = {
+  pageId: string;
+  title: string;
+  status: string;
+  prompt: string;
+  hasUsablePrompt: boolean;
+  isReady: boolean;
+  promptSource: "prompt-property" | "title-fallback" | "missing";
+};
+
+type NotionQueuePreview = {
+  databaseId: string;
+  totalEntries: number;
+  readyEntries: number;
+  usablePromptEntries: number;
+  readyWithUsablePromptEntries: number;
+  truncated: boolean;
+  entries: NotionQueuePreviewEntry[];
+  statusCounts: Array<{ status: string; count: number }>;
+  propertyChecks: {
+    promptProperty: { name: string; exists: boolean; type: string | null };
+    titleProperty: { name: string; exists: boolean; type: string | null };
+    statusProperty: { name: string; exists: boolean; type: string | null };
+  };
+};
+
+type LinkedNotionDatabase = {
+  databaseId: string;
+  title: string;
+  url: string | null;
+  description: string;
+  lastEditedTime: string | null;
+  dataSourceId: string | null;
+  properties: Array<{ name: string; type: string }>;
+  suggestedQueueProperties: {
+    promptProperty: string | null;
+    titleProperty: string | null;
+    statusProperty: string | null;
+  };
+};
+
+type LinkedNotionParent = {
+  pageId: string;
+  title: string;
+  url: string | null;
+  lastEditedTime: string | null;
+  parentType: string | null;
+};
+
+type LinkedQueueBinding = {
+  connectionId: string;
+  notionQueue: {
+    databaseId: string;
+    promptProperty: string;
+    titleProperty: string;
+    statusProperty: string;
+    readyValue: string;
+  };
+  updatedAt: string;
+};
+
 const EXAMPLE_PROMPTS = [
   "Research this backlog item: AI meeting notes assistant for product teams",
   "Research this backlog item: lightweight CRM for solo consultants",
@@ -55,6 +126,279 @@ const ACTION_TIMEOUT_WARNING_THRESHOLD_SECONDS = 100;
 
 function buildJobStateUrl(jobId: string): string {
   return `/api/jobs/${encodeURIComponent(jobId)}`;
+}
+
+function pluralize(value: number, singular: string, plural = `${singular}s`): string {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function buildAppRequestHeaders(accessToken?: string): HeadersInit {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const trimmedToken = accessToken?.trim();
+
+  if (trimmedToken) {
+    headers["x-app-access-token"] = trimmedToken;
+  }
+
+  return headers;
+}
+
+function getQueuePromptSourceLabel(source: NotionQueuePreviewEntry["promptSource"]): string {
+  if (source === "prompt-property") {
+    return "Prompt field";
+  }
+
+  if (source === "title-fallback") {
+    return "Title fallback";
+  }
+
+  return "No prompt";
+}
+
+function getQueuePreviewCardClassName(entry: NotionQueuePreviewEntry): string {
+  return entry.isReady && entry.hasUsablePrompt
+    ? "queue-preview-card queue-preview-card--ready"
+    : "queue-preview-card queue-preview-card--blocked";
+}
+
+const PLANNED_SEARCH_QUERIES_RE = /Planned (\d+) search quer(?:y|ies)/i;
+const STRUCTURED_ROWS_RE = /Structured (\d+) row/i;
+const WRITTEN_ROW_RE = /(?:Added|Skipped) row (\d+) of (\d+)/i;
+const RESUME_WRITE_RE = /Resuming Notion write from row (\d+) of (\d+)/i;
+const RECONCILED_ROW_RE = /row (\d+) landed/i;
+const WRITE_FINISHED_RE = /with (\d+) row(?:s)? written and (\d+) duplicate/i;
+
+function buildResearchActivity(message: string): ActivitySnapshot {
+  const normalized = message.trim();
+  const plannedMatch = PLANNED_SEARCH_QUERIES_RE.exec(normalized);
+  const structuredMatch = STRUCTURED_ROWS_RE.exec(normalized);
+
+  if (/Claimed Notion queue item/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Queue item claimed",
+      detail: normalized,
+      stage: "Backlog row moved into active work",
+      percent: 12,
+      stats: ["MCP claim confirmed"],
+    };
+  }
+
+  if (/Planning/i.test(normalized) || plannedMatch) {
+    return {
+      kind: "research",
+      title: "Planning the research path",
+      detail: normalized,
+      stage: "Building the search strategy",
+      percent: plannedMatch ? 24 : 18,
+      stats: plannedMatch ? [`${plannedMatch[1]} planned queries`] : [],
+    };
+  }
+
+  if (/Searching:/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Running search queries",
+      detail: normalized,
+      stage: "Collecting candidate sources",
+      percent: 38,
+      stats: ["Search providers active"],
+    };
+  }
+
+  if (/Deep research mode queued/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Selecting the review set",
+      detail: normalized,
+      stage: "Balancing domains and source classes",
+      percent: 48,
+      stats: ["Deep lane evidence queue"],
+    };
+  }
+
+  if (/Browsing:/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Browsing candidate sources",
+      detail: normalized,
+      stage: "Reading pages and extracting fields",
+      percent: 58,
+      stats: ["Browser session active"],
+    };
+  }
+
+  if (/Captured evidence/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Capturing evidence",
+      detail: normalized,
+      stage: "Adding verified evidence documents",
+      percent: 68,
+      stats: ["Evidence store growing"],
+    };
+  }
+
+  if (/Rejected .*source|browse_url failed/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Filtering weak or failed sources",
+      detail: normalized,
+      stage: "Cleaning the evidence set",
+      percent: 76,
+      stats: ["Low-trust sources removed"],
+    };
+  }
+
+  if (/Verifying candidate rows|Reconciling extracted rows/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Verifying extracted rows",
+      detail: normalized,
+      stage: "Cross-checking structured output",
+      percent: 88,
+      stats: ["Evidence verification active"],
+    };
+  }
+
+  if (/Needs Review/i.test(normalized) || /Moved the original Notion backlog row to Needs Review/i.test(normalized)) {
+    return {
+      kind: "research",
+      title: "Packet ready for operator review",
+      detail: normalized,
+      stage: "Research completed",
+      percent: 100,
+      stats: ["Row parked at Needs Review"],
+    };
+  }
+
+  if (structuredMatch) {
+    return {
+      kind: "research",
+      title: "Structuring the review packet",
+      detail: normalized,
+      stage: "Finalizing candidate rows",
+      percent: 96,
+      stats: [pluralize(Number(structuredMatch[1]), "row")],
+    };
+  }
+
+  return {
+    kind: "research",
+    title: "Running background research",
+    detail: normalized,
+    stage: "Processing research job",
+    percent: 14,
+    stats: [],
+  };
+}
+
+function buildWriteActivity(message: string): ActivitySnapshot {
+  const normalized = message.trim();
+  const rowMatch = WRITTEN_ROW_RE.exec(normalized);
+  const resumeMatch = RESUME_WRITE_RE.exec(normalized);
+  const reconciliationMatch = RECONCILED_ROW_RE.exec(normalized);
+  const finishedMatch = WRITE_FINISHED_RE.exec(normalized);
+
+  if (/Using Notion provider lane/i.test(normalized)) {
+    return {
+      kind: "write",
+      title: "Preparing the write lane",
+      detail: normalized,
+      stage: "Checking provider posture",
+      percent: 10,
+      stats: ["Audit trail started"],
+    };
+  }
+
+  if (/Using existing Notion database|Creating Notion database|Created Notion database/i.test(normalized)) {
+    return {
+      kind: "write",
+      title: "Preparing the target database",
+      detail: normalized,
+      stage: "Validating the write destination",
+      percent: /Created Notion database/i.test(normalized) ? 22 : 16,
+      stats: ["Target database readying"],
+    };
+  }
+
+  if (resumeMatch) {
+    const current = Number(resumeMatch[1]) - 1;
+    const total = Number(resumeMatch[2]);
+    return {
+      kind: "write",
+      title: "Resuming the approved write",
+      detail: normalized,
+      stage: `Restarting from row ${resumeMatch[1]}`,
+      percent: 20 + (current / Math.max(total, 1)) * 60,
+      stats: [pluralize(total, "row")],
+    };
+  }
+
+  if (rowMatch) {
+    const current = Number(rowMatch[1]);
+    const total = Number(rowMatch[2]);
+    const remaining = Math.max(total - current, 0);
+    return {
+      kind: "write",
+      title: "Writing approved rows to Notion",
+      detail: normalized,
+      stage: `${current}/${total} rows processed`,
+      percent: 24 + (current / Math.max(total, 1)) * 64,
+      stats: [pluralize(remaining, "row", "rows remaining")],
+    };
+  }
+
+  if (reconciliationMatch) {
+    return {
+      kind: "write",
+      title: "Reconciling an ambiguous write",
+      detail: normalized,
+      stage: `Confirmed row ${reconciliationMatch[1]} before resume`,
+      percent: 90,
+      stats: ["Resume point recalculated"],
+    };
+  }
+
+  if (/Packet Ready/i.test(normalized)) {
+    return {
+      kind: "write",
+      title: "Backlog row advanced",
+      detail: normalized,
+      stage: "Row marked Packet Ready",
+      percent: 100,
+      stats: ["Lifecycle update completed"],
+    };
+  }
+
+  if (finishedMatch) {
+    return {
+      kind: "write",
+      title: "Write audit finalized",
+      detail: normalized,
+      stage: "Write complete",
+      percent: 100,
+      stats: [
+        `${finishedMatch[1]} written`,
+        `${finishedMatch[2]} duplicate${Number(finishedMatch[2]) === 1 ? "" : "s"} skipped`,
+      ],
+    };
+  }
+
+  return {
+    kind: "write",
+    title: "Writing in the background",
+    detail: normalized,
+    stage: "Processing write job",
+    percent: 18,
+    stats: ["Audit trail active"],
+  };
+}
+
+function buildActivitySnapshot(kind: "research" | "write", message: string): ActivitySnapshot {
+  return kind === "research" ? buildResearchActivity(message) : buildWriteActivity(message);
 }
 
 export default function ChatUI() {
@@ -91,11 +435,32 @@ export default function ChatUI() {
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [activeJob, setActiveJob] = useState<ActiveJobState | null>(null);
+  const [activitySnapshot, setActivitySnapshot] = useState<ActivitySnapshot | null>(null);
+  const [queuePreview, setQueuePreview] = useState<NotionQueuePreview | null>(null);
+  const [queuePreviewError, setQueuePreviewError] = useState<string | null>(null);
+  const [isQueuePreviewLoading, setIsQueuePreviewLoading] = useState(false);
+  const [linkedDatabases, setLinkedDatabases] = useState<LinkedNotionDatabase[]>([]);
+  const [linkedDatabasesError, setLinkedDatabasesError] = useState<string | null>(null);
+  const [linkedWorkspaceName, setLinkedWorkspaceName] = useState<string | null>(null);
+  const [hasActiveLinkedWorkspace, setHasActiveLinkedWorkspace] = useState<boolean | null>(null);
+  const [isNotionOAuthConfigured, setIsNotionOAuthConfigured] = useState<boolean | null>(null);
+  const [notionOAuthMissingEnvVars, setNotionOAuthMissingEnvVars] = useState<string[]>([]);
+  const [notionConnectionStatusError, setNotionConnectionStatusError] = useState<string | null>(null);
+  const [isLinkedDatabasesLoading, setIsLinkedDatabasesLoading] = useState(false);
+  const [linkedParents, setLinkedParents] = useState<LinkedNotionParent[]>([]);
+  const [linkedParentsError, setLinkedParentsError] = useState<string | null>(null);
+  const [isLinkedParentsLoading, setIsLinkedParentsLoading] = useState(false);
+  const [notionParentPageId, setNotionParentPageId] = useState("");
+  const [savedQueueBinding, setSavedQueueBinding] = useState<LinkedQueueBinding | null>(null);
+  const [queueBindingMessage, setQueueBindingMessage] = useState<string | null>(null);
+  const [isQueueBindingSaving, setIsQueueBindingSaving] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const currentWriteJobIdRef = useRef<string | null>(null);
+  const logIdRef = useRef(0);
   const historyIndexRef = useRef(-1);
   const timeoutWarningLoggedRef = useRef(false);
   const autoResumeAttemptedRef = useRef(false);
+  const queueBindingLoadedRef = useRef(false);
   const startResearchRef = useRef<(jobId?: string) => Promise<void>>(async () => undefined);
   const writeToNotionRef = useRef<(jobId?: string) => Promise<void>>(async () => undefined);
 
@@ -105,6 +470,7 @@ export default function ChatUI() {
     editedResult,
     useExistingDatabase,
     targetDatabaseId,
+    notionParentPageId,
     pendingWriteResume,
     persistenceEnabled: persistDrafts,
   });
@@ -132,13 +498,47 @@ export default function ChatUI() {
   const isStartActionEnabled = Boolean(
     prompt.trim() || (useNotionQueue && notionQueueDatabaseId.trim())
   );
+  const isProcessing = phase === "researching" || phase === "writing";
+  const inspectQueueLabel = isQueuePreviewLoading ? "Inspecting queue..." : "Inspect queue";
+  const browseLinkedDatabasesLabel = isLinkedDatabasesLoading
+    ? "Loading linked databases..."
+    : "Browse linked workspace";
+  const browseLinkedParentsLabel = isLinkedParentsLoading
+    ? "Loading linked parents..."
+    : "Browse linked parent pages";
+  const saveQueueBindingLabel = isQueueBindingSaving ? "Saving queue setup..." : "Save linked queue setup";
+  const isInspectQueueDisabled = !notionQueueDatabaseId.trim() || isQueuePreviewLoading || isProcessing;
+  const isSaveQueueBindingDisabled =
+    !useNotionQueue || !notionQueueDatabaseId.trim() || isProcessing || isQueueBindingSaving;
+  const isQueuePreviewVisible = Boolean(queuePreviewError || queuePreview);
+  const canUseLinkedWorkspaceActions = hasActiveLinkedWorkspace === true;
+  const isLinkedWorkspaceStatusPending = hasActiveLinkedWorkspace === null;
+  const canStartNotionOAuth = isNotionOAuthConfigured === true;
+  const isNotionOAuthStatusPending = isNotionOAuthConfigured === null;
+  const notionOAuthMissingEnvVarsLabel = notionOAuthMissingEnvVars.join(", ");
+  const selectedLinkedDatabase = linkedDatabases.find((database) => database.databaseId === notionQueueDatabaseId) ?? null;
+  const selectedLinkedParent = linkedParents.find((parent) => parent.pageId === notionParentPageId) ?? null;
+  const missingQueueProperties = queuePreview
+    ? Object.values(queuePreview.propertyChecks).filter((property) => !property.exists)
+    : [];
+  const draftNoticeClassName =
+    draftPersistenceNoticeTone === "success"
+      ? "operator-card operator-card--warning"
+      : draftPersistenceNoticeTone === "privacy"
+        ? "operator-card operator-card--blue"
+        : "operator-card operator-card--error";
 
   const addLog = (message: string, type: LogEntry["type"] = "info") => {
-    setLogs((prev) => [...prev, { type, message }]);
+    setLogs((prev) => [...prev, { id: `log-${logIdRef.current++}`, type, message }]);
+  };
+
+  const handleBackgroundUpdate = (kind: "research" | "write", message: string) => {
+    addLog(message);
+    setActivitySnapshot(buildActivitySnapshot(kind, message));
   };
 
   const clearActiveJobState = () => {
-    clearActiveJob(window.localStorage);
+    clearActiveJob(globalThis.localStorage);
     setActiveJob(null);
   };
 
@@ -160,11 +560,27 @@ export default function ChatUI() {
     }
 
     const nextJob = { kind, jobId };
-    saveActiveJob(window.localStorage, nextJob);
+    saveActiveJob(globalThis.localStorage, nextJob);
     setActiveJob(nextJob);
 
     if (kind === "write") {
       currentWriteJobIdRef.current = jobId;
+    }
+
+    if (typeof (data as { status?: unknown }).status === "string") {
+      const status = (data as { status: string }).status;
+      if (status === "running") {
+        setActivitySnapshot((previous) =>
+          previous ?? {
+            kind,
+            title: kind === "research" ? "Durable research job is running" : "Durable write job is running",
+            detail: `Job ${jobId} is active on the server.`,
+            stage: "Worker attached",
+            percent: kind === "research" ? 8 : 10,
+            stats: ["Reconnectable SSE stream"],
+          }
+        );
+      }
     }
   };
 
@@ -175,18 +591,137 @@ export default function ChatUI() {
   };
 
   useEffect(() => {
-    const persistedPreference = window.localStorage.getItem(DRAFT_PERSISTENCE_PREFERENCE_KEY);
+    const persistedPreference = globalThis.localStorage.getItem(DRAFT_PERSISTENCE_PREFERENCE_KEY);
 
     if (persistedPreference === "true") {
       setPersistDrafts(true);
     }
 
-    setActiveJob(loadActiveJob(window.localStorage));
+    setActiveJob(loadActiveJob(globalThis.localStorage));
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(DRAFT_PERSISTENCE_PREFERENCE_KEY, persistDrafts ? "true" : "false");
+    globalThis.localStorage.setItem(DRAFT_PERSISTENCE_PREFERENCE_KEY, persistDrafts ? "true" : "false");
   }, [persistDrafts]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const response = await fetch("/api/notion/connection", {
+          headers: buildAppRequestHeaders(appAccessToken),
+        });
+        const payload = (await response.json()) as {
+          error?: string;
+          oauth?: { configured?: boolean; missingEnvVars?: string[] } | null;
+          activeConnection?: { workspaceName?: string | null } | null;
+        };
+
+        if (!response.ok) {
+          throw new Error(
+            typeof payload.error === "string"
+              ? payload.error
+              : `Notion connection status failed with status ${response.status}`
+          );
+        }
+
+        setIsNotionOAuthConfigured(payload.oauth?.configured === true);
+        setNotionOAuthMissingEnvVars(
+          Array.isArray(payload.oauth?.missingEnvVars)
+            ? payload.oauth?.missingEnvVars.filter((value): value is string => typeof value === "string")
+            : []
+        );
+        setNotionConnectionStatusError(null);
+
+        if (payload.activeConnection && typeof payload.activeConnection.workspaceName === "string") {
+          setHasActiveLinkedWorkspace(true);
+          setLinkedWorkspaceName(payload.activeConnection.workspaceName);
+        } else {
+          setHasActiveLinkedWorkspace(false);
+          setLinkedWorkspaceName(null);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setNotionConnectionStatusError(message);
+        setIsNotionOAuthConfigured(false);
+        setNotionOAuthMissingEnvVars([]);
+      }
+    })();
+  }, [appAccessToken]);
+
+  useEffect(() => {
+    if (queueBindingLoadedRef.current) {
+      return;
+    }
+
+    queueBindingLoadedRef.current = true;
+    void (async () => {
+      try {
+        const response = await fetch("/api/notion/queue-binding", {
+          headers: buildAppRequestHeaders(appAccessToken),
+        });
+        const payload = (await response.json()) as {
+          error?: string;
+          activeConnection?: { workspaceName?: string | null } | null;
+          binding?: LinkedQueueBinding | null;
+        };
+
+        if (response.status === 409) {
+          setHasActiveLinkedWorkspace(false);
+          setLinkedWorkspaceName(null);
+          setSavedQueueBinding(null);
+          setQueueBindingMessage("Connect a Notion workspace to browse linked databases or save this queue setup.");
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            typeof payload.error === "string"
+              ? payload.error
+              : `Linked queue setup restore failed with status ${response.status}`
+          );
+        }
+
+        if (payload.activeConnection && typeof payload.activeConnection.workspaceName === "string") {
+          setHasActiveLinkedWorkspace(true);
+          setLinkedWorkspaceName(payload.activeConnection.workspaceName);
+        } else {
+          setHasActiveLinkedWorkspace(false);
+        }
+
+        if (payload.binding) {
+          setUseNotionQueue(true);
+          setNotionQueueDatabaseId(payload.binding.notionQueue.databaseId);
+          setNotionQueuePromptProperty(payload.binding.notionQueue.promptProperty);
+          setNotionQueueTitleProperty(payload.binding.notionQueue.titleProperty);
+          setNotionQueueStatusProperty(payload.binding.notionQueue.statusProperty);
+          setNotionQueueReadyValue(payload.binding.notionQueue.readyValue);
+          setSavedQueueBinding(payload.binding);
+          setQueueBindingMessage("Restored the saved queue setup for the linked workspace.");
+          addLog(`Restored the saved queue setup for linked workspace ${payload.binding.connectionId}.`, "info");
+          return;
+        }
+
+        setSavedQueueBinding(null);
+        setQueueBindingMessage(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setQueueBindingMessage(`Could not restore the linked queue setup: ${message}`);
+        addLog(`Linked queue setup restore failed: ${message}`, "error");
+      }
+    })();
+  }, [appAccessToken]);
+
+  useEffect(() => {
+    setQueuePreview(null);
+    setQueuePreviewError(null);
+  }, [
+    useNotionQueue,
+    notionQueueDatabaseId,
+    notionQueuePromptProperty,
+    notionQueueTitleProperty,
+    notionQueueStatusProperty,
+    notionQueueReadyValue,
+  ]);
 
   useEffect(() => {
     if (phase === "researching" || phase === "writing") {
@@ -194,7 +729,7 @@ export default function ChatUI() {
       timeoutWarningLoggedRef.current = false;
 
       const startedAt = Date.now();
-      const interval = window.setInterval(() => {
+      const interval = globalThis.setInterval(() => {
         const nextElapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
         setElapsedSeconds(nextElapsedSeconds);
 
@@ -210,7 +745,7 @@ export default function ChatUI() {
         }
       }, 1000);
 
-      return () => window.clearInterval(interval);
+      return () => globalThis.clearInterval(interval);
     }
 
     setElapsedSeconds(0);
@@ -224,8 +759,8 @@ export default function ChatUI() {
       event.returnValue = "";
     };
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+    globalThis.addEventListener("beforeunload", handleBeforeUnload);
+    return () => globalThis.removeEventListener("beforeunload", handleBeforeUnload);
   }, [editedResult, phase]);
 
   useEffect(() => {
@@ -275,6 +810,7 @@ export default function ChatUI() {
     initializeHistory(savedDraft.editedResult);
     setUseExistingDatabase(savedDraft.useExistingDatabase);
     setTargetDatabaseId(savedDraft.targetDatabaseId);
+    setNotionParentPageId(savedDraft.notionParentPageId);
     setPendingWriteResume(savedDraft.pendingWriteResume ?? null);
     setNotionUrl(null);
     setWriteSummary(null);
@@ -305,6 +841,237 @@ export default function ChatUI() {
     setEditedResult(history[nextIndex] ?? null);
   };
 
+  const loadQueuePreview = async () => {
+    if (!useNotionQueue || !notionQueueDatabaseId.trim()) {
+      return;
+    }
+
+    setIsQueuePreviewLoading(true);
+    setQueuePreviewError(null);
+
+    try {
+      const response = await fetch("/api/notion-queue/preview", {
+        method: "POST",
+        headers: buildAppRequestHeaders(appAccessToken),
+        body: JSON.stringify({
+          notionQueue: {
+            databaseId: notionQueueDatabaseId.trim(),
+            promptProperty: notionQueuePromptProperty.trim(),
+            titleProperty: notionQueueTitleProperty.trim(),
+            statusProperty: notionQueueStatusProperty.trim(),
+            readyValue: notionQueueReadyValue.trim(),
+          },
+        }),
+      });
+      const payload = (await response.json()) as NotionQueuePreview | { error?: string };
+
+      if (!response.ok) {
+        throw new Error(
+          "error" in payload && typeof payload.error === "string"
+            ? payload.error
+            : `Queue preview failed with status ${response.status}`
+        );
+      }
+
+      setQueuePreview(payload as NotionQueuePreview);
+      addLog(
+        `Loaded ${pluralize((payload as NotionQueuePreview).totalEntries, "queue row")} from ${notionQueueDatabaseId.trim()}.`,
+        "info"
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setQueuePreview(null);
+      setQueuePreviewError(message);
+      addLog(`Queue preview failed: ${message}`, "error");
+    } finally {
+      setIsQueuePreviewLoading(false);
+    }
+  };
+
+  const applyLinkedDatabase = (database: LinkedNotionDatabase) => {
+    setNotionQueueDatabaseId(database.databaseId);
+
+    if (database.suggestedQueueProperties.promptProperty) {
+      setNotionQueuePromptProperty(database.suggestedQueueProperties.promptProperty);
+    }
+
+    if (database.suggestedQueueProperties.titleProperty) {
+      setNotionQueueTitleProperty(database.suggestedQueueProperties.titleProperty);
+    }
+
+    if (database.suggestedQueueProperties.statusProperty) {
+      setNotionQueueStatusProperty(database.suggestedQueueProperties.statusProperty);
+    }
+
+    addLog(`Selected linked database ${database.title} (${database.databaseId}).`, "info");
+  };
+
+  const saveQueueBinding = async () => {
+    if (!useNotionQueue || !notionQueueDatabaseId.trim()) {
+      return;
+    }
+
+    setIsQueueBindingSaving(true);
+
+    try {
+      const response = await fetch("/api/notion/queue-binding", {
+        method: "POST",
+        headers: buildAppRequestHeaders(appAccessToken),
+        body: JSON.stringify({
+          notionQueue: {
+            databaseId: notionQueueDatabaseId.trim(),
+            promptProperty: notionQueuePromptProperty.trim(),
+            titleProperty: notionQueueTitleProperty.trim(),
+            statusProperty: notionQueueStatusProperty.trim(),
+            readyValue: notionQueueReadyValue.trim(),
+          },
+        }),
+      });
+      const payload = (await response.json()) as { error?: string; binding?: LinkedQueueBinding | null };
+
+      if (!response.ok) {
+        if (response.status === 409) {
+          setHasActiveLinkedWorkspace(false);
+          setLinkedDatabases([]);
+          setLinkedWorkspaceName(null);
+          setLinkedDatabasesError(null);
+          setQueueBindingMessage("Connect a Notion workspace to browse linked databases or save this queue setup.");
+          return;
+        }
+
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : `Saving the linked queue setup failed with status ${response.status}`
+        );
+      }
+
+      if (payload.binding) {
+        setSavedQueueBinding(payload.binding);
+      }
+
+      setQueueBindingMessage("Saved this queue setup for the active linked workspace.");
+      addLog(`Saved the queue setup for linked workspace ${payload.binding?.connectionId ?? "active"}.`, "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setQueueBindingMessage(`Could not save the linked queue setup: ${message}`);
+      addLog(`Linked queue setup save failed: ${message}`, "error");
+    } finally {
+      setIsQueueBindingSaving(false);
+    }
+  };
+
+  const loadLinkedDatabases = async () => {
+    setIsLinkedDatabasesLoading(true);
+    setLinkedDatabasesError(null);
+
+    try {
+      const response = await fetch("/api/notion/databases", {
+        headers: buildAppRequestHeaders(appAccessToken),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        activeConnection?: { workspaceName?: string | null } | null;
+        databases?: LinkedNotionDatabase[];
+      };
+
+      if (response.status === 409) {
+        setHasActiveLinkedWorkspace(false);
+        setLinkedDatabases([]);
+        setLinkedWorkspaceName(null);
+        setLinkedDatabasesError(null);
+        setQueueBindingMessage("Connect a Notion workspace to browse linked databases or save this queue setup.");
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : `Linked database discovery failed with status ${response.status}`
+        );
+      }
+
+      const databases = Array.isArray(payload.databases) ? payload.databases : [];
+      setHasActiveLinkedWorkspace(true);
+      setLinkedDatabases(databases);
+      setLinkedWorkspaceName(
+        payload.activeConnection && typeof payload.activeConnection.workspaceName === "string"
+          ? payload.activeConnection.workspaceName
+          : null
+      );
+
+      if (databases.length > 0 && !databases.some((database) => database.databaseId === notionQueueDatabaseId)) {
+        applyLinkedDatabase(databases[0]);
+      }
+
+      addLog(`Loaded ${pluralize(databases.length, "linked database")} from the connected Notion workspace.`, "info");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLinkedDatabases([]);
+      setLinkedWorkspaceName(null);
+      setLinkedDatabasesError(message);
+      addLog(`Linked database discovery failed: ${message}`, "error");
+    } finally {
+      setIsLinkedDatabasesLoading(false);
+    }
+  };
+
+  const loadLinkedParents = async () => {
+    setIsLinkedParentsLoading(true);
+    setLinkedParentsError(null);
+
+    try {
+      const response = await fetch("/api/notion/parents", {
+        headers: buildAppRequestHeaders(appAccessToken),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        activeConnection?: { workspaceName?: string | null } | null;
+        parents?: LinkedNotionParent[];
+      };
+
+      if (response.status === 409) {
+        setHasActiveLinkedWorkspace(false);
+        setLinkedParents([]);
+        setLinkedWorkspaceName(null);
+        setNotionParentPageId("");
+        setLinkedParentsError(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : `Linked parent discovery failed with status ${response.status}`
+        );
+      }
+
+      const parents = Array.isArray(payload.parents) ? payload.parents : [];
+      setLinkedParents(parents);
+      setLinkedWorkspaceName(
+        payload.activeConnection && typeof payload.activeConnection.workspaceName === "string"
+          ? payload.activeConnection.workspaceName
+          : null
+      );
+
+      if (parents.length > 0 && !parents.some((parent) => parent.pageId === notionParentPageId)) {
+        setNotionParentPageId(parents[0]?.pageId ?? "");
+      }
+
+      addLog(`Loaded ${pluralize(parents.length, "linked parent page")} from the connected Notion workspace.`, "info");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLinkedParents([]);
+      setNotionParentPageId("");
+      setLinkedParentsError(message);
+      addLog(`Linked parent discovery failed: ${message}`, "error");
+    } finally {
+      setIsLinkedParentsLoading(false);
+    }
+  };
+
   const startResearch = async (jobId?: string) => {
     if (!jobId && !prompt.trim() && (!useNotionQueue || !notionQueueDatabaseId.trim())) return;
     startAction("research");
@@ -317,6 +1084,7 @@ export default function ChatUI() {
       clearActiveJobState();
       autoResumeAttemptedRef.current = false;
       currentWriteJobIdRef.current = null;
+      setActivitySnapshot(null);
     }
     setNotionUrl(null);
     setWriteSummary(null);
@@ -332,6 +1100,19 @@ export default function ChatUI() {
             : `Starting research: "${prompt}"`,
           "info"
         );
+
+      if (!jobId) {
+        setActivitySnapshot({
+          kind: "research",
+          title: useNotionQueue ? "Claiming the next Ready item" : "Starting the research job",
+          detail: useNotionQueue
+            ? `Preparing to claim the next Ready row from ${notionQueueDatabaseId.trim()}.`
+            : `Preparing research for: ${prompt.trim()}`,
+          stage: "Allocating durable research job",
+          percent: 6,
+          stats: [useNotionQueue ? "Queue-first intake enabled" : "Manual prompt mode"],
+        });
+      }
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -353,7 +1134,7 @@ export default function ChatUI() {
             : { prompt, researchMode },
         signal: controller.signal,
         accessToken: appAccessToken,
-        onUpdate: (msg) => addLog(msg),
+        onUpdate: (msg) => handleBackgroundUpdate("research", msg),
         onEvent: (event, data) => handleJobEvent("research", event, data),
       })) as ResearchResult;
 
@@ -364,18 +1145,36 @@ export default function ChatUI() {
       setEditedResult(nextResult);
       initializeHistory(nextResult);
       clearActiveJobState();
+      setActivitySnapshot({
+        kind: "research",
+        title: "Research packet ready",
+        detail: `Structured ${data.items.length} row${data.items.length === 1 ? "" : "s"} and moved the backlog row to Needs Review.`,
+        stage: "Awaiting operator approval",
+        percent: 100,
+        stats: [pluralize(data.items.length, "row")],
+      });
       addLog(`✅ Research complete — found ${data.items.length} items`, "success");
       showApproval();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         addLog("Research cancelled.", "info");
         clearActiveJobState();
+        setActivitySnapshot(null);
         setPhase("idle");
         return;
       }
 
       const message = err instanceof Error ? err.message : String(err);
       clearActiveJobState();
+      setActivitySnapshot((previous) =>
+        previous
+          ? {
+              ...previous,
+              detail: message,
+              stage: "Research failed",
+            }
+          : null
+      );
       addLog(`Error: ${message}`, "error");
       showError(message);
     } finally {
@@ -399,7 +1198,10 @@ export default function ChatUI() {
         }
       : useExistingDatabase && targetDatabaseId.trim()
         ? { ...(editedResult as EditableResult), targetDatabaseId: targetDatabaseId.trim() }
-        : (editedResult as EditableResult);
+        : {
+            ...(editedResult as EditableResult),
+            ...(notionParentPageId.trim() ? { notionParentPageId: notionParentPageId.trim() } : {}),
+          };
 
     try {
       addLog(
@@ -413,6 +1215,21 @@ export default function ChatUI() {
         "info"
       );
 
+      if (!jobId) {
+        setActivitySnapshot({
+          kind: "write",
+          title: shouldResumeWrite ? "Resuming the approved write" : "Preparing Notion write-back",
+          detail: shouldResumeWrite
+            ? `Resuming from row ${resumeTarget.nextRowIndex + 1}.`
+            : useExistingDatabase
+              ? `Appending ${editedItemCount} reviewed row${editedItemCount === 1 ? "" : "s"} to an existing Notion database.`
+              : `Creating a reviewed Notion database for ${editedItemCount} row${editedItemCount === 1 ? "" : "s"}.`,
+          stage: "Allocating durable write job",
+          percent: 8,
+          stats: [pluralize(editedItemCount, "row")],
+        });
+      }
+
       const controller = new AbortController();
       abortRef.current = controller;
       const data = (await streamSSE({
@@ -420,7 +1237,7 @@ export default function ChatUI() {
         body: jobId ? { jobId } : payload,
         signal: controller.signal,
         accessToken: appAccessToken,
-        onUpdate: (msg) => addLog(msg),
+        onUpdate: (msg) => handleBackgroundUpdate("write", msg),
         onEvent: (event, data) => handleJobEvent("write", event, data),
       })) as {
         databaseId: string;
@@ -435,6 +1252,14 @@ export default function ChatUI() {
       };
 
       clearActiveJobState();
+      setActivitySnapshot({
+        kind: "write",
+        title: "Notion write complete",
+        detail: data.message,
+        stage: "Audit and links ready",
+        percent: 100,
+        stats: [pluralize(data.itemsWritten, "row"), `${data.propertyCount} properties`],
+      });
       addLog(data.message, "success");
       if (data.auditUrl) {
         addLog(`🧾 Write audit saved at ${data.auditUrl}`, "info");
@@ -481,6 +1306,7 @@ export default function ChatUI() {
       if (err instanceof DOMException && err.name === "AbortError") {
         addLog("Notion write cancelled.", "info");
         clearActiveJobState();
+        setActivitySnapshot(null);
         showApproval();
         return;
       }
@@ -491,6 +1317,15 @@ export default function ChatUI() {
           : undefined;
       const message = err instanceof Error ? err.message : String(err);
       clearActiveJobState();
+      setActivitySnapshot((previous) =>
+        previous
+          ? {
+              ...previous,
+              detail: message,
+              stage: pendingWriteResume ? "Write paused with resume point" : "Write failed",
+            }
+          : null
+      );
       if (
         details?.databaseId &&
         typeof details.nextRowIndex === "number" &&
@@ -662,7 +1497,7 @@ export default function ChatUI() {
     link.href = url;
     link.download = filename;
     link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), BLOB_URL_CLEANUP_DELAY_MS);
+    globalThis.setTimeout(() => URL.revokeObjectURL(url), BLOB_URL_CLEANUP_DELAY_MS);
   };
 
   const exportJson = () => {
@@ -676,7 +1511,10 @@ export default function ChatUI() {
         }
       : useExistingDatabase && targetDatabaseId.trim()
         ? { ...editedResult, targetDatabaseId: targetDatabaseId.trim() }
-        : editedResult;
+        : {
+            ...editedResult,
+            ...(notionParentPageId.trim() ? { notionParentPageId: notionParentPageId.trim() } : {}),
+          };
 
     downloadFile(
       `${getSafeFilename(editedResult.suggestedDbTitle, "research-results")}.json`,
@@ -773,6 +1611,7 @@ export default function ChatUI() {
     setErrorMessage(null);
     setUseExistingDatabase(false);
     setTargetDatabaseId("");
+    setNotionParentPageId("");
     setLinkActionMessage(null);
       setPendingWriteResume(null);
       setFindText("");
@@ -785,165 +1624,90 @@ export default function ChatUI() {
       setNotionQueueTitleProperty(DEFAULT_NOTION_QUEUE_TITLE_PROPERTY);
       setNotionQueueStatusProperty(DEFAULT_NOTION_QUEUE_STATUS_PROPERTY);
       setNotionQueueReadyValue(DEFAULT_NOTION_QUEUE_READY_VALUE);
+      setQueuePreview(null);
+      setQueuePreviewError(null);
+      setIsQueuePreviewLoading(false);
       currentWriteJobIdRef.current = null;
       clearSavedDraft();
     };
 
   return (
-    <div style={{ maxWidth: 960, margin: "0 auto", padding: "2rem 1rem", fontFamily: "system-ui, sans-serif" }}>
-      <div style={{ marginBottom: "2rem" }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 600, margin: 0 }}>
-          🔍 Notion MCP Backlog Desk
-        </h1>
-        <p style={{ color: "#666", marginTop: "0.5rem", fontSize: "0.9rem" }}>
-          Claim the next Ready item from Notion, research it durably, review it, and write the approved packet back
-          into the same row.
-        </p>
+    <div className="workspace-shell" style={{ maxWidth: 960, margin: "0 auto" }}>
+      <div className="workspace-head">
+        <div>
+          <div className="workspace-overline">Research Desk</div>
+          <h3 className="workspace-title">Claim, review, and ship the next Notion packet.</h3>
+          <p className="workspace-copy">
+            Start from the queue claim loop or fall back to a manual prompt. The console below keeps the durable job,
+            approval, and write-back mechanics intact while surfacing them in a cleaner operator workspace.
+          </p>
+        </div>
+        <div className="workspace-pulse">Durable job runtime</div>
       </div>
 
-      <div
-        style={{
-          marginBottom: "1rem",
-          padding: "0.9rem 1rem",
-          background: "#f8fafc",
-          border: "1px solid #e2e8f0",
-          borderRadius: 8,
-        }}
-      >
-        <div style={{ fontSize: "0.92rem", fontWeight: 600, color: "#0f172a", marginBottom: "0.35rem" }}>
+      <section className="operator-card operator-card--muted">
+        <div className="operator-card__title">
           Local-first access
         </div>
-        <div style={{ fontSize: "0.84rem", color: "#475569", marginBottom: "0.65rem", lineHeight: 1.5 }}>
+        <div className="operator-card__copy" style={{ marginBottom: "0.75rem" }}>
           Localhost requests work without extra headers. If you intentionally run this UI against a
           private remote deployment, enter the matching <code>APP_ACCESS_TOKEN</code> so the browser
           can send the required <code>x-app-access-token</code> header.
         </div>
-        <label
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            fontSize: "0.82rem",
-            color: "#475569",
-            marginBottom: "0.65rem",
-          }}
-        >
+        <label className="operator-checkbox" htmlFor="persist-drafts-checkbox" style={{ marginBottom: "0.75rem" }}>
           <input
+            id="persist-drafts-checkbox"
             type="checkbox"
             checked={persistDrafts}
             onChange={(e) => setPersistDrafts(e.target.checked)}
           />
-          Enable local draft persistence on this trusted browser for up to 7 days
+          <span>Enable local draft persistence on this trusted browser for up to 7 days</span>
         </label>
-        <label style={{ fontSize: "0.82rem", color: "#475569", display: "block", marginBottom: "0.3rem" }}>
+        <label className="operator-label" htmlFor="app-access-token-input">
           App access token (optional)
         </label>
         <input
+          id="app-access-token-input"
           type="password"
           value={appAccessToken}
           onChange={(e) => setAppAccessToken(e.target.value)}
           placeholder="Only needed for a tightly controlled remote deployment"
           autoComplete="off"
-          style={{
-            width: "100%",
-            padding: "0.6rem 0.75rem",
-            border: "1px solid #cbd5e1",
-            borderRadius: 8,
-            boxSizing: "border-box",
-          }}
+          className="operator-input"
         />
         {draftPersistenceNotice && (
-          <div
-            style={{
-              marginTop: "0.65rem",
-              padding: "0.65rem 0.75rem",
-              background:
-                draftPersistenceNoticeTone === "success"
-                  ? "#fff7ed"
-                  : draftPersistenceNoticeTone === "privacy"
-                    ? "#eff6ff"
-                    : "#fef2f2",
-              border: `1px solid ${
-                draftPersistenceNoticeTone === "success"
-                  ? "#fed7aa"
-                  : draftPersistenceNoticeTone === "privacy"
-                    ? "#bfdbfe"
-                    : "#fecaca"
-              }`,
-              borderRadius: 8,
-              color:
-                draftPersistenceNoticeTone === "success"
-                  ? "#9a3412"
-                  : draftPersistenceNoticeTone === "privacy"
-                    ? "#1d4ed8"
-                    : "#b91c1c",
-              fontSize: "0.8rem",
-              lineHeight: 1.45,
-            }}
-          >
+          <div className={draftNoticeClassName} style={{ marginTop: "0.75rem", marginBottom: 0, padding: "0.75rem 0.85rem" }}>
             {draftPersistenceNotice}
           </div>
         )}
-      </div>
+      </section>
 
       {savedDraft && phase === "idle" && (
-        <div
-          style={{
-            marginBottom: "1rem",
-            padding: "0.9rem 1rem",
-            background: "#eff6ff",
-            border: "1px solid #bfdbfe",
-            borderRadius: 8,
-          }}
-        >
-          <div style={{ fontSize: "0.9rem", color: "#1d4ed8", marginBottom: "0.6rem" }}>
+        <section className="operator-card operator-card--blue">
+          <div className="operator-card__copy" style={{ marginBottom: "0.7rem", color: "#1d4ed8" }}>
             A saved review draft is available. Restore it to continue editing where you left off.
             Drafts expire automatically after 7 days.
           </div>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <div className="operator-card__actions" style={{ marginTop: 0 }}>
             <button
               onClick={restoreSavedDraft}
-              style={{
-                padding: "0.55rem 0.9rem",
-                border: "none",
-                borderRadius: 8,
-                background: "#1d4ed8",
-                color: "#fff",
-                cursor: "pointer",
-                fontSize: "0.85rem",
-              }}
+              className="operator-button"
             >
               Restore draft
             </button>
             <button
               onClick={dismissSavedDraft}
-              style={{
-                padding: "0.55rem 0.9rem",
-                border: "1px solid #bfdbfe",
-                borderRadius: 8,
-                background: "#fff",
-                color: "#1d4ed8",
-                cursor: "pointer",
-                fontSize: "0.85rem",
-              }}
+              className="operator-button-secondary"
             >
               Dismiss
             </button>
           </div>
-        </div>
+        </section>
       )}
 
       {activeJob && phase === "idle" && (
-        <div
-          style={{
-            marginBottom: "1rem",
-            padding: "0.9rem 1rem",
-            background: "#ecfeff",
-            border: "1px solid #a5f3fc",
-            borderRadius: 8,
-          }}
-        >
-          <div style={{ fontSize: "0.9rem", color: "#155e75", marginBottom: "0.6rem" }}>
+        <section className="operator-card operator-card--teal">
+          <div className="operator-card__copy" style={{ marginBottom: "0.7rem", color: "#155e75" }}>
             A {activeJob.kind} run is still active on the server. Reconnect to resume the same live backlog claim.
           </div>
           <button
@@ -955,123 +1719,261 @@ export default function ChatUI() {
 
               void writeToNotion(activeJob.jobId);
             }}
-            style={{
-              padding: "0.55rem 0.9rem",
-              border: "none",
-              borderRadius: 8,
-              background: "#0f766e",
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: "0.85rem",
-            }}
+            className="operator-button"
           >
             Resume active run
           </button>
-        </div>
+        </section>
       )}
 
       {phase === "idle" && (
-        <div>
-          <div
-            style={{
-              marginBottom: "0.75rem",
-              display: "grid",
-              gap: "0.5rem",
-              padding: "0.85rem 0.95rem",
-              border: "1px solid #dbeafe",
-              borderRadius: 8,
-              background: "#eff6ff",
-            }}
-          >
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#1d4ed8", fontSize: "0.88rem" }}>
+        <div className="review-layout">
+          <div className="operator-card operator-card--blue operator-grid">
+            <label className="operator-checkbox" htmlFor="use-notion-queue-checkbox" style={{ color: "#1d4ed8" }}>
               <input
+                id="use-notion-queue-checkbox"
                 type="checkbox"
                 checked={useNotionQueue}
                 onChange={(event) => setUseNotionQueue(event.target.checked)}
               />
-              Use the Notion backlog claim loop (claim Ready → In Progress via MCP) instead of a blank prompt
+              <span>Use the Notion backlog claim loop (claim Ready → In Progress via MCP) instead of a blank prompt</span>
             </label>
-            <div style={{ fontSize: "0.8rem", color: "#1e3a8a", lineHeight: 1.45 }}>
-              Default queue contract: <strong>{DEFAULT_NOTION_QUEUE_STATUS_PROPERTY}</strong>=
-              <strong>{DEFAULT_NOTION_QUEUE_READY_VALUE}</strong> is claimed into <strong>In Progress</strong>, title from{" "}
-              <strong>{DEFAULT_NOTION_QUEUE_TITLE_PROPERTY}</strong>, research text from{" "}
-              <strong>{DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY}</strong>, then the original row is enriched through{" "}
-              <strong>Needs Review</strong> and <strong>Packet Ready</strong>.
+            <div className="operator-card__copy" style={{ color: "#1e3a8a" }}>
+              Default queue contract: <strong>{DEFAULT_NOTION_QUEUE_STATUS_PROPERTY} = {DEFAULT_NOTION_QUEUE_READY_VALUE}</strong> is
+              claimed into <strong>In Progress</strong>, title from <strong>{DEFAULT_NOTION_QUEUE_TITLE_PROPERTY}</strong>,
+              research text from <strong>{DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY}</strong>, then the claimed backlog row is
+              advanced through <strong>Needs Review</strong> and <strong>Packet Ready</strong>.
             </div>
             {useNotionQueue && (
-              <div style={{ display: "grid", gap: "0.5rem" }}>
+              <div className="operator-grid">
+                {canUseLinkedWorkspaceActions ? (
+                  <div className="linked-database-toolbar">
+                    <button
+                      onClick={() => {
+                        void loadLinkedDatabases();
+                      }}
+                      disabled={isLinkedDatabasesLoading || isProcessing}
+                      className="operator-button-secondary"
+                      type="button"
+                    >
+                      {browseLinkedDatabasesLabel}
+                    </button>
+                    <button
+                      onClick={() => {
+                        void saveQueueBinding();
+                      }}
+                      disabled={isSaveQueueBindingDisabled}
+                      className="operator-button-secondary"
+                      type="button"
+                    >
+                      {saveQueueBindingLabel}
+                    </button>
+                    {linkedDatabases.length > 0 && (
+                      <select
+                        value={selectedLinkedDatabase ? selectedLinkedDatabase.databaseId : ""}
+                        onChange={(event) => {
+                          const database = linkedDatabases.find((entry) => entry.databaseId === event.target.value);
+
+                          if (database) {
+                            applyLinkedDatabase(database);
+                          }
+                        }}
+                        className="operator-select linked-database-select"
+                      >
+                        <option value="">Choose a linked database</option>
+                        {linkedDatabases.map((database) => (
+                          <option key={database.databaseId} value={database.databaseId}>
+                            {database.title}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                ) : isLinkedWorkspaceStatusPending || isNotionOAuthStatusPending ? (
+                  <div className="queue-preview-notice queue-preview-notice--info">
+                    Checking Notion workspace status.
+                  </div>
+                ) : notionConnectionStatusError ? (
+                  <div className="queue-preview-notice queue-preview-notice--error">
+                    Could not load Notion connection status: {notionConnectionStatusError}
+                  </div>
+                ) : canStartNotionOAuth ? (
+                  <div className="operator-card operator-card--blue" style={{ marginBottom: 0 }}>
+                    <div className="operator-card__copy" style={{ color: "#1e3a8a" }}>
+                      Connect a Notion workspace first, then linked database browsing and saved queue setup will appear here.
+                    </div>
+                    <div className="operator-card__actions" style={{ marginTop: "0.75rem" }}>
+                      <a className="operator-button" href="/api/notion/connect">
+                        Connect Notion workspace
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="operator-card operator-card--blue" style={{ marginBottom: 0 }}>
+                    <div className="operator-card__copy" style={{ color: "#1e3a8a" }}>
+                      Notion OAuth is not configured yet. Add the required env vars, then connect a workspace here.
+                    </div>
+                    {notionOAuthMissingEnvVarsLabel && (
+                      <div className="queue-preview-notice queue-preview-notice--info" style={{ marginTop: "0.75rem" }}>
+                        Missing: {notionOAuthMissingEnvVarsLabel}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {(linkedWorkspaceName || linkedDatabasesError || selectedLinkedDatabase) && (
+                  <div className="linked-database-meta">
+                    {linkedWorkspaceName && (
+                      <div className="operator-card__copy" style={{ color: "#1e3a8a" }}>
+                        Browsing databases from <strong>{linkedWorkspaceName}</strong>.
+                      </div>
+                    )}
+                    {queueBindingMessage && (
+                      <div className="queue-preview-notice queue-preview-notice--info">{queueBindingMessage}</div>
+                    )}
+                    {savedQueueBinding && (
+                      <div className="operator-card__copy" style={{ color: "#1e3a8a" }}>
+                        Saved queue binding updated {new Date(savedQueueBinding.updatedAt).toLocaleString()}.
+                      </div>
+                    )}
+                    {linkedDatabasesError && (
+                      <div className="queue-preview-notice queue-preview-notice--error">{linkedDatabasesError}</div>
+                    )}
+                    {selectedLinkedDatabase && (
+                      <>
+                        <div className="linked-database-summary">
+                          <strong>{selectedLinkedDatabase.title}</strong>
+                          <span>{selectedLinkedDatabase.databaseId}</span>
+                        </div>
+                        {selectedLinkedDatabase.description && (
+                          <div className="operator-card__copy">{selectedLinkedDatabase.description}</div>
+                        )}
+                        <div className="linked-database-chips">
+                          {selectedLinkedDatabase.properties.map((property) => (
+                            <span
+                              key={`${selectedLinkedDatabase.databaseId}-${property.name}`}
+                              className="linked-database-chip"
+                            >
+                              {property.name} · {property.type}
+                            </span>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <input
                   value={notionQueueDatabaseId}
                   onChange={(event) => setNotionQueueDatabaseId(event.target.value)}
                   placeholder="Notion intake database ID"
-                  style={{
-                    width: "100%",
-                    padding: "0.65rem 0.75rem",
-                    border: "1px solid #bfdbfe",
-                    borderRadius: 8,
-                    fontSize: "0.9rem",
-                    boxSizing: "border-box",
-                    background: "#fff",
-                  }}
+                  className="operator-input"
                 />
-                <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                <div className="operator-grid operator-grid--four">
                   <input
                     value={notionQueuePromptProperty}
                     onChange={(event) => setNotionQueuePromptProperty(event.target.value)}
                     placeholder={DEFAULT_NOTION_QUEUE_PROMPT_PROPERTY}
-                    style={{
-                      width: "100%",
-                      padding: "0.6rem 0.7rem",
-                      border: "1px solid #bfdbfe",
-                      borderRadius: 8,
-                      fontSize: "0.85rem",
-                      boxSizing: "border-box",
-                      background: "#fff",
-                    }}
+                    className="operator-input"
                   />
                   <input
                     value={notionQueueTitleProperty}
                     onChange={(event) => setNotionQueueTitleProperty(event.target.value)}
                     placeholder={DEFAULT_NOTION_QUEUE_TITLE_PROPERTY}
-                    style={{
-                      width: "100%",
-                      padding: "0.6rem 0.7rem",
-                      border: "1px solid #bfdbfe",
-                      borderRadius: 8,
-                      fontSize: "0.85rem",
-                      boxSizing: "border-box",
-                      background: "#fff",
-                    }}
+                    className="operator-input"
                   />
                   <input
                     value={notionQueueStatusProperty}
                     onChange={(event) => setNotionQueueStatusProperty(event.target.value)}
                     placeholder={DEFAULT_NOTION_QUEUE_STATUS_PROPERTY}
-                    style={{
-                      width: "100%",
-                      padding: "0.6rem 0.7rem",
-                      border: "1px solid #bfdbfe",
-                      borderRadius: 8,
-                      fontSize: "0.85rem",
-                      boxSizing: "border-box",
-                      background: "#fff",
-                    }}
+                    className="operator-input"
                   />
                   <input
                     value={notionQueueReadyValue}
                     onChange={(event) => setNotionQueueReadyValue(event.target.value)}
                     placeholder={DEFAULT_NOTION_QUEUE_READY_VALUE}
-                    style={{
-                      width: "100%",
-                      padding: "0.6rem 0.7rem",
-                      border: "1px solid #bfdbfe",
-                      borderRadius: 8,
-                      fontSize: "0.85rem",
-                      boxSizing: "border-box",
-                      background: "#fff",
-                    }}
+                    className="operator-input"
                   />
                 </div>
+                <div className="operator-card__actions" style={{ marginTop: 0 }}>
+                  <button
+                    onClick={() => {
+                      void loadQueuePreview();
+                    }}
+                    disabled={isInspectQueueDisabled}
+                    className="operator-button-secondary"
+                  >
+                    {inspectQueueLabel}
+                  </button>
+                </div>
+                {isQueuePreviewVisible && (
+                  <div className="queue-preview-panel">
+                    {queuePreviewError && (
+                      <div className="queue-preview-notice queue-preview-notice--error">{queuePreviewError}</div>
+                    )}
+                    {queuePreview && (
+                      <>
+                        <div className="queue-preview-metrics">
+                          <div className="queue-preview-stat">
+                            <strong>{queuePreview.totalEntries}</strong>
+                            <span>Total rows</span>
+                          </div>
+                          <div className="queue-preview-stat">
+                            <strong>{queuePreview.readyEntries}</strong>
+                            <span>Ready rows</span>
+                          </div>
+                          <div className="queue-preview-stat">
+                            <strong>{queuePreview.readyWithUsablePromptEntries}</strong>
+                            <span>Ready with usable prompt</span>
+                          </div>
+                          <div className="queue-preview-stat">
+                            <strong>{queuePreview.usablePromptEntries}</strong>
+                            <span>Usable prompts overall</span>
+                          </div>
+                        </div>
+                        {missingQueueProperties.length > 0 && (
+                          <div className="queue-preview-notice queue-preview-notice--warning">
+                            Missing configured properties:{" "}
+                            {missingQueueProperties.map((property) => property.name).join(", ")}
+                          </div>
+                        )}
+                        <div className="queue-preview-statuses">
+                          {queuePreview.statusCounts.map((statusEntry) => (
+                            <span key={`${statusEntry.status}-${statusEntry.count}`} className="queue-preview-status-pill">
+                              {statusEntry.status}: {statusEntry.count}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="queue-preview-list">
+                          {queuePreview.entries.map((entry) => (
+                            <article key={entry.pageId} className={getQueuePreviewCardClassName(entry)}>
+                              <div className="queue-preview-card__head">
+                                <div>
+                                  <div className="queue-preview-card__title">{entry.title || entry.pageId}</div>
+                                  <div className="queue-preview-card__meta">{entry.pageId}</div>
+                                </div>
+                                <div className="queue-preview-card__badges">
+                                  <span className="queue-preview-badge">{entry.status || "Unspecified"}</span>
+                                  <span className="queue-preview-badge">{getQueuePromptSourceLabel(entry.promptSource)}</span>
+                                </div>
+                              </div>
+                              <p className="queue-preview-card__prompt">
+                                {entry.prompt || "This row has no usable prompt yet. Add prompt text or a usable title."}
+                              </p>
+                              <div className="queue-preview-card__foot">
+                                <span>{entry.isReady ? "Matches Ready filter" : "Outside Ready filter"}</span>
+                                <span>{entry.hasUsablePrompt ? "Runnable" : "Needs prompt cleanup"}</span>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                        {queuePreview.truncated && (
+                          <div className="operator-card__copy" style={{ color: "#1e3a8a" }}>
+                            Showing the first {queuePreview.entries.length} rows while counting all {queuePreview.totalEntries} rows in the queue.
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1080,62 +1982,30 @@ export default function ChatUI() {
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Fallback manual prompt if you are not pulling the next item from a Notion queue"
             rows={3}
-            style={{
-              width: "100%",
-              padding: "0.75rem",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              fontSize: "0.95rem",
-              resize: "vertical",
-              boxSizing: "border-box",
-            }}
+            className="operator-textarea"
           />
-          <div
-            style={{
-              marginTop: "0.75rem",
-              display: "grid",
-              gap: "0.35rem",
-              padding: "0.75rem 0.9rem",
-              border: "1px solid #e5e7eb",
-              borderRadius: 8,
-              background: "#fafafa",
-            }}
-          >
-            <label style={{ fontSize: "0.85rem", color: "#111827", fontWeight: 600 }}>Research mode</label>
+          <div className="operator-card operator-grid" style={{ marginBottom: 0 }}>
+            <label className="operator-label" htmlFor="research-mode-select">Research mode</label>
             <select
+              id="research-mode-select"
               value={researchMode}
               onChange={(e) => setResearchMode(e.target.value === "deep" ? "deep" : "fast")}
-              style={{
-                width: "100%",
-                padding: "0.55rem 0.7rem",
-                border: "1px solid #d1d5db",
-                borderRadius: 8,
-                fontSize: "0.9rem",
-                background: "#fff",
-              }}
+              className="operator-select"
             >
               <option value="fast">Fast lane — default reviewed coverage</option>
               <option value="deep">Deep lane — higher evidence caps and diversity balancing</option>
             </select>
-            <div style={{ fontSize: "0.8rem", color: "#4b5563", lineHeight: 1.45 }}>
+            <div className="operator-card__copy">
               The deep lane keeps the same reviewed write flow, but spends extra browse budget on domain diversity
               and source-class balancing before it concludes.
             </div>
           </div>
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
+          <div className="operator-inline-list" style={{ marginTop: "0.75rem" }}>
             {EXAMPLE_PROMPTS.map((examplePrompt) => (
               <button
                 key={examplePrompt}
                 onClick={() => setPrompt(examplePrompt)}
-                style={{
-                  padding: "0.3rem 0.75rem",
-                  border: "1px solid #ddd",
-                  borderRadius: 20,
-                  background: "none",
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                  color: "#555",
-                }}
+                className="operator-chip"
               >
                 {examplePrompt.slice(0, 40)}…
               </button>
@@ -1146,65 +2016,47 @@ export default function ChatUI() {
                 void startResearch();
               }}
               disabled={!isStartActionEnabled}
-              style={{
-                marginTop: "1rem",
-                padding: "0.75rem 1.5rem",
-                background: isStartActionEnabled ? "#000" : "#ccc",
-                color: "#fff",
-                border: "none",
-               borderRadius: 8,
-               cursor: isStartActionEnabled ? "pointer" : "default",
-               fontSize: "0.95rem",
-               fontWeight: 500,
-            }}
+              className="operator-button"
+              style={{ marginTop: "1rem" }}
           >
               {useNotionQueue ? "Claim next Ready item" : "Process backlog item"}
             </button>
          </div>
        )}
 
+      {activitySnapshot && (isProcessing || phase === "approving" || phase === "error" || phase === "done") && (
+        <ActivityStatus
+          title={activitySnapshot.title}
+          detail={activitySnapshot.detail}
+          stage={activitySnapshot.stage}
+          percent={activitySnapshot.percent}
+          kind={activitySnapshot.kind}
+          elapsedSeconds={isProcessing ? elapsedSeconds : undefined}
+          stats={activitySnapshot.stats}
+        />
+      )}
+
       {logs.length > 0 && (
-        <div
-          style={{
-            marginTop: "1.5rem",
-            background: "#f8f8f8",
-            borderRadius: 8,
-            padding: "1rem",
-            maxHeight: 240,
-            overflowY: "auto",
-          }}
-        >
-          {logs.map((log, index) => (
+        <div className="log-panel">
+          {logs.map((log) => (
             <div
-              key={index}
-              style={{
-                fontSize: "0.85rem",
-                padding: "0.2rem 0",
-                color: log.type === "error" ? "#c00" : log.type === "success" ? "#080" : "#333",
-              }}
+              key={log.id}
+              className={`log-entry log-entry--${log.type}`}
             >
               {log.message}
             </div>
           ))}
-          {(phase === "researching" || phase === "writing") && (
-            <div style={{ fontSize: "0.85rem", color: "#999", marginTop: "0.25rem" }}>
+          {isProcessing && (
+            <div className="log-meta">
               ⏳ Working… {elapsedSeconds}s elapsed
             </div>
           )}
-          {(phase === "researching" || phase === "writing") && (
+          {isProcessing && (
             <button
               onClick={cancelCurrentAction}
               aria-label="Cancel current operation"
-              style={{
-                marginTop: "0.75rem",
-                padding: "0.45rem 0.8rem",
-                background: "none",
-                border: "1px solid #ddd",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontSize: "0.8rem",
-                color: "#555",
-              }}
+              className="operator-button-ghost"
+              style={{ marginTop: "0.75rem" }}
             >
               Cancel
             </button>
@@ -1213,24 +2065,13 @@ export default function ChatUI() {
       )}
 
       {phase === "approving" && editedResult && (
-        <div style={{ marginTop: "1.5rem" }}>
-          <h2 style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: "0.5rem" }}>
+        <div className="review-layout">
+          <h2 className="console-section-title" style={{ marginBottom: 0 }}>
             Review packet before write-back
           </h2>
 
           {isDegradedSearchMode && (
-            <div
-              style={{
-                marginBottom: "1rem",
-                padding: "0.75rem 0.9rem",
-                background: "#fff7ed",
-                border: "1px solid #fdba74",
-                borderRadius: 8,
-                color: "#9a3412",
-                fontSize: "0.85rem",
-                lineHeight: 1.45,
-              }}
-            >
+            <div className="operator-card operator-card--warning" style={{ marginBottom: 0 }}>
               This research run used degraded DuckDuckGo HTML fallback mode
               {searchProvidersUsed.length > 0 ? ` (${searchProvidersUsed.join(", ")})` : ""}. Review the source
               coverage carefully and configure <code>SERPER_API_KEY</code> or <code>BRAVE_SEARCH_API_KEY</code>{" "}
@@ -1238,18 +2079,7 @@ export default function ChatUI() {
             </div>
           )}
 
-          <div
-            style={{
-              marginBottom: "1rem",
-              padding: "0.75rem 0.9rem",
-              background: reviewedResearchMode === "deep" ? "#eff6ff" : "#f8fafc",
-              border: `1px solid ${reviewedResearchMode === "deep" ? "#bfdbfe" : "#e2e8f0"}`,
-              borderRadius: 8,
-              color: reviewedResearchMode === "deep" ? "#1d4ed8" : "#334155",
-              fontSize: "0.85rem",
-              lineHeight: 1.45,
-            }}
-          >
+            <div className={`operator-card ${reviewedResearchMode === "deep" ? "operator-card--blue" : "operator-card--muted"}`} style={{ marginBottom: 0 }}>
             <strong>{reviewedResearchMode === "deep" ? "Deep lane mode" : "Fast research mode"}</strong>
             {reviewedResearchMode === "deep"
               ? reviewedProfile
@@ -1266,18 +2096,7 @@ export default function ChatUI() {
           </div>
 
           {runMetadata?.notionQueue && (
-            <div
-              style={{
-                marginBottom: "1rem",
-                padding: "0.75rem 0.9rem",
-                background: "#f0fdf4",
-                border: "1px solid #bbf7d0",
-                borderRadius: 8,
-                color: "#166534",
-                fontSize: "0.85rem",
-                lineHeight: 1.45,
-              }}
-            >
+            <div className="operator-card operator-card--green" style={{ marginBottom: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: "0.65rem" }}>Backlog item metadata</div>
               <div
                 style={{
@@ -1336,44 +2155,122 @@ export default function ChatUI() {
             </div>
           )}
 
-          <div style={{ marginBottom: "1rem" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", color: "#333" }}>
+          <div className="operator-card operator-card--muted" style={{ marginBottom: 0 }}>
+            <label className="operator-checkbox" htmlFor="use-existing-database-checkbox" style={{ color: "#333" }}>
               <input
+                id="use-existing-database-checkbox"
                 type="checkbox"
                 checked={useExistingDatabase}
                 onChange={(e) => setUseExistingDatabase(e.target.checked)}
               />
-              Add rows to an existing Notion database instead of creating a new one
+              <span>Add rows to an existing Notion database instead of creating a new one</span>
             </label>
             {useExistingDatabase && (
               <div style={{ marginTop: "0.75rem" }}>
-                <label style={{ fontSize: "0.85rem", color: "#555", display: "block", marginBottom: "0.3rem" }}>
+                <label className="operator-label" htmlFor="existing-database-id-input">
                   Existing database ID
                 </label>
                 <input
+                  id="existing-database-id-input"
                   value={targetDatabaseId}
                   onChange={(e) => setTargetDatabaseId(e.target.value)}
                   placeholder="e.g. 1a2b3c4d..."
-                  style={{
-                    padding: "0.5rem",
-                    border: "1px solid #ddd",
-                    borderRadius: 6,
-                    width: "100%",
-                    boxSizing: "border-box",
-                  }}
+                  className="operator-input"
                 />
-                <div style={{ marginTop: "0.35rem", fontSize: "0.8rem", color: "#666" }}>
+                <div className="operator-card__copy" style={{ marginTop: "0.4rem" }}>
                   Use either 32 hex characters without dashes or UUID format with dashes.
                 </div>
               </div>
             )}
           </div>
 
-          <div style={{ marginBottom: "1rem" }}>
-            <label style={{ fontSize: "0.85rem", color: "#555", display: "block", marginBottom: "0.3rem" }}>
+          {!useExistingDatabase && (
+            <div className="operator-card operator-card--blue" style={{ marginBottom: 0 }}>
+              {canUseLinkedWorkspaceActions ? (
+                <div className="linked-database-toolbar">
+                  <button
+                    onClick={() => {
+                      void loadLinkedParents();
+                    }}
+                    disabled={isLinkedParentsLoading}
+                    className="operator-button-secondary"
+                    type="button"
+                  >
+                    {browseLinkedParentsLabel}
+                  </button>
+                  {linkedParents.length > 0 && (
+                    <select
+                      value={selectedLinkedParent ? selectedLinkedParent.pageId : ""}
+                      onChange={(event) => setNotionParentPageId(event.target.value)}
+                      className="operator-select linked-database-select"
+                    >
+                      <option value="">Choose a linked parent page</option>
+                      {linkedParents.map((parent) => (
+                        <option key={parent.pageId} value={parent.pageId}>
+                          {parent.title}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              ) : isLinkedWorkspaceStatusPending || isNotionOAuthStatusPending ? (
+                <div className="queue-preview-notice queue-preview-notice--info">
+                  Checking Notion workspace status.
+                </div>
+              ) : notionConnectionStatusError ? (
+                <div className="queue-preview-notice queue-preview-notice--error">
+                  Could not load Notion connection status: {notionConnectionStatusError}
+                </div>
+              ) : canStartNotionOAuth ? (
+                <div className="operator-card__actions" style={{ marginTop: 0 }}>
+                  <a className="operator-button" href="/api/notion/connect">
+                    Connect Notion workspace
+                  </a>
+                </div>
+              ) : (
+                <div className="queue-preview-notice queue-preview-notice--info">
+                  Configure Notion OAuth first{notionOAuthMissingEnvVarsLabel ? `: ${notionOAuthMissingEnvVarsLabel}` : "."}
+                </div>
+              )}
+              {(linkedWorkspaceName || linkedParentsError || selectedLinkedParent) && (
+                <div className="linked-database-meta" style={{ marginTop: "0.75rem" }}>
+                  {linkedWorkspaceName && (
+                    <div className="operator-card__copy" style={{ color: "#1e3a8a" }}>
+                      Creating inside <strong>{linkedWorkspaceName}</strong> when a parent page is selected.
+                    </div>
+                  )}
+                  {linkedParentsError && (
+                    <div className="queue-preview-notice queue-preview-notice--error">{linkedParentsError}</div>
+                  )}
+                  {selectedLinkedParent && (
+                    <>
+                      <div className="linked-database-summary">
+                        <strong>{selectedLinkedParent.title}</strong>
+                        <span>{selectedLinkedParent.pageId}</span>
+                      </div>
+                      <div className="operator-card__copy">
+                        {selectedLinkedParent.lastEditedTime
+                          ? `Last edited ${new Date(selectedLinkedParent.lastEditedTime).toLocaleString()}.`
+                          : "Linked parent page selected for new database creation."}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              <div className="operator-card__copy" style={{ marginTop: "0.75rem" }}>
+                {canUseLinkedWorkspaceActions
+                  ? "Select a linked parent page to create the reviewed database inside the connected Notion workspace."
+                  : "Connect a Notion workspace to choose where a new reviewed database should be created."}
+              </div>
+            </div>
+          )}
+
+          <div className="operator-card" style={{ marginBottom: 0 }}>
+            <label className="operator-label" htmlFor="database-title-input">
               Database title
             </label>
             <input
+              id="database-title-input"
               value={editedResult.suggestedDbTitle}
               onChange={(e) =>
                 updateEditedResult((previous) => ({
@@ -1387,50 +2284,26 @@ export default function ChatUI() {
                   ? "The database title is only used when creating a new database."
                   : undefined
               }
-              style={{
-                padding: "0.5rem",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                width: "100%",
-                boxSizing: "border-box",
-                background: useExistingDatabase ? "#f8f8f8" : "#fff",
-              }}
+              className="operator-input"
+              style={{ background: useExistingDatabase ? "#f8f8f8" : undefined }}
             />
           </div>
 
-          <div style={{ marginBottom: "1rem" }}>
-            <label style={{ fontSize: "0.85rem", color: "#555", display: "block", marginBottom: "0.3rem" }}>
+          <div className="operator-card" style={{ marginBottom: 0 }}>
+            <label className="operator-label" htmlFor="summary-textarea">
               Summary
             </label>
             <textarea
+              id="summary-textarea"
               value={editedResult.summary}
               onChange={(e) => updateSummary(e.target.value)}
               rows={3}
-              style={{
-                width: "100%",
-                padding: "0.75rem 1rem",
-                background: "#f0f4ff",
-                border: "1px solid #dbeafe",
-                borderRadius: 8,
-                fontSize: "0.9rem",
-                color: "#333",
-                boxSizing: "border-box",
-                resize: "vertical",
-              }}
+              className="operator-textarea"
+              style={{ background: "#f0f4ff" }}
             />
           </div>
 
-          <div
-            style={{
-              marginBottom: "1rem",
-              padding: "0.75rem 0.9rem",
-              background: "#eff6ff",
-              border: "1px solid #bfdbfe",
-              borderRadius: 8,
-              color: "#1d4ed8",
-              fontSize: "0.85rem",
-            }}
-          >
+          <div className="operator-card operator-card--blue" style={{ marginBottom: 0 }}>
             <h3 style={{ fontSize: "0.92rem", fontWeight: 600, margin: "0 0 0.35rem" }}>
               Android workflow
             </h3>
@@ -1443,7 +2316,7 @@ export default function ChatUI() {
             </div>
           </div>
 
-          <div style={{ marginBottom: "1rem" }}>
+          <div className="operator-grid">
             <SchemaEditor
               schemaEntries={schemaEntries}
               propertyTypes={PROPERTY_TYPES}
@@ -1478,50 +2351,20 @@ export default function ChatUI() {
           </div>
 
           {pendingWriteResume && (
-            <div
-              style={{
-                marginBottom: "0.75rem",
-                padding: "0.75rem 1rem",
-                background: "#eff6ff",
-                border: "1px solid #bfdbfe",
-                borderRadius: 8,
-                color: "#1d4ed8",
-                fontSize: "0.85rem",
-              }}
-            >
+            <div className="operator-card operator-card--blue" style={{ marginBottom: 0 }}>
               Resume is ready from row {pendingWriteResume.nextRowIndex + 1} in Notion database{" "}
               <code>{pendingWriteResume.databaseId}</code>.
             </div>
           )}
 
           {approvalHint && (
-            <div
-              style={{
-                marginBottom: "0.75rem",
-                padding: "0.75rem 1rem",
-                background: "#fff7ed",
-                border: "1px solid #fdba74",
-                borderRadius: 8,
-                color: "#9a3412",
-                fontSize: "0.85rem",
-              }}
-            >
+            <div className="operator-card operator-card--warning" style={{ marginBottom: 0 }}>
               {approvalHint}
             </div>
           )}
 
           {validationIssues.length > 0 && (
-            <div
-              style={{
-                marginBottom: "0.75rem",
-                padding: "0.75rem 1rem",
-                background: "#fff7ed",
-                border: "1px solid #fdba74",
-                borderRadius: 8,
-                color: "#9a3412",
-                fontSize: "0.85rem",
-              }}
-            >
+            <div className="operator-card operator-card--warning" style={{ marginBottom: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: "0.35rem" }}>
                 Fix these issues before writing to Notion:
               </div>
@@ -1540,7 +2383,7 @@ export default function ChatUI() {
             </div>
           )}
 
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          <div className="review-actions">
             <button
               onClick={() => {
                 void writeToNotion();
@@ -1548,30 +2391,13 @@ export default function ChatUI() {
               disabled={!canWrite}
               aria-disabled={!canWrite}
               title={!canWrite ? approvalHint ?? "Complete the review before write-back to Notion." : undefined}
-              style={{
-                padding: "0.75rem 1.5rem",
-                background: canWrite ? "#000" : "#ccc",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: canWrite ? "pointer" : "default",
-                fontSize: "0.95rem",
-                fontWeight: 500,
-              }}
+              className="operator-button"
             >
               {pendingWriteResume ? "Resume write-back" : "Write back to Notion"} ({editedResult.items.length} rows)
             </button>
             <button
               onClick={reset}
-              style={{
-                padding: "0.75rem 1rem",
-                background: "none",
-                border: "1px solid #ddd",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontSize: "0.95rem",
-                color: "#555",
-              }}
+              className="operator-button-secondary"
             >
               {useNotionQueue ? "Claim a different item" : "Reset packet"}
             </button>
@@ -1596,39 +2422,19 @@ export default function ChatUI() {
       )}
 
       {phase === "error" && (
-        <div style={{ marginTop: "1rem" }}>
+        <div className="review-layout">
           {errorMessage && (
-            <div
-              style={{
-                marginBottom: "0.75rem",
-                padding: "0.85rem 1rem",
-                background: "#fef2f2",
-                border: "1px solid #fecaca",
-                borderRadius: 8,
-                color: "#b42318",
-                fontSize: "0.9rem",
-              }}
-            >
+            <div className="operator-card operator-card--error" style={{ marginBottom: 0 }}>
               {errorMessage}
             </div>
           )}
           {pendingWriteResume && (
-            <div
-              style={{
-                marginBottom: "0.75rem",
-                padding: "0.85rem 1rem",
-                background: "#eff6ff",
-                border: "1px solid #bfdbfe",
-                borderRadius: 8,
-                color: "#1d4ed8",
-                fontSize: "0.9rem",
-              }}
-            >
+            <div className="operator-card operator-card--blue" style={{ marginBottom: 0 }}>
               Retry last step will resume from row {pendingWriteResume.nextRowIndex + 1} in
               Notion database <code>{pendingWriteResume.databaseId}</code>.
             </div>
           )}
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          <div className="review-actions">
             <button
               onClick={retryLastAction}
               disabled={!lastActionRef.current}
@@ -1638,28 +2444,13 @@ export default function ChatUI() {
                   ? "Retry becomes available after a failed research or write step."
                   : undefined
               }
-              style={{
-                padding: "0.6rem 1.25rem",
-                background: lastActionRef.current ? "#000" : "#ccc",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: lastActionRef.current ? "pointer" : "default",
-                fontSize: "0.9rem",
-              }}
+              className="operator-button"
             >
               {pendingWriteResume ? "Resume write-back" : "Retry last step"}
             </button>
             <button
               onClick={reset}
-              style={{
-                padding: "0.6rem 1.25rem",
-                background: "none",
-                border: "1px solid #ddd",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontSize: "0.9rem",
-              }}
+              className="operator-button-secondary"
             >
               {useNotionQueue ? "Claim a different item" : "Reset packet"}
             </button>

@@ -11,6 +11,7 @@ export type EditableResult = ResearchResult & {
 export type WritePayload = EditableResult & {
   targetDatabaseId?: string;
   resumeFromIndex?: number;
+  notionParentPageId?: string;
 };
 
 export type PendingWriteResume = {
@@ -23,6 +24,7 @@ export type StoredDraft = {
   editedResult: EditableResult;
   useExistingDatabase: boolean;
   targetDatabaseId: string;
+  notionParentPageId: string;
   pendingWriteResume: PendingWriteResume | null;
 };
 
@@ -71,6 +73,7 @@ export type StreamErrorPayload = {
 };
 
 export interface LogEntry {
+  id: string;
   type: "info" | "success" | "error";
   message: string;
 }
