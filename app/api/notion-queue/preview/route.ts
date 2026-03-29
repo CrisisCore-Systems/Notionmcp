@@ -4,7 +4,7 @@ import {
   getQueuePreviewRouteContract,
 } from "@/lib/api-surface";
 import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
-import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME } from "@/lib/notion-oauth";
+import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME, getActiveNotionConnectionFromRequest } from "@/lib/notion-oauth";
 import { previewNotionQueueEntries } from "@/lib/notion-mcp";
 import {
   getNotionQueueConfigValidationError,
@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   assertDeploymentReadiness();
+  getActiveNotionConnectionFromRequest(req);
   const requestError = await validateApiRequest(req);
 
   if (requestError) {

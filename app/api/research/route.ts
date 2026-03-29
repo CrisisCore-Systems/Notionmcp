@@ -5,7 +5,7 @@ import { parseResearchMode } from "@/lib/agent";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
-import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME } from "@/lib/notion-oauth";
+import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME, getActiveNotionConnectionFromRequest } from "@/lib/notion-oauth";
 import {
   getNotionQueueConfigValidationError,
   normalizeNotionQueueConfig,
@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   assertDeploymentReadiness();
   warnIfDurableJobsNeedLongLivedHost();
+  getActiveNotionConnectionFromRequest(req);
   const requestError = await validateApiRequest(req);
 
   if (requestError) {

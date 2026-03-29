@@ -1,6 +1,8 @@
+import { isInlineOnlyHost } from "@/lib/deployment-boundary";
 import { isTerminalJob, loadJobRecord, type PersistedJobRecord } from "@/lib/job-store";
 
 const DEFAULT_STREAM_WINDOW_MS = 25000;
+const INLINE_ONLY_STREAM_WINDOW_MS = 110000;
 const POLL_INTERVAL_MS = 300;
 
 function encodeSse(encoder: TextEncoder, event: string, data: unknown): Uint8Array {
@@ -19,7 +21,8 @@ export function createJobEventStream(
   } = {}
 ): ReadableStream {
   const afterEventId = options.afterEventId ?? 0;
-  const streamWindowMs = options.streamWindowMs ?? DEFAULT_STREAM_WINDOW_MS;
+  const streamWindowMs =
+    options.streamWindowMs ?? (isInlineOnlyHost() ? INLINE_ONLY_STREAM_WINDOW_MS : DEFAULT_STREAM_WINDOW_MS);
   const encoder = new TextEncoder();
 
   return new ReadableStream({

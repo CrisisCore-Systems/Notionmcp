@@ -63,6 +63,10 @@ export function getHostDurabilityMode(env: NodeJS.ProcessEnv = process.env): Hos
   return normalizeHostDurabilityMode(env.NOTIONMCP_HOST_DURABILITY);
 }
 
+export function isInlineOnlyHost(env: NodeJS.ProcessEnv = process.env): boolean {
+  return getHostDurabilityMode(env) === "inline-only";
+}
+
 export function getDurableExecutionMode(env: NodeJS.ProcessEnv = process.env): DurableExecutionMode {
   if (env.NOTIONMCP_RUN_JOBS_INLINE?.trim().toLowerCase() === "true") {
     return "inline";
@@ -174,6 +178,11 @@ export async function assertDurabilityExecutionReadiness(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<DurableExecutionMode> {
   assertDeploymentReadiness(env);
+
+  if (isInlineOnlyHost(env)) {
+    return "inline";
+  }
+
   await assertWritablePersistenceDirectory(getJobDirectory(), "job-state");
 
   if (options.requireWriteAudit) {

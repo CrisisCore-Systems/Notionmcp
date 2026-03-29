@@ -19,6 +19,8 @@ type IntegrityKeyMaterial = {
   keyId: string;
 };
 
+let inMemoryIntegritySecret: string | null = null;
+
 type VerifyArtifactIntegrityResult =
   | {
       ok: true;
@@ -81,7 +83,10 @@ async function getLocalIntegritySecret(directory: string): Promise<string> {
 async function resolveIntegrityKey(filePath: string, env: NodeJS.ProcessEnv): Promise<IntegrityKeyMaterial> {
   const configuredSecret =
     env.ARTIFACT_INTEGRITY_SECRET?.trim() || env.PERSISTED_STATE_ENCRYPTION_KEY?.trim();
-  const secret = configuredSecret || (await getLocalIntegritySecret(path.dirname(filePath)));
+  const secret = configuredSecret ||
+    (filePath.startsWith("memory://")
+      ? (inMemoryIntegritySecret ??= randomBytes(32).toString("base64url"))
+      : await getLocalIntegritySecret(path.dirname(filePath)));
 
   return {
     secret,

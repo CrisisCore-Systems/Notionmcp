@@ -7,11 +7,13 @@ import {
   type ArtifactIntegrityMetadata,
   verifyArtifactIntegrity,
 } from "@/lib/artifact-integrity";
+import { isInlineOnlyHost } from "@/lib/deployment-boundary";
 import type { WriteAuditTrail } from "@/lib/write-audit";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 const WRITE_AUDIT_ID_PATTERN = /^[0-9a-fA-F-]{36}$/;
 const WRITE_AUDIT_RETENTION_ENV_VAR = "WRITE_AUDIT_RETENTION_DAYS";
+const inMemoryWriteAudits = new Map<string, PersistedWriteAuditRecord>();
 
 export type PersistedWriteAuditRecord = {
   id: string;
@@ -66,10 +68,30 @@ function getWriteAuditPath(auditId: string): string {
   return path.join(getWriteAuditDirectory(), `${auditId.trim()}.json`);
 }
 
+function shouldUseInMemoryWriteAuditStore(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isInlineOnlyHost(env);
+}
+
+function cloneWriteAuditRecord(record: PersistedWriteAuditRecord): PersistedWriteAuditRecord {
+  return {
+    ...record,
+    auditTrail: {
+      ...record.auditTrail,
+      sourceSet: [...(record.auditTrail.sourceSet ?? [])],
+      rows: record.auditTrail.rows.map((row) => ({ ...row })),
+    },
+    integrity: record.integrity ? { ...record.integrity } : undefined,
+  };
+}
+
+function getSortedSourceSet(sourceSet: string[] | undefined): string[] {
+  return [...(sourceSet ?? [])].sort((left, right) => left.localeCompare(right));
+}
+
 export async function saveWriteAuditRecord(
   record: PersistedWriteAuditRecord
 ): Promise<PersistedWriteAuditRecord> {
-  const filePath = getWriteAuditPath(record.id);
+  const filePath = shouldUseInMemoryWriteAuditStore() ? `memory://write-audits/${record.id}.json` : getWriteAuditPath(record.id);
   const previousHash = record.integrity?.recordHash;
   const unsignedRecord = { ...record };
   delete unsignedRecord.integrity;
@@ -78,7 +100,7 @@ export async function saveWriteAuditRecord(
     "persisted-write-audit-record",
     unsignedRecord,
     {
-      sourceSetHash: sha256Hex([...(unsignedRecord.auditTrail.sourceSet ?? [])].sort()),
+      sourceSetHash: sha256Hex(getSortedSourceSet(unsignedRecord.auditTrail.sourceSet)),
       rowOutcomesHash: sha256Hex(
         unsignedRecord.auditTrail.rows.map((row) => ({
           rowIndex: row.rowIndex,
@@ -90,6 +112,15 @@ export async function saveWriteAuditRecord(
     },
     previousHash
   );
+  if (shouldUseInMemoryWriteAuditStore()) {
+    const persisted = {
+      ...unsignedRecord,
+      integrity,
+    };
+    inMemoryWriteAudits.set(record.id, cloneWriteAuditRecord(persisted));
+    return cloneWriteAuditRecord(persisted);
+  }
+
   await writePersistedStateFile(
     filePath,
     {
@@ -98,6 +129,7 @@ export async function saveWriteAuditRecord(
     },
     WRITE_AUDIT_RETENTION_ENV_VAR
   );
+
   return {
     ...unsignedRecord,
     integrity,
@@ -125,6 +157,11 @@ export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWr
     return null;
   }
 
+  if (shouldUseInMemoryWriteAuditStore()) {
+    const record = inMemoryWriteAudits.get(trimmedAuditId);
+    return record ? cloneWriteAuditRecord(record) : null;
+  }
+
   try {
     const parsed = await readPersistedStateFile<unknown>(
       getWriteAuditPath(trimmedAuditId),
@@ -141,7 +178,7 @@ export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWr
       "persisted-write-audit-record",
       unsignedRecord,
       {
-        sourceSetHash: sha256Hex([...(unsignedRecord.auditTrail.sourceSet ?? [])].sort()),
+        sourceSetHash: sha256Hex(getSortedSourceSet(unsignedRecord.auditTrail.sourceSet)),
         rowOutcomesHash: sha256Hex(
           unsignedRecord.auditTrail.rows.map((row) => ({
             rowIndex: row.rowIndex,
@@ -171,6 +208,10 @@ export async function loadWriteAuditRecord(auditId: string): Promise<PersistedWr
 }
 
 export async function listWriteAuditIds(): Promise<string[]> {
+  if (shouldUseInMemoryWriteAuditStore()) {
+    return [...inMemoryWriteAudits.keys()].sort((left, right) => left.localeCompare(right));
+  }
+
   try {
     const entries = await readdir(getWriteAuditDirectory(), { withFileTypes: true });
 

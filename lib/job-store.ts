@@ -8,6 +8,7 @@ import {
   verifyArtifactIntegrity,
   verifyChainedEvents,
 } from "@/lib/artifact-integrity";
+import { isInlineOnlyHost } from "@/lib/deployment-boundary";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
 export type JobKind = "research" | "write";
@@ -59,6 +60,28 @@ export type PersistedJobRecord = {
 const JOB_ID_PATTERN = /^[0-9a-fA-F-]{36}$/;
 const DEFAULT_WORKER_STALE_MS = 15000;
 const JOB_STATE_RETENTION_ENV_VAR = "JOB_STATE_RETENTION_DAYS";
+const inMemoryJobRecords = new Map<string, PersistedJobRecord>();
+
+function shouldUseInMemoryJobStore(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isInlineOnlyHost(env);
+}
+
+function cloneJobRecord(record: PersistedJobRecord): PersistedJobRecord {
+  return {
+    ...record,
+    events: record.events.map((event) => ({ ...event })),
+    checkpoint: record.checkpoint ? { ...record.checkpoint } : undefined,
+    worker: record.worker ? { ...record.worker } : undefined,
+    integrity: record.integrity ? { ...record.integrity } : undefined,
+  };
+}
+
+function mergeCheckpoint(
+  current: JobCheckpoint | undefined,
+  next: Partial<JobCheckpoint> | undefined
+): JobCheckpoint | undefined {
+  return next ? { ...(current ?? undefined), ...next } : current;
+}
 
 export function getJobDirectory(): string {
   const configured = process.env.JOB_STATE_DIR?.trim();
@@ -82,7 +105,7 @@ function getJobPath(jobId: string): string {
 }
 
 async function saveJobRecord(record: PersistedJobRecord): Promise<PersistedJobRecord> {
-  const filePath = getJobPath(record.id);
+  const filePath = shouldUseInMemoryJobStore() ? `memory://jobs/${record.id}.json` : getJobPath(record.id);
   const previousHash = record.integrity?.recordHash;
   const unsignedRecord = { ...record };
   delete unsignedRecord.integrity;
@@ -100,6 +123,11 @@ async function saveJobRecord(record: PersistedJobRecord): Promise<PersistedJobRe
       previousHash
     ),
   };
+
+  if (shouldUseInMemoryJobStore()) {
+    inMemoryJobRecords.set(record.id, cloneJobRecord(signedRecord));
+    return cloneJobRecord(signedRecord);
+  }
 
   await writePersistedStateFile(filePath, signedRecord, JOB_STATE_RETENTION_ENV_VAR);
   return signedRecord;
@@ -129,6 +157,11 @@ export async function loadJobRecord(jobId: string): Promise<PersistedJobRecord |
 
   if (!isValidJobId(trimmedJobId)) {
     return null;
+  }
+
+  if (shouldUseInMemoryJobStore()) {
+    const record = inMemoryJobRecords.get(trimmedJobId);
+    return record ? cloneJobRecord(record) : null;
   }
 
   try {
@@ -172,6 +205,10 @@ export async function loadJobRecord(jobId: string): Promise<PersistedJobRecord |
 }
 
 export async function listJobIds(): Promise<string[]> {
+  if (shouldUseInMemoryJobStore()) {
+    return [...inMemoryJobRecords.keys()].sort((left, right) => left.localeCompare(right));
+  }
+
   try {
     const entries = await readdir(getJobDirectory(), { withFileTypes: true });
 
@@ -221,7 +258,7 @@ export async function appendJobEvent(
 ): Promise<PersistedJobRecord> {
   return await updateJobRecord(jobId, (record) => {
     const timestamp = new Date().toISOString();
-    const nextCheckpoint = checkpoint ? { ...(record.checkpoint ?? {}), ...checkpoint } : record.checkpoint;
+    const nextCheckpoint = mergeCheckpoint(record.checkpoint, checkpoint);
 
     return {
       ...record,
@@ -252,7 +289,7 @@ export async function markJobRunning(
     ...record,
     status: "running",
     updatedAt: new Date().toISOString(),
-    checkpoint: checkpoint ? { ...(record.checkpoint ?? {}), ...checkpoint } : record.checkpoint,
+    checkpoint: mergeCheckpoint(record.checkpoint, checkpoint),
     worker: {
       pid: worker.pid,
       heartbeatAt: new Date().toISOString(),
@@ -267,7 +304,7 @@ export async function touchJobHeartbeat(
   return await updateJobRecord(jobId, (record) => ({
     ...record,
     updatedAt: new Date().toISOString(),
-    checkpoint: checkpoint ? { ...(record.checkpoint ?? {}), ...checkpoint } : record.checkpoint,
+    checkpoint: mergeCheckpoint(record.checkpoint, checkpoint),
     worker: record.worker
       ? {
           ...record.worker,
@@ -326,6 +363,6 @@ export function isJobWorkerStale(
     return false;
   }
 
-  const heartbeatAt = record.worker?.heartbeatAt ? Date.parse(record.worker.heartbeatAt) : NaN;
+  const heartbeatAt = record.worker?.heartbeatAt ? Date.parse(record.worker.heartbeatAt) : Number.NaN;
   return !Number.isFinite(heartbeatAt) || now - heartbeatAt > staleAfterMs;
 }

@@ -48,7 +48,7 @@ test("rejects cross-origin requests before any other checks", async () => {
   assert.match(await response.text(), /Cross-origin API requests are not allowed/);
 });
 
-test("requires the configured remote token for non-local requests", async () => {
+test("allows same-origin hosted browser requests without a token", async () => {
   process.env.APP_ALLOWED_ORIGIN = "https://app.example.com";
   process.env.APP_ACCESS_TOKEN = "secret-token";
 
@@ -58,9 +58,18 @@ test("requires the configured remote token for non-local requests", async () => 
     })
   );
 
+  assert.equal(response, null);
+});
+
+test("requires the configured remote token when a non-browser client omits origin headers", async () => {
+  process.env.APP_ALLOWED_ORIGIN = "https://app.example.com";
+  process.env.APP_ACCESS_TOKEN = "secret-token";
+
+  const response = await validateApiRequest(createRequest("https://app.example.com/api/research"));
+
   assert.ok(response);
-  assert.equal(response.status, 401);
-  assert.match(await response.text(), /valid API access token/);
+  assert.equal(response.status, 403);
+  assert.match(await response.text(), /APP_ALLOWED_ORIGIN/);
 });
 
 test("accepts a matching remote token header", async () => {

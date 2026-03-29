@@ -6,9 +6,11 @@ import test from "node:test";
 import { GET as getNotionQueueBinding, POST as postNotionQueueBinding } from "@/app/api/notion/queue-binding/route";
 import {
   ACTIVE_NOTION_CONNECTION_COOKIE_NAME,
+  ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME,
   persistNotionConnection,
   type NotionConnectionRecord,
 } from "@/lib/notion-oauth";
+import { encryptSessionValue } from "@/lib/session-crypto";
 import { createGetRequest, createPostRequest } from "@/tests/support/e2e";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -119,4 +121,47 @@ test("queue binding route saves and restores the active linked workspace queue s
   assert.equal(loadedPayload.binding?.notionQueue.titleProperty, "Name");
   assert.equal(loadedPayload.binding?.notionQueue.statusProperty, "Status");
   assert.equal(loadedPayload.binding?.notionQueue.readyValue, "Ready");
+});
+
+test("queue binding route works from cookie-backed inline-only workspace state", async () => {
+  process.env.NOTIONMCP_HOST_DURABILITY = "inline-only";
+  const connection = createConnection();
+  const cookie = `${ACTIVE_NOTION_CONNECTION_COOKIE_NAME}=workspace-123; ${ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME}=${encryptSessionValue(connection)}`;
+
+  const saveResponse = await postNotionQueueBinding(
+    createPostRequest(
+      "http://localhost:3000/api/notion/queue-binding",
+      {
+        notionQueue: {
+          databaseId: "12345678-1234-1234-1234-1234567890ab",
+          promptProperty: "Research Prompt",
+          titleProperty: "Name",
+          statusProperty: "Status",
+          readyValue: "Ready",
+        },
+      },
+      {
+        cookie,
+      }
+    )
+  );
+
+  assert.equal(saveResponse.status, 200);
+
+  const loadResponse = await getNotionQueueBinding(
+    createGetRequest("http://localhost:3000/api/notion/queue-binding", {
+      cookie,
+    })
+  );
+  const loadedPayload = (await loadResponse.json()) as {
+    activeConnection: { workspaceName: string } | null;
+    binding: {
+      notionQueue: { databaseId: string; promptProperty: string };
+    } | null;
+  };
+
+  assert.equal(loadResponse.status, 200);
+  assert.equal(loadedPayload.activeConnection?.workspaceName, "Kay Workspace");
+  assert.equal(loadedPayload.binding?.notionQueue.databaseId, "12345678-1234-1234-1234-1234567890ab");
+  assert.equal(loadedPayload.binding?.notionQueue.promptProperty, "Research Prompt");
 });

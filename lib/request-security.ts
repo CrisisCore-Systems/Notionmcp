@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { NextRequest } from "next/server";
-import { getDeploymentMode } from "@/lib/deployment-boundary";
+import { getDeploymentMode, isInlineOnlyHost } from "@/lib/deployment-boundary";
 import { buildRequestLogContext, getRequestId, incrementMetric, warnLog } from "@/lib/observability";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
 
@@ -122,7 +122,7 @@ function getRateLimitMaxRequests(): number {
 }
 
 function shouldPersistRemoteRateLimitState(env: NodeJS.ProcessEnv = process.env): boolean {
-  return getDeploymentMode(env) === "remote-private-host";
+  return getDeploymentMode(env) === "remote-private-host" && !isInlineOnlyHost(env);
 }
 
 export function getRequestRateLimitCoordinationSnapshot(
@@ -229,10 +229,34 @@ function reject(req: NextRequest, message: string, status: number): Response {
   return jsonError(message, status);
 }
 
+function canAllowHostedBrowserRequest(options: {
+  sameOriginBrowserRequest: boolean;
+  allowedOrigin: string | null;
+  requiredToken: string;
+  hasValidToken: boolean;
+}): boolean {
+  const { sameOriginBrowserRequest, allowedOrigin, requiredToken, hasValidToken } = options;
+
+  if (!sameOriginBrowserRequest) {
+    return false;
+  }
+
+  if (!allowedOrigin && !requiredToken) {
+    return true;
+  }
+
+  if (!requiredToken) {
+    return true;
+  }
+
+  return !hasValidToken;
+}
+
 export async function validateApiRequest(req: NextRequest): Promise<Response | null> {
   const requestOrigin = getRequestOrigin(req);
   const expectedOrigin = getExpectedOrigin(req);
   const hostname = getRequestHostname(req);
+  const sameOriginBrowserRequest = Boolean(requestOrigin && expectedOrigin && requestOrigin === expectedOrigin);
 
   if (requestOrigin && expectedOrigin && requestOrigin !== expectedOrigin) {
     return reject(req, "Cross-origin API requests are not allowed.", 403);
@@ -244,8 +268,20 @@ export async function validateApiRequest(req: NextRequest): Promise<Response | n
 
   const allowedOrigin = normalizeOrigin(process.env.APP_ALLOWED_ORIGIN?.trim() ?? null);
   const requiredToken = process.env.APP_ACCESS_TOKEN?.trim() ?? "";
+  const suppliedToken = getSuppliedAccessToken(req);
+  const hasValidToken = requiredToken.length > 0 && suppliedToken === requiredToken;
+  const allowHostedBrowserRequest = canAllowHostedBrowserRequest({
+    sameOriginBrowserRequest,
+    allowedOrigin,
+    requiredToken,
+    hasValidToken,
+  });
 
-  if (!allowedOrigin || !requiredToken) {
+  if (!allowedOrigin && !requiredToken) {
+    if (allowHostedBrowserRequest) {
+      return null;
+    }
+
     return reject(
       req,
       "Remote API access is disabled. Run the app locally, or configure APP_ALLOWED_ORIGIN and APP_ACCESS_TOKEN for a tightly controlled private deployment.",
@@ -253,11 +289,11 @@ export async function validateApiRequest(req: NextRequest): Promise<Response | n
     );
   }
 
-  if (requestOrigin !== allowedOrigin) {
+  if (allowedOrigin && requestOrigin !== allowedOrigin) {
     return reject(req, "API requests must originate from the configured APP_ALLOWED_ORIGIN.", 403);
   }
 
-  if (getSuppliedAccessToken(req) !== requiredToken) {
+  if (requiredToken && !hasValidToken && !allowHostedBrowserRequest) {
     return reject(req, "A valid API access token is required.", 401);
   }
 

@@ -10,7 +10,9 @@ import {
 import { getCurrentNotionProviderState } from "@/lib/notion";
 import {
   ACTIVE_NOTION_CONNECTION_COOKIE_NAME,
+  ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME,
   getNotionConnectionStatus,
+  readActiveNotionConnectionRecord,
 } from "@/lib/notion-oauth";
 
 const ENVIRONMENT_VARIABLES = [
@@ -27,7 +29,10 @@ export default async function HomePage() {
   const notionProviderState = getCurrentNotionProviderState();
   const cookieStore = await cookies();
   const activeConnectionId = cookieStore.get(ACTIVE_NOTION_CONNECTION_COOKIE_NAME)?.value?.trim() ?? null;
-  const notionConnectionStatus = await getNotionConnectionStatus(activeConnectionId);
+  const activeConnection = readActiveNotionConnectionRecord(
+    cookieStore.get(ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME)?.value
+  );
+  const notionConnectionStatus = await getNotionConnectionStatus(activeConnectionId, activeConnection);
 
   return (
     <main className="landing-root">

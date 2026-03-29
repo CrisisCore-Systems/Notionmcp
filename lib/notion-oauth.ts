@@ -2,8 +2,11 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { readdir, unlink } from "node:fs/promises";
 import path from "node:path";
+import type { NextRequest, NextResponse } from "next/server";
+import { isInlineOnlyHost } from "@/lib/deployment-boundary";
 import { DEFAULT_NOTION_API_VERSION } from "@/lib/notion/domain";
 import { readPersistedStateFile, writePersistedStateFile } from "@/lib/persisted-state";
+import { decryptSessionValue, encryptSessionValue } from "@/lib/session-crypto";
 
 const NOTION_OAUTH_AUTHORIZE_URL = "https://api.notion.com/v1/oauth/authorize";
 const NOTION_OAUTH_TOKEN_URL = "https://api.notion.com/v1/oauth/token";
@@ -11,6 +14,9 @@ const NOTION_CONNECTION_RETENTION_ENV_VAR = "NOTION_CONNECTION_RETENTION_DAYS";
 
 export const NOTION_OAUTH_STATE_COOKIE_NAME = "notionmcp-notion-oauth-state";
 export const ACTIVE_NOTION_CONNECTION_COOKIE_NAME = "notionmcp-active-notion-connection";
+export const ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME = "notionmcp-active-notion-connection-record";
+
+const notionConnectionCache = new Map<string, NotionConnectionRecord>();
 
 export type NotionOAuthConfigurationStatus = {
   configured: boolean;
@@ -34,6 +40,8 @@ export type NotionConnectionRecord = {
   connectedAt: string;
   updatedAt: string;
 };
+
+type SafeNotionConnection = Omit<NotionConnectionRecord, "accessToken">;
 
 export type NotionDiscoveredDatabaseProperty = {
   name: string;
@@ -493,6 +501,12 @@ export async function persistNotionConnection(
   record: NotionConnectionRecord,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
+  notionConnectionCache.set(record.connectionId, record);
+
+  if (isInlineOnlyHost(env)) {
+    return;
+  }
+
   await writePersistedStateFile(
     getNotionConnectionPath(record.connectionId, env),
     record,
@@ -505,12 +519,21 @@ export async function loadNotionConnection(
   connectionId: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<NotionConnectionRecord | null> {
+  const cached = notionConnectionCache.get(connectionId.trim());
+
+  if (cached) {
+    return cached;
+  }
+
   try {
-    return await readPersistedStateFile<NotionConnectionRecord>(
+    const record = await readPersistedStateFile<NotionConnectionRecord>(
       getNotionConnectionPath(connectionId, env),
       NOTION_CONNECTION_RETENTION_ENV_VAR,
       env
     );
+
+    notionConnectionCache.set(record.connectionId, record);
+    return record;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -523,6 +546,10 @@ export async function loadNotionConnection(
 export async function listNotionConnections(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<NotionConnectionRecord[]> {
+  if (isInlineOnlyHost(env)) {
+    return [...notionConnectionCache.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
   try {
     const entries = await readdir(getNotionConnectionDirectory(env), { withFileTypes: true });
     const records = await Promise.all(
@@ -547,6 +574,12 @@ export async function listNotionConnections(
 }
 
 export async function clearNotionConnection(connectionId: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  notionConnectionCache.delete(connectionId.trim());
+
+  if (isInlineOnlyHost(env)) {
+    return;
+  }
+
   try {
     await unlink(getNotionConnectionPath(connectionId, env));
   } catch (error) {
@@ -558,21 +591,34 @@ export async function clearNotionConnection(connectionId: string, env: NodeJS.Pr
 
 export async function getNotionConnectionStatus(
   activeConnectionId: string | null,
+  envOrActiveConnection?: NodeJS.ProcessEnv | NotionConnectionRecord | null,
+  maybeActiveConnection?: NotionConnectionRecord | null,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<{
   oauth: NotionOAuthConfigurationStatus;
-  activeConnection: Omit<NotionConnectionRecord, "accessToken"> | null;
-  savedConnections: Array<Omit<NotionConnectionRecord, "accessToken">>;
+  activeConnection: SafeNotionConnection | null;
+  savedConnections: SafeNotionConnection[];
 }> {
-  const savedConnections = (await listNotionConnections(env)).map(stripAccessToken);
-  const activeConnection = activeConnectionId
-    ? savedConnections.find((record) => record.connectionId === activeConnectionId) ?? null
-    : null;
+  const resolvedEnv = isNotionConnectionRecordCandidate(envOrActiveConnection) ? env : (envOrActiveConnection ?? env);
+  const explicitActiveConnection = isNotionConnectionRecordCandidate(envOrActiveConnection)
+    ? envOrActiveConnection
+    : maybeActiveConnection;
+  const savedConnections = (await listNotionConnections(resolvedEnv)).map(stripAccessToken);
+  const mergedConnections = explicitActiveConnection
+    ? [stripAccessToken(explicitActiveConnection), ...savedConnections.filter((record) => record.connectionId !== explicitActiveConnection.connectionId)]
+    : savedConnections;
+  let activeConnection: SafeNotionConnection | null = null;
+
+  if (explicitActiveConnection) {
+    activeConnection = stripAccessToken(explicitActiveConnection);
+  } else if (activeConnectionId) {
+    activeConnection = mergedConnections.find((record) => record.connectionId === activeConnectionId) ?? null;
+  }
 
   return {
-    oauth: getNotionOAuthConfigurationStatus(env),
+    oauth: getNotionOAuthConfigurationStatus(resolvedEnv),
     activeConnection,
-    savedConnections,
+    savedConnections: mergedConnections,
   };
 }
 
@@ -678,7 +724,70 @@ export function createNotionOAuthState(): string {
 
 export function stripAccessToken(
   record: NotionConnectionRecord
-): Omit<NotionConnectionRecord, "accessToken"> {
-  const { accessToken: _accessToken, ...safeRecord } = record;
+): SafeNotionConnection {
+  const safeRecord = { ...record };
+  delete safeRecord.accessToken;
   return safeRecord;
+}
+
+function isNotionConnectionRecordCandidate(
+  value: NodeJS.ProcessEnv | NotionConnectionRecord | null | undefined
+): value is NotionConnectionRecord {
+  return value !== null && value !== undefined && typeof value === "object" && "connectionId" in value;
+}
+
+export function readActiveNotionConnectionRecord(
+  serialized: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): NotionConnectionRecord | null {
+  const record = decryptSessionValue<NotionConnectionRecord>(serialized, env);
+
+  if (!record?.connectionId || !record.accessToken) {
+    return null;
+  }
+
+  notionConnectionCache.set(record.connectionId, record);
+  return record;
+}
+
+export function getActiveNotionConnectionFromRequest(
+  req: NextRequest,
+  env: NodeJS.ProcessEnv = process.env
+): NotionConnectionRecord | null {
+  return readActiveNotionConnectionRecord(
+    req.cookies.get(ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME)?.value,
+    env
+  );
+}
+
+export function setActiveNotionConnectionCookies(
+  response: NextResponse,
+  connection: NotionConnectionRecord,
+  secure: boolean,
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  notionConnectionCache.set(connection.connectionId, connection);
+  response.cookies.set({
+    name: ACTIVE_NOTION_CONNECTION_COOKIE_NAME,
+    value: connection.connectionId,
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+  });
+  response.cookies.set({
+    name: ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME,
+    value: encryptSessionValue(connection, env),
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+  });
+}
+
+export function clearActiveNotionConnectionCookies(response: NextResponse): void {
+  response.cookies.delete(ACTIVE_NOTION_CONNECTION_COOKIE_NAME);
+  response.cookies.delete(ACTIVE_NOTION_CONNECTION_RECORD_COOKIE_NAME);
 }

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  ACTIVE_NOTION_CONNECTION_COOKIE_NAME,
+  clearActiveNotionConnectionCookies,
   exchangeNotionOAuthCode,
   NOTION_OAUTH_STATE_COOKIE_NAME,
   persistNotionConnection,
+  setActiveNotionConnectionCookies,
 } from "@/lib/notion-oauth";
 
 export const runtime = "nodejs";
@@ -30,6 +31,7 @@ export async function GET(req: NextRequest) {
     const response = NextResponse.redirect(
       buildRedirectUrl(req, { notion_oauth_error: error })
     );
+    clearActiveNotionConnectionCookies(response);
     response.cookies.delete(NOTION_OAUTH_STATE_COOKIE_NAME);
     return response;
   }
@@ -38,6 +40,7 @@ export async function GET(req: NextRequest) {
     const response = NextResponse.redirect(
       buildRedirectUrl(req, { notion_oauth_error: "state_mismatch" })
     );
+    clearActiveNotionConnectionCookies(response);
     response.cookies.delete(NOTION_OAUTH_STATE_COOKIE_NAME);
     return response;
   }
@@ -46,6 +49,7 @@ export async function GET(req: NextRequest) {
     const response = NextResponse.redirect(
       buildRedirectUrl(req, { notion_oauth_error: "missing_code" })
     );
+    clearActiveNotionConnectionCookies(response);
     response.cookies.delete(NOTION_OAUTH_STATE_COOKIE_NAME);
     return response;
   }
@@ -58,15 +62,7 @@ export async function GET(req: NextRequest) {
       buildRedirectUrl(req, { notion_connected: connection.workspaceName })
     );
     response.cookies.delete(NOTION_OAUTH_STATE_COOKIE_NAME);
-    response.cookies.set({
-      name: ACTIVE_NOTION_CONNECTION_COOKIE_NAME,
-      value: connection.connectionId,
-      httpOnly: true,
-      sameSite: "lax",
-      secure: req.nextUrl.protocol === "https:",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30,
-    });
+    setActiveNotionConnectionCookies(response, connection, req.nextUrl.protocol === "https:");
     return response;
   } catch (callbackError) {
     const response = NextResponse.redirect(
@@ -75,6 +71,7 @@ export async function GET(req: NextRequest) {
           callbackError instanceof Error ? callbackError.message : String(callbackError),
       })
     );
+    clearActiveNotionConnectionCookies(response);
     response.cookies.delete(NOTION_OAUTH_STATE_COOKIE_NAME);
     return response;
   }

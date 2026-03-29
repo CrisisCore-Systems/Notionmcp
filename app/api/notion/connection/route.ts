@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { buildApiSurfaceHeaders, getNotionConnectionRouteContract } from "@/lib/api-surface";
 import {
   ACTIVE_NOTION_CONNECTION_COOKIE_NAME,
+  getActiveNotionConnectionFromRequest,
   getNotionConnectionStatus,
 } from "@/lib/notion-oauth";
 import { validateApiRequest } from "@/lib/request-security";
@@ -17,7 +18,8 @@ export async function GET(req: NextRequest) {
   }
 
   const activeConnectionId = req.cookies.get(ACTIVE_NOTION_CONNECTION_COOKIE_NAME)?.value?.trim() ?? null;
-  const connectionStatus = await getNotionConnectionStatus(activeConnectionId);
+  const activeConnection = getActiveNotionConnectionFromRequest(req);
+  const connectionStatus = await getNotionConnectionStatus(activeConnectionId, activeConnection);
 
   return Response.json(
     {

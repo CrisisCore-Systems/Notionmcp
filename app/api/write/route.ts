@@ -8,7 +8,7 @@ import {
   assertDurabilityExecutionReadiness,
   warnIfDurableJobsNeedLongLivedHost,
 } from "@/lib/deployment-boundary";
-import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME } from "@/lib/notion-oauth";
+import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME, getActiveNotionConnectionFromRequest } from "@/lib/notion-oauth";
 import { validateApiRequest } from "@/lib/request-security";
 import { RESEARCH_RUN_METADATA_KEY } from "@/lib/research-result";
 import {
@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   assertDeploymentReadiness();
   warnIfDurableJobsNeedLongLivedHost();
+  getActiveNotionConnectionFromRequest(req);
   const requestError = await validateApiRequest(req);
 
   if (requestError) {
