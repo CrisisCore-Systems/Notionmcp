@@ -725,8 +725,8 @@ export function createNotionOAuthState(): string {
 export function stripAccessToken(
   record: NotionConnectionRecord
 ): SafeNotionConnection {
-  const safeRecord = { ...record };
-  delete safeRecord.accessToken;
+  const { accessToken, ...safeRecord } = record;
+  void accessToken;
   return safeRecord;
 }
 
