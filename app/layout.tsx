@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Instrument_Sans, Space_Grotesk } from "next/font/google";
-import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
 import "./globals.css";
 
 const bodyFont = Instrument_Sans({
@@ -21,8 +20,6 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { readonly children: ReactNode }) {
-  assertDeploymentReadiness();
-
   return (
     <html lang="en">
       <body className={`${bodyFont.variable} ${displayFont.variable} app-body`}>{children}</body>
