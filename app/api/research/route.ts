@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { getResearchRouteContract, buildApiSurfaceHeaders } from "@/lib/api-surface";
+import { createApiErrorResponse } from "@/lib/api-route-errors";
 import { parseResearchMode } from "@/lib/agent";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
@@ -12,8 +13,8 @@ import {
 } from "@/lib/notion-queue";
 import { claimNextNotionQueueEntry, updateNotionQueueLifecycle } from "@/lib/notion-mcp";
 import {
-  assertDeploymentReadiness,
   assertDurabilityExecutionReadiness,
+  getDeploymentReadinessError,
   warnIfDurableJobsNeedLongLivedHost,
 } from "@/lib/deployment-boundary";
 import { validateApiRequest } from "@/lib/request-security";
@@ -22,7 +23,12 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function GET(req: NextRequest) {
-  assertDeploymentReadiness();
+  const deploymentReadinessError = getDeploymentReadinessError();
+
+  if (deploymentReadinessError) {
+    return createApiErrorResponse("research-control", 503, deploymentReadinessError);
+  }
+
   const requestError = await validateApiRequest(req);
 
   if (requestError) {
@@ -35,7 +41,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  assertDeploymentReadiness();
+  const deploymentReadinessError = getDeploymentReadinessError();
+
+  if (deploymentReadinessError) {
+    return createApiErrorResponse("research-control", 503, deploymentReadinessError);
+  }
+
   warnIfDurableJobsNeedLongLivedHost();
   getActiveNotionConnectionFromRequest(req);
   const requestError = await validateApiRequest(req);
@@ -180,7 +191,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    await assertDurabilityExecutionReadiness();
+    try {
+      await assertDurabilityExecutionReadiness();
+    } catch (error) {
+      if (resolvedNotionQueue) {
+        await updateNotionQueueLifecycle(resolvedNotionQueue, {
+          stage: "error",
+          jobId: resolvedNotionQueue.runId,
+          message: error instanceof Error ? error.message : "Failed to prepare durable research execution.",
+        });
+      }
+
+      return createApiErrorResponse("research-control", 503, error);
+    }
+
     try {
       const job = await createDurableJob(
         "research",

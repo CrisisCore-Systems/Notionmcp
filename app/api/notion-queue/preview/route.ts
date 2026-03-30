@@ -3,7 +3,8 @@ import {
   buildApiSurfaceHeaders,
   getQueuePreviewRouteContract,
 } from "@/lib/api-surface";
-import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
+import { createApiErrorResponse } from "@/lib/api-route-errors";
+import { getDeploymentReadinessError } from "@/lib/deployment-boundary";
 import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME, getActiveNotionConnectionFromRequest } from "@/lib/notion-oauth";
 import { previewNotionQueueEntries } from "@/lib/notion-mcp";
 import {
@@ -16,7 +17,12 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function GET(req: NextRequest) {
-  assertDeploymentReadiness();
+  const deploymentReadinessError = getDeploymentReadinessError();
+
+  if (deploymentReadinessError) {
+    return createApiErrorResponse("queue-introspection", 503, deploymentReadinessError);
+  }
+
   const requestError = await validateApiRequest(req);
 
   if (requestError) {
@@ -29,7 +35,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  assertDeploymentReadiness();
+  const deploymentReadinessError = getDeploymentReadinessError();
+
+  if (deploymentReadinessError) {
+    return createApiErrorResponse("queue-introspection", 503, deploymentReadinessError);
+  }
+
   getActiveNotionConnectionFromRequest(req);
   const requestError = await validateApiRequest(req);
 

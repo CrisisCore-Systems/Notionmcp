@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET as getResearch, POST as postResearch } from "@/app/api/research/route";
 import { GET as getWrite, POST as postWrite } from "@/app/api/write/route";
+import { notionQueueTestOverrides } from "@/lib/notion-mcp";
 import { runWithRetry } from "@/lib/retry";
+
+const ORIGINAL_ENV = { ...process.env };
 
 function createRequest(url: string, body: unknown) {
   const headers = new Headers({
@@ -17,6 +23,17 @@ function createRequest(url: string, body: unknown) {
     body: JSON.stringify(body),
   });
 }
+
+test.afterEach(async () => {
+  const jobDir = process.env.JOB_STATE_DIR;
+  process.env = { ...ORIGINAL_ENV };
+  delete notionQueueTestOverrides.claimNextNotionQueueEntry;
+  delete notionQueueTestOverrides.updateNotionQueueLifecycle;
+
+  if (jobDir?.startsWith(path.join(os.tmpdir(), "notionmcp-routes-smoke-"))) {
+    await rm(jobDir, { recursive: true, force: true });
+  }
+});
 
 test("research route rejects an empty prompt before calling the agent", async () => {
   const response = await postResearch(createRequest("http://localhost:3000/api/research", { prompt: "" }));
@@ -89,6 +106,59 @@ test("research route rejects invalid Notion queue database IDs before touching M
 
   assert.equal(response.status, 400);
   assert.match(await response.text(), /valid Notion database ID is required for notionQueue intake/);
+});
+
+test("research route returns deployment readiness errors as a 503 JSON response", async () => {
+  process.env.APP_ALLOWED_ORIGIN = "https://app.example.com";
+  process.env.APP_ACCESS_TOKEN = "secret-token";
+  process.env.PERSISTED_STATE_ENCRYPTION_KEY = "operator-secret";
+
+  const response = await postResearch(
+    createRequest("http://localhost:3000/api/research", {
+      prompt: "Find competitors to Notion",
+    })
+  );
+  const payload = (await response.json()) as { error: string };
+
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("x-notionmcp-surface"), "research-control");
+  assert.match(payload.error, /NOTIONMCP_DEPLOYMENT_MODE=remote-private-host/);
+});
+
+test("research route releases a claimed queue row as an error when durable execution readiness fails", async () => {
+  const lifecycleUpdates: Array<{ stage?: string; message?: string }> = [];
+  const blockedJobDir = await mkdtemp(path.join(os.tmpdir(), "notionmcp-routes-smoke-"));
+  const occupiedPath = path.join(blockedJobDir, "occupied-file");
+  await writeFile(occupiedPath, "occupied", "utf8");
+  process.env.JOB_STATE_DIR = occupiedPath;
+
+  notionQueueTestOverrides.claimNextNotionQueueEntry = async (_input, options) => ({
+    databaseId: "12345678-1234-1234-1234-1234567890ab",
+    pageId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    title: "Acme",
+    prompt: "Research Acme",
+    statusProperty: "Status",
+    runId: options.runId,
+    claimedBy: options.claimedBy,
+  });
+  notionQueueTestOverrides.updateNotionQueueLifecycle = async (_entry, update) => {
+    lifecycleUpdates.push({ stage: update.stage, message: update.message });
+  };
+
+  const response = await postResearch(
+    createRequest("http://localhost:3000/api/research", {
+      notionQueue: {
+        databaseId: "12345678-1234-1234-1234-1234567890ab",
+      },
+    })
+  );
+  const payload = (await response.json()) as { error: string };
+
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("x-notionmcp-surface"), "research-control");
+  assert.match(payload.error, /Persisted job-state directory is not writable/);
+  assert.equal(lifecycleUpdates.at(-1)?.stage, "error");
+  assert.match(lifecycleUpdates.at(-1)?.message ?? "", /Persisted job-state directory is not writable/);
 });
 
 test("write route rejects an incomplete payload before touching Notion", async () => {

@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server";
 import { buildApiSurfaceHeaders, getWriteRouteContract } from "@/lib/api-surface";
+import { createApiErrorResponse } from "@/lib/api-route-errors";
 import { createJobEventStreamResponse } from "@/lib/job-sse";
 import { createDurableJob, ensureJobWorker } from "@/lib/job-runner";
 import { isValidJobId, loadJobRecord } from "@/lib/job-store";
 import {
-  assertDeploymentReadiness,
   assertDurabilityExecutionReadiness,
+  getDeploymentReadinessError,
   warnIfDurableJobsNeedLongLivedHost,
 } from "@/lib/deployment-boundary";
 import { ACTIVE_NOTION_CONNECTION_COOKIE_NAME, getActiveNotionConnectionFromRequest } from "@/lib/notion-oauth";
@@ -21,7 +22,12 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function GET(req: NextRequest) {
-  assertDeploymentReadiness();
+  const deploymentReadinessError = getDeploymentReadinessError();
+
+  if (deploymentReadinessError) {
+    return createApiErrorResponse("write-control", 503, deploymentReadinessError);
+  }
+
   const requestError = await validateApiRequest(req);
 
   if (requestError) {
@@ -34,7 +40,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  assertDeploymentReadiness();
+  const deploymentReadinessError = getDeploymentReadinessError();
+
+  if (deploymentReadinessError) {
+    return createApiErrorResponse("write-control", 503, deploymentReadinessError);
+  }
+
   warnIfDurableJobsNeedLongLivedHost();
   getActiveNotionConnectionFromRequest(req);
   const requestError = await validateApiRequest(req);
@@ -172,7 +183,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await assertDurabilityExecutionReadiness({ requireWriteAudit: true });
+    try {
+      await assertDurabilityExecutionReadiness({ requireWriteAudit: true });
+    } catch (error) {
+      return createApiErrorResponse("write-control", 503, error);
+    }
+
     const job = await createDurableJob("write", {
       ...normalizedBody,
       ...(targetDatabaseId ? { targetDatabaseId } : {}),

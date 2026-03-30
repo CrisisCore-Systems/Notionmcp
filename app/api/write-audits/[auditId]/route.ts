@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { buildApiSurfaceHeaders, getWriteAuditVerificationContract } from "@/lib/api-surface";
-import { assertDeploymentReadiness } from "@/lib/deployment-boundary";
+import { createApiErrorResponse } from "@/lib/api-route-errors";
+import { getDeploymentReadinessError } from "@/lib/deployment-boundary";
 import { validateApiRequest } from "@/lib/request-security";
 import { isValidWriteAuditId, loadWriteAuditRecord } from "@/lib/write-audit-store";
 
@@ -13,7 +14,12 @@ type RouteContext = {
 };
 
 export async function GET(req: NextRequest, context: RouteContext) {
-  assertDeploymentReadiness();
+  const deploymentReadinessError = getDeploymentReadinessError();
+
+  if (deploymentReadinessError) {
+    return createApiErrorResponse("write-audit-verification", 503, deploymentReadinessError);
+  }
+
   const requestError = await validateApiRequest(req);
 
   if (requestError) {
